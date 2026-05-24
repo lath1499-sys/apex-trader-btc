@@ -8,7 +8,8 @@ const KRAKEN = 'https://api.kraken.com/0/public'
 
 const TF_LIMITS: Record<string, number> = { '1d': 300, '4h': 300, '1h': 150, '15m': 150, '5m': 100, '3m': 100, '1m': 100 }
 const TFS      = ['1d', '4h', '1h', '15m', '5m', '3m', '1m'] as const
-
+// Bybit interval mapping (fallback when Binance is geo-blocked)
+const BYBIT_TF: Record<string, string> = { '1d': 'D', '4h': '240', '1h': '60', '15m': '15', '5m': '5', '3m': '3', '1m': '1' }
 
 async function safeFetch(url: string): Promise<unknown> {
   try {
@@ -25,6 +26,18 @@ function parseKlines(raw: unknown): { t:number;o:number;h:number;l:number;c:numb
   return (raw as unknown[][]).map(k => ({
     t: k[0] as number, o: +(k[1] as string), h: +(k[2] as string),
     l: +(k[3] as string), c: +(k[4] as string), v: +(k[5] as string),
+  }))
+}
+
+// Bybit klines: result.list is [[ts, open, high, low, close, volume, turnover], ...]
+// ts is milliseconds string; list is newest-first — reverse to oldest-first
+type BybitKlineResp = { result: { list: Array<[string, string, string, string, string, string, string]> } }
+function parseBybitKlines(raw: unknown): { t:number;o:number;h:number;l:number;c:number;v:number }[] | null {
+  const resp = raw as BybitKlineResp | null
+  const list = resp?.result?.list
+  if (!Array.isArray(list) || !list.length) return null
+  return [...list].reverse().map(k => ({
+    t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5],
   }))
 }
 
@@ -113,12 +126,16 @@ export async function GET(req: Request) {
       }
     }
 
-    // klines — parallel across all timeframes
+    // klines — parallel across all timeframes; fall back to Bybit if Binance is blocked
     const klinesEntries = await Promise.all(
       TFS.map(async (tf) => {
         const limit = TF_LIMITS[tf] ?? 150
         const raw = await safeFetch(`${B_SPOT}/api/v3/klines?symbol=BTCUSDT&interval=${tf}&limit=${limit}`)
-        const parsed = parseKlines(raw)
+        let parsed = parseKlines(raw)
+        if (!parsed && BYBIT_TF[tf]) {
+          const bybitRaw = await safeFetch(`${BYBIT}/v5/market/kline?category=spot&symbol=BTCUSDT&interval=${BYBIT_TF[tf]}&limit=${limit}`)
+          parsed = parseBybitKlines(bybitRaw)
+        }
         return [tf, parsed] as const
       })
     )

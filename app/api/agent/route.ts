@@ -41,12 +41,12 @@ async function ntfy(topic: string, title: string, body: string, priority = 3, ta
   }
 }
 
-// ── Kline parser ─────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-function parseKlines(raw: unknown): Kline[] {
-  if (!Array.isArray(raw)) return []
-  return (raw as Array<[number,string,string,string,string,string]>).map(k => ({
-    t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5],
+function toKlines(arr: unknown): Kline[] {
+  if (!Array.isArray(arr)) return []
+  return (arr as Array<{ t:number;o:number;h:number;l:number;c:number;v:number }>).map(k => ({
+    t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.v,
   }))
 }
 
@@ -68,48 +68,45 @@ export async function GET(req: Request): Promise<NextResponse> {
   } = { time, session: '', regime: '', signals: [], updates: [], errors: [] }
 
   try {
-    // ── 1. Fetch market data ──────────────────────────────────────────────────
-    const [ticker, prem, lsr, fng, ob, k1d, k4h, k1h, k15m] = await Promise.allSettled([
-      fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT').then(r => r.json()),
-      fetch('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT').then(r => r.json()),
-      fetch('https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1').then(r => r.json()),
-      fetch('https://api.alternative.me/fng/').then(r => r.json()),
-      fetch('https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=15').then(r => r.json()),
-      fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=200').then(r => r.json()),
-      fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=4h&limit=200').then(r => r.json()),
-      fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=100').then(r => r.json()),
-      fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=100').then(r => r.json()),
-    ])
+    // ── 1. Fetch market data via own proxy (avoids Binance geo-blocking) ──────
+    // The proxy uses Bybit/Kraken fallbacks for price and Bybit for klines.
+    const baseUrl   = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : 'http://localhost:3000'
+    const proxyRes  = await fetch(`${baseUrl}/api/binance`, { next: { revalidate: 0 } })
+    if (!proxyRes.ok) return NextResponse.json({ error: 'Proxy fetch failed' }, { status: 503 })
 
-    const tickerVal  = ticker.status  === 'fulfilled' ? (ticker.value  as Record<string, string>) : null
-    const premVal    = prem.status    === 'fulfilled' ? (prem.value    as Record<string, string>) : null
-    const lsrVal     = lsr.status     === 'fulfilled' && Array.isArray(lsr.value)
-      ? parseFloat((lsr.value as Array<Record<string, string>>)[0]?.longShortRatio ?? '1') : 1
-    const fngVal     = fng.status     === 'fulfilled'
-      ? (fng.value as { data: Array<{ value: string; value_classification: string }> }) : null
-    const obVal      = ob.status      === 'fulfilled'
-      ? (ob.value as { bids: [string, string][]; asks: [string, string][] }) : null
+    type ProxyMarket = {
+      price?: number; change?: number; funding?: number; lsr?: number
+      fg?: number; fgLabel?: string; bybitPrice?: number; krakenPrice?: number
+    }
+    type ProxyKlines = Record<string, Array<{ t:number;o:number;h:number;l:number;c:number;v:number }>>
+    type ProxyOB     = { bids: [string, string][]; asks: [string, string][] } | null
+    const proxy: { market: ProxyMarket; klines: ProxyKlines; orderBook: ProxyOB } = await proxyRes.json()
 
-    const price = tickerVal ? parseFloat(tickerVal.lastPrice ?? '0') : 0
+    // Use first available price (Binance → Bybit → Kraken)
+    const price = proxy.market.price ?? proxy.market.bybitPrice ?? proxy.market.krakenPrice ?? 0
     if (!price) return NextResponse.json({ error: 'Failed to fetch price' }, { status: 503 })
 
     const klines = {
-      '1d':  k1d.status  === 'fulfilled' ? parseKlines(k1d.value)  : [] as Kline[],
-      '4h':  k4h.status  === 'fulfilled' ? parseKlines(k4h.value)  : [] as Kline[],
-      '1h':  k1h.status  === 'fulfilled' ? parseKlines(k1h.value)  : [] as Kline[],
-      '15m': k15m.status === 'fulfilled' ? parseKlines(k15m.value) : [] as Kline[],
+      '1d':  toKlines(proxy.klines['1d']),
+      '4h':  toKlines(proxy.klines['4h']),
+      '1h':  toKlines(proxy.klines['1h']),
+      '15m': toKlines(proxy.klines['15m']),
     }
 
     if (!klines['4h'].length) return NextResponse.json({ error: 'No 4H klines' }, { status: 503 })
 
+    const obVal = proxy.orderBook
+
     const mkt: MarketData = {
-      loading: false,
+      loading:  false,
       price,
-      change:   tickerVal ? parseFloat(tickerVal.priceChangePercent ?? '0') : 0,
-      funding:  premVal?.lastFundingRate ? parseFloat(premVal.lastFundingRate) * 100 : undefined,
-      lsr:      lsrVal,
-      fg:       fngVal ? parseInt(fngVal.data[0]?.value ?? '50') : undefined,
-      fgLabel:  fngVal ? fngVal.data[0]?.value_classification : undefined,
+      change:   proxy.market.change   ?? 0,
+      funding:  proxy.market.funding  ?? undefined,
+      lsr:      proxy.market.lsr      ?? 1,
+      fg:       proxy.market.fg       ?? undefined,
+      fgLabel:  proxy.market.fgLabel  ?? undefined,
     }
 
     // ── 2. Indicators, regime, FVGs, liquidity ────────────────────────────────
