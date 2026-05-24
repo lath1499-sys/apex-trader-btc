@@ -12,6 +12,7 @@ import { detectScalpSignals, detectBOSCHoCH, getICTKillzones, calcVWAP } from '@
 import { evaluateStopManagement }  from '@/lib/stopManagement'
 import { getCurrentTradingSession, shouldGenerateSignal } from '@/lib/tradingHours'
 import { saveSignalToCloud, loadSignalsFromCloud }        from '@/lib/supabase'
+import { fetchMarketData }                               from '@/lib/marketFetch'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
@@ -43,11 +44,8 @@ async function ntfy(topic: string, title: string, body: string, priority = 3, ta
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function toKlines(arr: unknown): Kline[] {
-  if (!Array.isArray(arr)) return []
-  return (arr as Array<{ t:number;o:number;h:number;l:number;c:number;v:number }>).map(k => ({
-    t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.v,
-  }))
+function toKlines(arr: { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined): Kline[] {
+  return (arr ?? []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.v }))
 }
 
 // ── Route ────────────────────────────────────────────────────────────────────
@@ -68,45 +66,31 @@ export async function GET(req: Request): Promise<NextResponse> {
   } = { time, session: '', regime: '', signals: [], updates: [], errors: [] }
 
   try {
-    // ── 1. Fetch market data via own proxy (avoids Binance geo-blocking) ──────
-    // The proxy uses Bybit/Kraken fallbacks for price and Bybit for klines.
-    const baseUrl   = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3000'
-    const proxyRes  = await fetch(`${baseUrl}/api/binance`, { next: { revalidate: 0 } })
-    if (!proxyRes.ok) return NextResponse.json({ error: 'Proxy fetch failed' }, { status: 503 })
-
-    type ProxyMarket = {
-      price?: number; change?: number; funding?: number; lsr?: number
-      fg?: number; fgLabel?: string; bybitPrice?: number; krakenPrice?: number
-    }
-    type ProxyKlines = Record<string, Array<{ t:number;o:number;h:number;l:number;c:number;v:number }>>
-    type ProxyOB     = { bids: [string, string][]; asks: [string, string][] } | null
-    const proxy: { market: ProxyMarket; klines: ProxyKlines; orderBook: ProxyOB } = await proxyRes.json()
-
-    // Use first available price (Binance → Bybit → Kraken)
-    const price = proxy.market.price ?? proxy.market.bybitPrice ?? proxy.market.krakenPrice ?? 0
+    // ── 1. Fetch market data (direct import — no HTTP hop, no geo-block risk) ──
+    const md    = await fetchMarketData()
+    // Price: Binance → Bybit → Kraken
+    const price = md.price ?? md.bybitPrice ?? md.krakenPrice ?? 0
     if (!price) return NextResponse.json({ error: 'Failed to fetch price' }, { status: 503 })
 
     const klines = {
-      '1d':  toKlines(proxy.klines['1d']),
-      '4h':  toKlines(proxy.klines['4h']),
-      '1h':  toKlines(proxy.klines['1h']),
-      '15m': toKlines(proxy.klines['15m']),
+      '1d':  toKlines(md.klines['1d']  as { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined),
+      '4h':  toKlines(md.klines['4h']  as { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined),
+      '1h':  toKlines(md.klines['1h']  as { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined),
+      '15m': toKlines(md.klines['15m'] as { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined),
     }
 
     if (!klines['4h'].length) return NextResponse.json({ error: 'No 4H klines' }, { status: 503 })
 
-    const obVal = proxy.orderBook
+    const obVal = md.orderBook
 
     const mkt: MarketData = {
       loading:  false,
       price,
-      change:   proxy.market.change   ?? 0,
-      funding:  proxy.market.funding  ?? undefined,
-      lsr:      proxy.market.lsr      ?? 1,
-      fg:       proxy.market.fg       ?? undefined,
-      fgLabel:  proxy.market.fgLabel  ?? undefined,
+      change:   md.change   ?? 0,
+      funding:  md.funding  ?? undefined,
+      lsr:      md.lsr      ?? 1,
+      fg:       md.fg       ?? undefined,
+      fgLabel:  md.fgLabel  ?? undefined,
     }
 
     // ── 2. Indicators, regime, FVGs, liquidity ────────────────────────────────
