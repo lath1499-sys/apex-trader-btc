@@ -20,6 +20,10 @@ export const TFS = ['1d', '4h', '1h', '15m', '5m', '3m', '1m'] as const
 const BYBIT_TF: Record<string, string> = {
   '1d': 'D', '4h': '240', '1h': '60', '15m': '15', '5m': '5', '3m': '3', '1m': '1',
 }
+// Kraken OHLC intervals in minutes (fallback #3 when Binance + Bybit blocked)
+const KRAKEN_TF: Record<string, number> = {
+  '1d': 1440, '4h': 240, '1h': 60, '15m': 15, '5m': 5, '1m': 1,
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -79,6 +83,21 @@ function parseBybitKlines(raw: unknown): MarketKline[] | null {
   // Bybit returns newest-first — reverse to oldest-first
   return [...list].reverse().map(k => ({
     t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5],
+  }))
+}
+
+// Kraken OHLC: result[pair] = [[ts_sec, o, h, l, c, vwap, vol, count], ...]
+// ts is in seconds — multiply by 1000 for ms
+type KrakenOHLCResp = { result: Record<string, Array<[number, string, string, string, string, string, string, number]>> }
+function parseKrakenKlines(raw: unknown): MarketKline[] | null {
+  const resp  = raw as KrakenOHLCResp | null
+  if (!resp?.result) return null
+  // Skip the 'last' key (number), find the array value
+  const list = Object.values(resp.result).find(v => Array.isArray(v)) as
+    Array<[number, string, string, string, string, string, string, number]> | undefined
+  if (!list?.length) return null
+  return list.map(k => ({
+    t: k[0] * 1000, o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6],
   }))
 }
 
@@ -151,18 +170,31 @@ export async function fetchMarketData(): Promise<FetchedMarket> {
   }
   if (ob) result.orderBook = ob as OBData
 
-  // Klines: Binance first, Bybit fallback per TF
+  // Klines: Binance → Bybit → Kraken (each fallback only if previous returns null)
   const klinesEntries = await Promise.all(
     TFS.map(async (tf) => {
       const limit  = TF_LIMITS[tf] ?? 150
+
+      // 1. Binance
       const raw    = await safeFetch(`${B_SPOT}/api/v3/klines?symbol=BTCUSDT&interval=${tf}&limit=${limit}`)
       let   parsed = parseKlines(raw)
+
+      // 2. Bybit fallback
       if (!parsed && BYBIT_TF[tf]) {
         const bybitRaw = await safeFetch(
           `${BYBIT}/v5/market/kline?category=spot&symbol=BTCUSDT&interval=${BYBIT_TF[tf]}&limit=${limit}`,
         )
         parsed = parseBybitKlines(bybitRaw)
       }
+
+      // 3. Kraken fallback
+      if (!parsed && KRAKEN_TF[tf]) {
+        const krakenRaw = await safeFetch(
+          `${KRAKEN}/OHLC?pair=XBTUSD&interval=${KRAKEN_TF[tf]}`,
+        )
+        parsed = parseKrakenKlines(krakenRaw)
+      }
+
       return [tf, parsed ?? []] as const
     }),
   )
