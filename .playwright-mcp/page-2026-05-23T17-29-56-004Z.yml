@@ -1,0 +1,118 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]: ₿
+        - generic [ref=e6]:
+          - generic [ref=e7]: APEX TRADER BTC v8
+          - generic [ref=e8]: NY · 17:29:55 UTC · ...
+      - generic [ref=e9]:
+        - generic [ref=e10]:
+          - button "terminal" [ref=e11] [cursor=pointer]
+          - button "white" [ref=e12] [cursor=pointer]
+          - button "midnight" [ref=e13] [cursor=pointer]
+          - button "amber" [ref=e14] [cursor=pointer]
+          - button "tradingview" [ref=e15] [cursor=pointer]
+        - generic [ref=e17]:
+          - img [ref=e18]
+          - generic [ref=e21]: "45"
+        - generic [ref=e22]:
+          - generic [ref=e23]: $—
+          - generic [ref=e24]: ▲0.00% 24h
+        - generic [ref=e25]:
+          - generic [ref=e26]:
+            - generic [ref=e27]: 1D
+            - generic [ref=e28]: ...
+          - generic [ref=e29]:
+            - generic [ref=e30]: 4H
+            - generic [ref=e31]: ...
+          - generic [ref=e32]:
+            - generic [ref=e33]: 1H
+            - generic [ref=e34]: ...
+    - generic [ref=e35]:
+      - generic [ref=e36]:
+        - generic [ref=e37]: FUNDING
+        - generic [ref=e38]: —
+      - generic [ref=e39]:
+        - generic [ref=e40]: OI
+        - generic [ref=e41]: —
+      - generic [ref=e42]:
+        - generic [ref=e43]: L/S
+        - generic [ref=e44]: —
+      - generic [ref=e45]:
+        - generic [ref=e46]: F&G
+        - generic [ref=e47]: —
+      - generic [ref=e48]:
+        - generic [ref=e49]: MARK
+        - generic [ref=e50]: $—
+      - generic [ref=e51]:
+        - generic [ref=e52]: VOL 24H
+        - generic [ref=e53]: —
+      - generic [ref=e54]:
+        - generic [ref=e55]: SESIÓN
+        - generic [ref=e56]: NY
+      - generic [ref=e57]:
+        - generic [ref=e58]: BYBIT
+        - generic [ref=e59]: —
+      - generic [ref=e60]:
+        - generic [ref=e61]: KRAKEN
+        - generic [ref=e62]: —
+    - generic [ref=e63]:
+      - button "📊 Mercado" [ref=e64] [cursor=pointer]
+      - button "📈 Chart" [ref=e65] [cursor=pointer]
+      - button "🌈 Ciclo" [ref=e66] [cursor=pointer]
+      - button "📊 Indicadores" [ref=e67] [cursor=pointer]
+      - button "📉 VPVR" [ref=e68] [cursor=pointer]
+      - button "📖 OBook" [ref=e69] [cursor=pointer]
+      - button "🔥 Heatmap" [ref=e70] [cursor=pointer]
+      - button "⛓ OnChain" [ref=e71] [cursor=pointer]
+      - button "📰 News" [ref=e72] [cursor=pointer]
+      - button "🚨 Ideas" [ref=e73] [cursor=pointer]
+      - button "🔬 Backtest" [ref=e74] [cursor=pointer]
+      - button "🧮 Calc" [ref=e75] [cursor=pointer]
+      - button "🔔 Alertas" [ref=e76] [cursor=pointer]
+      - button "📓 Diario" [ref=e77] [cursor=pointer]
+      - button "🕐 Sesiones" [ref=e78] [cursor=pointer]
+      - button "💸 Funding" [ref=e79] [cursor=pointer]
+      - button "🔗 Status" [ref=e80] [cursor=pointer]
+    - main [ref=e81]:
+      - generic [ref=e82]:
+        - generic [ref=e83]:
+          - generic [ref=e84]: PRECIO · BTC/USDT PERP BINANCE
+          - generic [ref=e85]: $—
+          - generic [ref=e86]:
+            - generic [ref=e87]:
+              - generic [ref=e88]: HIGH 24H
+              - generic [ref=e89]: $—
+            - generic [ref=e90]:
+              - generic [ref=e91]: LOW 24H
+              - generic [ref=e92]: $—
+            - generic [ref=e93]:
+              - generic [ref=e94]: VOLUMEN
+              - generic [ref=e95]: —
+            - generic [ref=e96]:
+              - generic [ref=e97]: MARK
+              - generic [ref=e98]: $—
+            - generic [ref=e99]:
+              - generic [ref=e100]: ATR 4H
+              - generic [ref=e101]: $—
+            - generic [ref=e102]:
+              - generic [ref=e103]: CICLO
+              - generic [ref=e104]: ...
+        - generic [ref=e105]:
+          - generic [ref=e106]: FUNDING RATE
+          - generic [ref=e107]: —
+          - generic [ref=e110]: 🟢 Neutral
+        - generic [ref=e111]:
+          - generic [ref=e112]: OPEN INTEREST
+          - generic [ref=e113]: —
+          - generic [ref=e114]: —
+          - generic [ref=e115]:
+            - text: OI↑+P↑ = tendencia
+            - text: OI↑+P↓ = shorts abriendo
+        - generic [ref=e116]:
+          - generic [ref=e117]: LONG / SHORT RATIO
+          - generic [ref=e118]: —
+        - generic [ref=e120]: FEAR & GREED
+  - button "Open Next.js Dev Tools" [ref=e130] [cursor=pointer]:
+    - img [ref=e131]

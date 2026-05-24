@@ -1,0 +1,232 @@
+[     139ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[     193ms] [LOG] [Fast Refresh] done in 167ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[     281ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[     301ms] [LOG] [HMR] connected @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[   94621ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[   94781ms] [LOG] [Fast Refresh] done in 70ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  137420ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  137541ms] [LOG] [Fast Refresh] done in 68ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  182979ms] [LOG] [APEX score] {bull: 1, bear: 3, side: SHORT, maxSc: 3, i4bias: BAJISTA} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  182983ms] [LOG] [APEX score] {tradeType: DayTrade, strongTrend: true, MIN_CONF: 3, maxSc: 3} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  182983ms] [LOG] [APEX] confirmCandles: true klines: 300 last4: [bull, bear, bull, bull] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  228583ms] [LOG] [APEX score] {bull: 0, bear: 4, side: SHORT, maxSc: 4, i4bias: BAJISTA} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  228584ms] [LOG] [APEX score] {tradeType: DayTrade, strongTrend: true, MIN_CONF: 3, maxSc: 4} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  228584ms] [LOG] [APEX] confirmCandles: true klines: 300 last4: [bull, bear, bull, bull] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  274345ms] [LOG] [APEX score] {bull: 0, bear: 4, side: SHORT, maxSc: 4, i4bias: BAJISTA} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  274346ms] [LOG] [APEX score] {tradeType: DayTrade, strongTrend: true, MIN_CONF: 3, maxSc: 4} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  274347ms] [LOG] [APEX] confirmCandles: true klines: 300 last4: [bull, bear, bull, bull] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  320035ms] [LOG] [APEX score] {bull: 0, bear: 4, side: SHORT, maxSc: 4, i4bias: BAJISTA} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  320036ms] [LOG] [APEX score] {tradeType: DayTrade, strongTrend: true, MIN_CONF: 3, maxSc: 4} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  320037ms] [LOG] [APEX] confirmCandles: true klines: 300 last4: [bull, bear, bull, bull] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  344364ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  344588ms] [ERROR] ./components/panels/TradeIdeasPanel.tsx:480:9
+the name `getRec` is defined multiple times
+  478 |
+  479 |   // Match signal records to ideas by createdAt ≈ idea.ts (nearest ms match)
+> 480 |   const getRec = (idea: TradeIdea): SignalRecord | undefined => {
+      |         ^^^^^^
+  481 |     const ts = new Date(idea.ts).getTime()
+  482 |     return sigH.find(r => Math.abs(new Date(r.createdAt).getTime() - ts) < 5000)
+  483 |   }
+
+Ecmascript file had an error
+
+Import traces:
+  Client Component Browser:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component Browser]
+    ./app/page.tsx [Client Component Browser]
+    ./app/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component SSR]
+    ./app/page.tsx [Client Component SSR]
+    ./app/page.tsx [Server Component] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:3318
+[  344699ms] [ERROR] ./components/panels/TradeIdeasPanel.tsx:480:9
+the name `getRec` is defined multiple times
+  478 |
+  479 |   // Match signal records to ideas by createdAt ≈ idea.ts (nearest ms match)
+> 480 |   const getRec = (idea: TradeIdea): SignalRecord | undefined => {
+      |         ^^^^^^
+  481 |     const ts = new Date(idea.ts).getTime()
+  482 |     return sigH.find(r => Math.abs(new Date(r.createdAt).getTime() - ts) < 5000)
+  483 |   }
+
+Ecmascript file had an error
+
+Import traces:
+  Client Component Browser:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component Browser]
+    ./app/page.tsx [Client Component Browser]
+    ./app/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component SSR]
+    ./app/page.tsx [Client Component SSR]
+    ./app/page.tsx [Server Component] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:3318
+[  344803ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  345638ms] [ERROR] ./components/panels/TradeIdeasPanel.tsx:480:9
+the name `getRec` is defined multiple times
+  478 |
+  479 |   // Match signal records to ideas by createdAt ≈ idea.ts (nearest ms match)
+> 480 |   const getRec = (idea: TradeIdea): SignalRecord | undefined => {
+      |         ^^^^^^
+  481 |     const ts = new Date(idea.ts).getTime()
+  482 |     return sigH.find(r => Math.abs(new Date(r.createdAt).getTime() - ts) < 5000)
+  483 |   }
+
+Ecmascript file had an error
+
+Import traces:
+  Client Component Browser:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component Browser]
+    ./app/page.tsx [Client Component Browser]
+    ./app/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component SSR]
+    ./app/page.tsx [Client Component SSR]
+    ./app/page.tsx [Server Component] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:3318
+[  345739ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  346466ms] [ERROR] ./components/panels/TradeIdeasPanel.tsx:480:9
+the name `getRec` is defined multiple times
+  478 |
+  479 |   // Match signal records to ideas by createdAt ≈ idea.ts (nearest ms match)
+> 480 |   const getRec = (idea: TradeIdea): SignalRecord | undefined => {
+      |         ^^^^^^
+  481 |     const ts = new Date(idea.ts).getTime()
+  482 |     return sigH.find(r => Math.abs(new Date(r.createdAt).getTime() - ts) < 5000)
+  483 |   }
+
+Ecmascript file had an error
+
+Import traces:
+  Client Component Browser:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component Browser]
+    ./app/page.tsx [Client Component Browser]
+    ./app/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component SSR]
+    ./app/page.tsx [Client Component SSR]
+    ./app/page.tsx [Server Component] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:3318
+[  346467ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/?_rsc=q3mOO9BClNZHexY7:0
+[  346545ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[  346747ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:3000/_next/static/chunks/node_modules_react-dom_0bruynb._.js:15305
+[  346835ms] Error: ./components/panels/TradeIdeasPanel.tsx:480:9
+the name `getRec` is defined multiple times
+  478 |
+  479 |   // Match signal records to ideas by createdAt ≈ idea.ts (nearest ms match)
+> 480 |   const getRec = (idea: TradeIdea): SignalRecord | undefined => {
+      |         ^^^^^^
+  481 |     const ts = new Date(idea.ts).getTime()
+  482 |     return sigH.find(r => Math.abs(new Date(r.createdAt).getTime() - ts) < 5000)
+  483 |   }
+
+Ecmascript file had an error
+
+Import traces:
+  Client Component Browser:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component Browser]
+    ./app/page.tsx [Client Component Browser]
+    ./app/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component SSR]
+    ./app/page.tsx [Client Component SSR]
+    ./app/page.tsx [Server Component]
+
+
+    at <unknown> (Error: ./components/panels/TradeIdeasPanel.tsx:480:9)
+    at Object.getCompilationErrors (file://C:\Users\lath1\OneDrive\Desktop\apex-trader-btc\node_modules\next\dist\server\dev\hot-reloader-turbopack.js:1186:59)
+    at DevBundlerService.getCompilationError (file://C:\Users\lath1\OneDrive\Desktop\apex-trader-btc\node_modules\next\dist\server\lib\dev-bundler-service.js:44:55)
+    at DevServer.getCompilationError (file://C:\Users\lath1\OneDrive\Desktop\apex-trader-btc\node_modules\next\dist\server\dev\next-dev-server.js:720:42)
+    at DevServer.findPageComponents (file://C:\Users\lath1\OneDrive\Desktop\apex-trader-btc\node_modules\next\dist\server\dev\next-dev-server.js:690:43)
+    at async DevServer.renderErrorToResponseImpl (file://C:\Users\lath1\OneDrive\Desktop\apex-trader-btc\node_modules\next\dist\server\base-server.js:1753:26)
+[  346835ms] [LOG] [HMR] connected @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[  346838ms] [ERROR] ./components/panels/TradeIdeasPanel.tsx:480:9
+the name `getRec` is defined multiple times
+  478 |
+  479 |   // Match signal records to ideas by createdAt ≈ idea.ts (nearest ms match)
+> 480 |   const getRec = (idea: TradeIdea): SignalRecord | undefined => {
+      |         ^^^^^^
+  481 |     const ts = new Date(idea.ts).getTime()
+  482 |     return sigH.find(r => Math.abs(new Date(r.createdAt).getTime() - ts) < 5000)
+  483 |   }
+
+Ecmascript file had an error
+
+Import traces:
+  Client Component Browser:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component Browser]
+    ./app/page.tsx [Client Component Browser]
+    ./app/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component SSR]
+    ./app/page.tsx [Client Component SSR]
+    ./app/page.tsx [Server Component] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1945
+[  346939ms] [ERROR] ./components/panels/TradeIdeasPanel.tsx:480:9
+the name `getRec` is defined multiple times
+  478 |
+  479 |   // Match signal records to ideas by createdAt ≈ idea.ts (nearest ms match)
+> 480 |   const getRec = (idea: TradeIdea): SignalRecord | undefined => {
+      |         ^^^^^^
+  481 |     const ts = new Date(idea.ts).getTime()
+  482 |     return sigH.find(r => Math.abs(new Date(r.createdAt).getTime() - ts) < 5000)
+  483 |   }
+
+Ecmascript file had an error
+
+Import traces:
+  Client Component Browser:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component Browser]
+    ./app/page.tsx [Client Component Browser]
+    ./app/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component SSR]
+    ./app/page.tsx [Client Component SSR]
+    ./app/page.tsx [Server Component] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1945
+[  347139ms] [ERROR] ./components/panels/TradeIdeasPanel.tsx:480:9
+the name `getRec` is defined multiple times
+  478 |
+  479 |   // Match signal records to ideas by createdAt ≈ idea.ts (nearest ms match)
+> 480 |   const getRec = (idea: TradeIdea): SignalRecord | undefined => {
+      |         ^^^^^^
+  481 |     const ts = new Date(idea.ts).getTime()
+  482 |     return sigH.find(r => Math.abs(new Date(r.createdAt).getTime() - ts) < 5000)
+  483 |   }
+
+Ecmascript file had an error
+
+Import traces:
+  Client Component Browser:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component Browser]
+    ./app/page.tsx [Client Component Browser]
+    ./app/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./components/panels/TradeIdeasPanel.tsx [Client Component SSR]
+    ./app/page.tsx [Client Component SSR]
+    ./app/page.tsx [Server Component] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1945
+[  347214ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[  349280ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[  349477ms] [LOG] [Fast Refresh] done in 58ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_0u_w_5s._.js:1226
+[  349730ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  349758ms] [LOG] [HMR] connected @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  349959ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  349973ms] [LOG] [Fast Refresh] done in 118ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  350732ms] [LOG] [APEX score] {bull: 1, bear: 3, side: SHORT, maxSc: 3, i4bias: BAJISTA} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  350733ms] [LOG] [APEX score] {tradeType: DayTrade, strongTrend: true, MIN_CONF: 3, maxSc: 3} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  350733ms] [LOG] [APEX] confirmCandles: true klines: 300 last4: [bull, bear, bull, bull] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  354678ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  354721ms] [LOG] [Fast Refresh] done in 114ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  354830ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  354840ms] [LOG] [Fast Refresh] done in 118ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  395713ms] [LOG] [APEX score] {bull: 1, bear: 3, side: SHORT, maxSc: 3, i4bias: BAJISTA} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  395714ms] [LOG] [APEX score] {tradeType: DayTrade, strongTrend: true, MIN_CONF: 3, maxSc: 3} @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  395717ms] [LOG] [APEX] confirmCandles: true klines: 300 last4: [bull, bear, bull, bull] @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  429521ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  429667ms] [LOG] [Fast Refresh] done in 70ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  577539ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
+[  577599ms] [LOG] [Fast Refresh] done in 163ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_115brz8._.js:2477
