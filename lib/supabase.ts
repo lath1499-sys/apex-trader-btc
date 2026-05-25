@@ -18,17 +18,39 @@ import type { SignalRecord } from './types'
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Lazy-load Supabase only when env vars are configured
-let _supabase: ReturnType<typeof import('@supabase/supabase-js').createClient> | null = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _supabase:       any = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _supabaseServer: any = null
 
+function makeClient(url: string, key: string) {
+  const { createClient } = require('@supabase/supabase-js') as typeof import('@supabase/supabase-js')
+  return createClient(url, key)
+}
+
+// ── Browser client — uses NEXT_PUBLIC_ vars (baked into the client bundle) ───
 export function getSupabase() {
   if (_supabase) return _supabase
-  const url  = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key  = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!url || !key || url === '' || key === '') return null
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url || !key || url.includes('your-project')) return null
   try {
-    const { createClient } = require('@supabase/supabase-js') as typeof import('@supabase/supabase-js')
-    _supabase = createClient(url, key)
+    _supabase = makeClient(url, key)
     return _supabase
+  } catch {
+    return null
+  }
+}
+
+// ── Server-only client — uses service key (never exposed to the browser) ─────
+export function getSupabaseServer() {
+  if (_supabaseServer) return _supabaseServer
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_KEY
+  if (!url || !key || url.includes('your-project')) return null
+  try {
+    _supabaseServer = makeClient(url, key)
+    return _supabaseServer
   } catch {
     return null
   }
@@ -64,9 +86,11 @@ export function transformSignal(s: Record<string, unknown>): SignalRecord {
 }
 
 // ── Signal CRUD ─────────────────────────────────────────────────────────────
+// getDb(): server routes get the service-key client; browser gets the anon client
+function getDb() { return getSupabaseServer() ?? getSupabase() }
 
 export async function saveSignalToCloud(signal: SignalRecord): Promise<void> {
-  const sb = getSupabase()
+  const sb = getDb()
   if (!sb) return  // fallback to localStorage only
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -96,7 +120,7 @@ export async function saveSignalToCloud(signal: SignalRecord): Promise<void> {
 }
 
 export async function loadSignalsFromCloud(): Promise<SignalRecord[] | null> {
-  const sb = getSupabase()
+  const sb = getDb()
   if (!sb) return null
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -118,7 +142,7 @@ export async function saveMarketSnapshot(data: {
   rsi4h?: number; macd4h?: number; funding?: number; fg?: number
   lsr?: number; oi?: number; elliott4h?: string; analysis30m?: string
 }): Promise<void> {
-  const sb = getSupabase()
+  const sb = getDb()
   if (!sb) return
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
