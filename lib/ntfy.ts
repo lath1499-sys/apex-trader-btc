@@ -420,3 +420,30 @@ export const ntfyTemplates = {
 }
 
 // Legacy compat for PriceAlertPanel (getNtfySettings / saveNtfySettings already exported above)
+
+// ── BB Squeeze Alert (server-side — topic passed directly) ────────────────────
+// Called from app/api/agent/route.ts when 4H BB width transitions from wide → tight
+
+export async function ntfyBBSqueeze(
+  price:   number,
+  bbWidth: number,
+  topic:   string,
+): Promise<void> {
+  if (!topic || topic.trim() === '') return
+  await sendNtfy(
+    topic,
+    'BB SQUEEZE DETECTADO - BTC 4H',
+    [
+      '🔀 Las Bandas de Bollinger se están comprimiendo',
+      '',
+      `Precio actual: $${Math.round(price).toLocaleString()}`,
+      `BB Width 4H: ${bbWidth.toFixed(2)}%`,
+      '',
+      '⚠️ Movimiento explosivo inminente en ambas direcciones.',
+      'Prepara órdenes limite en soporte y resistencia clave.',
+      'Espera confirmación antes de entrar.',
+    ].join('\n'),
+    4,
+    ['compression', 'zap', 'bar_chart'],
+  )
+}

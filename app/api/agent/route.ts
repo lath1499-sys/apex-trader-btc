@@ -11,8 +11,11 @@ import { detectMarketRegime }      from '@/lib/marketRegime'
 import { detectScalpSignals, detectBOSCHoCH, getICTKillzones, calcVWAP } from '@/lib/scalpSignals'
 import { evaluateStopManagement }  from '@/lib/stopManagement'
 import { getCurrentTradingSession, shouldGenerateSignal } from '@/lib/tradingHours'
+import { getActiveBlockingEvent, getUpcomingEvent, minutesUntilEvent } from '@/lib/macroCalendar'
 import { saveSignalToCloud, loadSignalsFromCloud }        from '@/lib/supabase'
 import { fetchMarketData }                               from '@/lib/marketFetch'
+import { writeTradeAnalysis }                            from '@/lib/analysisWriter'
+import { ntfyBBSqueeze }                                 from '@/lib/ntfy'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
@@ -109,6 +112,11 @@ export async function GET(req: Request): Promise<NextResponse> {
     results.session = session.name
     results.regime  = regime?.regime ?? 'UNKNOWN'
 
+    // Pre-declare time components used in multiple blocks below
+    const nowUtc = new Date()
+    const mins   = nowUtc.getUTCMinutes()
+    const hours  = nowUtc.getUTCHours()
+
     // ── 3. Load existing signals, monitor SL/TP + stop management ────────────
     const allSignals  = await loadSignalsFromCloud() ?? []
     const active      = allSignals.filter(s => s.status === 'active')
@@ -180,6 +188,30 @@ export async function GET(req: Request): Promise<NextResponse> {
       if (changed) await saveSignalToCloud(updated)
     }
 
+    // ── 3b. Macro event blocker — alert once when a block window starts ────────
+    const macroBlock = getActiveBlockingEvent()
+    if (macroBlock && ntfyTopic && mins === 0) {
+      // Only notify at the top of each hour to avoid spam
+      const minsToEvent = minutesUntilEvent(macroBlock)
+      await ntfy(
+        ntfyTopic,
+        sanitizeHdr(`MACRO EVENT: ${macroBlock.name} — SENAL PAUSADA`),
+        [
+          `⚠️ ${macroBlock.label}`,
+          `Impacto: ${macroBlock.impact}`,
+          minsToEvent > 0
+            ? `En ${minsToEvent} minutos`
+            : `Hace ${Math.abs(minsToEvent)} minutos (ventana post-evento activa)`,
+          ``,
+          `Scalps y DayTrades bloqueados temporalmente.`,
+          `Swings con confluencias altas pueden continuar.`,
+          `Precio actual: $${Math.round(price).toLocaleString()}`,
+        ].join('\n'),
+        4,
+        'warning,no_entry',
+      )
+    }
+
     // ── 4. Generate new Normal signal ─────────────────────────────────────────
     const activeCount  = active.filter(s => s.status === 'active').length
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
@@ -215,7 +247,7 @@ export async function GET(req: Request): Promise<NextResponse> {
               bear:       newSignal.bear,
               maxSc:      newSignal.maxSc,
               reasons:    newSignal.reasons,
-              analysis:   newSignal.analysis,
+              analysis:   writeTradeAnalysis({ idea: newSignal, inds, mkt, regime: regime ?? null }),
               ts:         new Date(time),
             },
           }
@@ -314,13 +346,11 @@ export async function GET(req: Request): Promise<NextResponse> {
     }
 
     // ── 6. Periodic market analysis NTFY ─────────────────────────────────────
-    const nowUtc = new Date()
-    const mins   = nowUtc.getUTCMinutes()
-    const hours  = nowUtc.getUTCHours()
 
     if ((mins === 0 || mins === 30) && session.quality !== 'avoid' && ntfyTopic) {
       const regimeDesc  = regime?.description ?? 'N/A'
       const i4          = inds['4h']
+      const upcoming    = getUpcomingEvent(Date.now(), 4 * 60 * 60_000) // next 4h
       await ntfy(
         ntfyTopic,
         sanitizeHdr(`APEX Analisis 30min - ${session.name}`),
@@ -330,6 +360,7 @@ export async function GET(req: Request): Promise<NextResponse> {
           i4 ? `4H: ${i4.bias} | RSI ${i4.rsi?.toFixed(0)} | MACD ${i4.macd.hist > 0 ? 'alcista' : 'bajista'}` : '',
           `Señales activas: ${activeCount}`,
           `Funding: ${mkt.funding != null ? mkt.funding.toFixed(4) + '%' : 'N/A'} | F&G: ${mkt.fg ?? 'N/A'}`,
+          upcoming ? `⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución` : '',
         ].filter(Boolean).join('\n'),
         1,
         'bar_chart',
@@ -351,6 +382,13 @@ export async function GET(req: Request): Promise<NextResponse> {
         2,
         'bar_chart,clock4',
       )
+    }
+
+    // ── 7. BB Squeeze alert — max once per 4 hours ────────────────────────────
+    // Fires when BB Width 4H drops below 0.8% (extreme compression — breakout imminent)
+    // Spam guard: only when mins === 0 && hours % 4 === 0 (coincides with 4H analysis block)
+    if (regime && regime.bbWidthPct < 0.8 && mins === 0 && hours % 4 === 0 && ntfyTopic) {
+      await ntfyBBSqueeze(price, regime.bbWidthPct, ntfyTopic)
     }
 
     return NextResponse.json({ status: 'ok', ...results })

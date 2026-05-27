@@ -220,12 +220,34 @@ export function scoreTradeIdea(
     return null
   }
 
-  // 4. Regime bias gate — block signals counter to strong regime
-  if (regime) {
-    if (regime.signalBias === 'no_signal') return null
-    if (side === 'LONG'  && regime.signalBias === 'short_only') return null
-    if (side === 'SHORT' && regime.signalBias === 'long_only')  return null
+  // 4. Regime gate — no_signal only; bias is now handled by penalties/bonuses below
+  if (regime?.signalBias === 'no_signal') return null
+
+  // 4b. Counter-trend penalty — need 2 extra confluences to go against strong trend
+  if (regime?.regime === 'STRONG_TREND_DOWN' && side === 'LONG') {
+    if (bull < bear + 2) return null
+    reasons.push({ s: 'bull', txt: '⚠️ Long en tendencia bajista — confluencias extra requeridas' })
   }
+  if (regime?.regime === 'STRONG_TREND_UP' && side === 'SHORT') {
+    if (bear < bull + 2) return null
+    reasons.push({ s: 'bear', txt: '⚠️ Short en tendencia alcista — confluencias extra requeridas' })
+  }
+
+  // 4c. With-trend bonus — extra confluence credit for trading in regime direction
+  if (regime?.regime === 'STRONG_TREND_DOWN' && side === 'SHORT') {
+    bear += 1
+    reasons.push({ s: 'bear', txt: 'Tendencia bajista fuerte — favor del trade' })
+  }
+  if (regime?.regime === 'STRONG_TREND_UP' && side === 'LONG') {
+    bull += 1
+    reasons.push({ s: 'bull', txt: 'Tendencia alcista fuerte — favor del trade' })
+  }
+
+  // 4d. Multi-TF alignment block — ONLY block when ALL three TFs unanimously oppose the trade
+  const allTFsBearish = i1d?.bias === 'BAJISTA' && i4.bias === 'BAJISTA' && i1.bias === 'BAJISTA'
+  const allTFsBullish = i1d?.bias === 'ALCISTA' && i4.bias === 'ALCISTA' && i1.bias === 'ALCISTA'
+  if (side === 'LONG'  && allTFsBearish) return null
+  if (side === 'SHORT' && allTFsBullish) return null
 
   // 5. Candle confirmation on entry TF
   // Scalp confirms on 15m; DayTrade and Swing both confirm on 4h (the primary signal driver)
@@ -309,5 +331,7 @@ export function scoreTradeIdea(
     suggestedRiskPct:    probScore.kellyCriterion,
     ruinProbability:     mc.ruinProbability,
     confluenceScore,
+    isCounterTrend: (regime?.regime === 'STRONG_TREND_DOWN' && side === 'LONG') ||
+                    (regime?.regime === 'STRONG_TREND_UP'   && side === 'SHORT'),
   }
 }

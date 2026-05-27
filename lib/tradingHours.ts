@@ -1,6 +1,8 @@
 // APEX — Trading Hours & Session Quality
 // Agents know when NOT to trade. Low liquidity = bad signals.
 
+import { getActiveBlockingEvent } from './macroCalendar'
+
 export interface TradingSession {
   name:           string
   utcStart:       number
@@ -103,6 +105,13 @@ export function shouldGenerateSignal(
   tradeType: 'Scalp' | 'DayTrade' | 'Swing',
   confidence: string,
 ): boolean {
+  // Block during macro events (FOMC / CPI / NFP)
+  const macroBlock = getActiveBlockingEvent()
+  if (macroBlock) {
+    // Swing trades survive macro events — only Scalp and DayTrade are blocked
+    if (tradeType !== 'Swing') return false
+  }
+
   const session = getCurrentTradingSession()
 
   if (tradeType === 'Scalp'    && !session.allowScalp)    return false

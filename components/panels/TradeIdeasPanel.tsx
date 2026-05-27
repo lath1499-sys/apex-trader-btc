@@ -1,5 +1,5 @@
 'use client'
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useApexStore } from '@/store/apexStore'
 import { useTheme } from '@/hooks/useTheme'
 import { fmt } from '@/lib/buildContext'
@@ -9,6 +9,8 @@ import type { TradeIdea, SignalRecord, IndicatorMap, MarketData } from '@/lib/ty
 import type { FVGResult } from '@/lib/fvg'
 import { generateLimitOrders }   from '@/lib/limitOrders'
 import { calcWinProbability }    from '@/lib/probabilisticModel'
+import { writeTradeAnalysis }    from '@/lib/analysisWriter'
+import { detectMarketRegime }    from '@/lib/marketRegime'
 import type { ScalpSignal }      from '@/lib/scalpSignals'
 
 const STATUS_COLOR: Record<string, string> = {
@@ -236,7 +238,25 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
     ? Math.floor((Date.now() - new Date(rec.createdAt).getTime()) / 3_600_000)
     : null
 
-  const signalHistory = useApexStore(s => s.signalHistory)
+  const signalHistory  = useApexStore(s => s.signalHistory)
+  const indsCard       = useApexStore(s => s.inds)
+  const rawKCard       = useApexStore(s => s.rawK)
+  const cycleCard      = useApexStore(s => s.cycle)
+  const newsCard       = useApexStore(s => s.news)
+  const elliottCard    = useApexStore(s => s.elliottWaves)
+
+  const analysisText = useMemo(() => {
+    if (!idea || !indsCard) return idea?.analysis ?? ''
+    const k4h    = rawKCard?.['4h'] ?? []
+    const regime = k4h.length >= 20 ? detectMarketRegime(k4h) : null
+    return writeTradeAnalysis({
+      idea, inds: indsCard, regime, ew: null,
+      mkt: mkt ?? {} as typeof mkt,
+      cycle: cycleCard ?? null,
+      news: newsCard ?? [],
+    })
+  }, [idea, mkt?.price, indsCard, cycleCard])
+
   const probScore = React.useMemo(() => calcWinProbability(
     {
       side:      idea.side,
@@ -324,7 +344,7 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
           </div>
           <div style={{ background: T.accent + '0a', border: `1px solid ${T.accent}33`, borderRadius: 6, padding: '8px 12px' }}>
             <div style={{ fontSize: 7, color: T.accent, letterSpacing: '.1em', marginBottom: 5 }}>ANÁLISIS E HIPÓTESIS</div>
-            <div style={{ fontSize: 10, color: T.textSec, lineHeight: 1.7 }}>{idea.analysis}</div>
+            <div style={{ fontSize: 10, color: T.textSec, lineHeight: 1.7 }}>{analysisText}</div>
           </div>
 
           {/* Win Probability bar */}
@@ -843,10 +863,11 @@ function PerformanceTab() {
 
 // ── Confluence Panel (S4) ─────────────────────────────────────────────────────
 
-function ConfluencePanel({ idea, inds, T }: {
-  idea: TradeIdea
-  inds: IndicatorMap
-  T:    ReturnType<typeof useTheme>
+function ConfluencePanel({ idea, inds, T, analysisText }: {
+  idea:          TradeIdea
+  inds:          IndicatorMap
+  T:             ReturnType<typeof useTheme>
+  analysisText?: string
 }) {
   const bullReasons = idea.reasons.filter(r => r.s === 'bull')
   const bearReasons = idea.reasons.filter(r => r.s === 'bear')
@@ -944,7 +965,7 @@ function ConfluencePanel({ idea, inds, T }: {
       {/* Analysis text */}
       <div style={card}>
         <div style={{ fontSize: 8, color: T.muted, letterSpacing: '.1em', marginBottom: 6 }}>HIPÓTESIS</div>
-        <div style={{ fontSize: 10, color: T.text, lineHeight: 1.8 }}>{idea.analysis}</div>
+        <div style={{ fontSize: 10, color: T.text, lineHeight: 1.8 }}>{analysisText ?? idea.analysis}</div>
       </div>
     </div>
   )
@@ -1150,6 +1171,9 @@ export default function TradeIdeasPanel() {
   const scalpMode      = useApexStore(s => s.scalpMode)
   const setScalpMode   = useApexStore(s => s.setScalpMode)
   const scalpSignal    = useApexStore(s => s.scalpSignal)
+  const rawKMain       = useApexStore(s => s.rawK)
+  const cycleMain      = useApexStore(s => s.cycle)
+  const newsMain       = useApexStore(s => s.news)
   const killzones      = useApexStore(s => s.killzones)
   const vwap           = useApexStore(s => s.vwap)
   const lastAutoAlert  = useRef<string | null>(null)
@@ -1170,6 +1194,18 @@ export default function TradeIdeasPanel() {
   const activeRec   = activeRecs[0] ?? null
   const displayIdea = activeRec?.idea ?? (history.length ? history[0] : tradeIdea)
   const displayRec  = activeRec
+
+  const analysisTextMain = useMemo(() => {
+    if (!displayIdea || !inds) return displayIdea?.analysis ?? ''
+    const k4h    = rawKMain?.['4h'] ?? []
+    const regime = k4h.length >= 20 ? detectMarketRegime(k4h) : null
+    return writeTradeAnalysis({
+      idea: displayIdea, inds: inds as IndicatorMap, regime, ew: null,
+      mkt: mkt ?? {} as typeof mkt,
+      cycle: cycleMain ?? null,
+      news: newsMain ?? [],
+    })
+  }, [displayIdea, mkt?.price, inds, cycleMain])
 
   function getRec(idea: TradeIdea): SignalRecord | undefined {
     const ts = new Date(idea.ts).getTime()
@@ -1339,7 +1375,7 @@ export default function TradeIdeasPanel() {
               </div>
             </div>
           : displayIdea
-            ? <ConfluencePanel idea={displayIdea} inds={inds as IndicatorMap} T={T} />
+            ? <ConfluencePanel idea={displayIdea} inds={inds as IndicatorMap} T={T} analysisText={analysisTextMain} />
             : <div style={{ color: T.textSec, textAlign: 'center', padding: 40, fontSize: 11 }}>Sin señal activa.</div>
       )}
     </div>

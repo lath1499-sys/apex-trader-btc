@@ -135,7 +135,7 @@ export function detectMarketRegime(klines: Kline[]): RegimeAnalysis {
   } else if (adx > 30 && price > ema50l && ema50l > ema200l) {
     regime             = 'STRONG_TREND_UP'
     allowedSignalTypes = ['DayTrade', 'Swing']
-    signalBias         = 'long_only'
+    signalBias         = 'both'
   } else if (adx > 20 && price > ema50l) {
     regime             = 'WEAK_TREND_UP'
     allowedSignalTypes = ['Scalp', 'DayTrade', 'Swing']
@@ -143,7 +143,7 @@ export function detectMarketRegime(klines: Kline[]): RegimeAnalysis {
   } else if (adx > 30 && price < ema50l && ema50l < ema200l) {
     regime             = 'STRONG_TREND_DOWN'
     allowedSignalTypes = ['DayTrade', 'Swing']
-    signalBias         = 'short_only'
+    signalBias         = 'both'
   } else if (adx > 20 && price < ema50l) {
     regime             = 'WEAK_TREND_DOWN'
     allowedSignalTypes = ['Scalp', 'DayTrade', 'Swing']
@@ -159,9 +159,9 @@ export function detectMarketRegime(klines: Kline[]): RegimeAnalysis {
   }
 
   const descriptions: Record<MarketRegime, string> = {
-    STRONG_TREND_UP:   'Tendencia alcista fuerte — operar solo longs, comprar retrocesos',
+    STRONG_TREND_UP:   'Tendencia alcista fuerte — longs preferidos, shorts en sobrecompra extrema',
     WEAK_TREND_UP:     'Tendencia alcista débil — longs con confluencias altas',
-    STRONG_TREND_DOWN: 'Tendencia bajista fuerte — operar solo shorts',
+    STRONG_TREND_DOWN: 'Tendencia bajista fuerte — shorts + longs contra-tendencia con condiciones extremas',
     WEAK_TREND_DOWN:   'Tendencia bajista débil — shorts con confluencias altas',
     RANGING:           'Mercado lateral — mean reversion, evitar breakouts falsos',
     BREAKOUT_IMMINENT: 'Compresión extrema — breakout inminente, preparar órdenes en ambos lados',

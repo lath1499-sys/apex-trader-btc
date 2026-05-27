@@ -90,7 +90,8 @@ export interface TradeIdea {
   probabilityFactors?: Array<{ name: string; contribution: number; direction: '+' | '-' }>
   suggestedRiskPct?: number
   ruinProbability?: number
-  confluenceScore?: number
+  confluenceScore?:  number
+  isCounterTrend?:   boolean
 }
 
 export interface AutoAlert {
