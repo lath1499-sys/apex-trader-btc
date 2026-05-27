@@ -11,31 +11,29 @@
 //
 // Falls back to localStorage when env vars are missing (local dev without Supabase).
 
+import { createClient } from '@supabase/supabase-js'
 import type { SignalRecord } from './types'
 
 // ── Supabase SQL schema (run in Supabase dashboard → SQL Editor) ─────────────
 // See: /docs/supabase-schema.sql  (or paste directly in Supabase SQL editor)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Lazy-load Supabase only when env vars are configured
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _supabase:       any = null
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _supabaseServer: any = null
 
-function makeClient(url: string, key: string) {
-  const { createClient } = require('@supabase/supabase-js') as typeof import('@supabase/supabase-js')
-  return createClient(url, key)
-}
-
 // ── Browser client — uses NEXT_PUBLIC_ vars (baked into the client bundle) ───
+// Supports new-format keys (sb_publishable_...) via auth options
 export function getSupabase() {
   if (_supabase) return _supabase
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!url || !key || url.includes('your-project')) return null
+  if (!url || !key) return null
   try {
-    _supabase = makeClient(url, key)
+    _supabase = createClient(url, key, {
+      auth: { persistSession: true, autoRefreshToken: true },
+    })
     return _supabase
   } catch {
     return null
@@ -47,9 +45,11 @@ export function getSupabaseServer() {
   if (_supabaseServer) return _supabaseServer
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_KEY
-  if (!url || !key || url.includes('your-project')) return null
+  if (!url || !key) return null
   try {
-    _supabaseServer = makeClient(url, key)
+    _supabaseServer = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
     return _supabaseServer
   } catch {
     return null
