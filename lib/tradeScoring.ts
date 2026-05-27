@@ -177,6 +177,23 @@ export function scoreTradeIdea(
   // ── DECISIÓN ─────────────────────────────────────────────────────────────
   const side: 'LONG' | 'SHORT' | null = bull > bear ? 'LONG' : bear > bull ? 'SHORT' : null
   const maxSc = Math.max(bull, bear)
+
+  // EARLY DEBUG — always fires so we see bull/bear even when signal is rejected
+  console.log('[APEX SCORE DEBUG]', JSON.stringify({
+    bull, bear,
+    side: side ?? 'NEUTRAL',
+    score: maxSc,
+    regime:   regime?.regime ?? null,
+    bias1d:   i1d?.bias,
+    bias4h:   i4.bias,
+    bias1h:   i1.bias,
+    rsi4h:    i4.rsi?.toFixed(1),
+    macd4h:   i4.macd?.hist?.toFixed(2),
+    stoch4h:  i4.stoch?.k?.toFixed(1),
+    score4h:  i4.score,
+    rejectEarly: !side ? 'tie' : maxSc < 2 ? 'score<2' : 'ok',
+  }))
+
   if (!side || maxSc < 2) return null
 
   const av       = i4.atr
@@ -315,6 +332,14 @@ export function scoreTradeIdea(
     `Invalidación por cierre ${isLong ? 'bajo' : 'sobre'} $${Math.round(sl).toLocaleString()} ` +
     `(SL ${Math.abs(sl - price).toFixed(0)} pts). Apalancamiento máximo: ${maxLev}x. ` +
     `Calidad del setup: ${qualityLabel}.${learnNote}${patternBlock}`
+
+  console.log('[APEX SCORE PASS]', JSON.stringify({
+    side, tradeType, confidence, score: maxSc,
+    winProb: probScore.winProbability?.toFixed(1),
+    ev: probScore.expectedValue?.toFixed(3),
+    ruin: mc.ruinProbability?.toFixed(1),
+    regime: regime?.regime ?? null,
+  }))
 
   return {
     side, tradeType, confidence,
