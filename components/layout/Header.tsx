@@ -21,6 +21,12 @@ export default function Header() {
   const signalHistory = useApexStore(s => s.signalHistory)
   const setTab        = useApexStore(s => s.setTab)
   const activeSignals = signalHistory.filter(r => r.status === 'active')
+  const closedSignals = signalHistory.filter(r => r.pnl != null && r.status !== 'active')
+  const totalPnl      = closedSignals.reduce((sum, s) => sum + (s.pnl ?? 0), 0)
+  const winRate       = closedSignals.length > 0
+    ? Math.round(closedSignals.filter(s => (s.pnl ?? 0) > 0).length / closedSignals.length * 100)
+    : 0
+  const totalTrades   = closedSignals.length
   const longActives   = activeSignals.filter(r => r.idea.side === 'LONG').length
   const shortActives  = activeSignals.filter(r => r.idea.side === 'SHORT').length
   const signalBadgeColor = longActives > 0 && shortActives > 0 ? '#f97316'  // orange = mixed
@@ -107,6 +113,18 @@ export default function Header() {
             {(mkt.change ?? 0) >= 0 ? '▲' : '▼'}{Math.abs(mkt.change ?? 0).toFixed(2)}% 24h
           </div>
         </div>
+
+        {/* P&L summary */}
+        {totalTrades > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', fontSize: 9, lineHeight: 1.3 }}>
+            <span style={{ color: totalPnl >= 0 ? T.bull : T.danger, fontWeight: 700, fontSize: 11 }}>
+              {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)}% P&L
+            </span>
+            <span style={{ color: T.textSec }}>
+              {winRate}% WR · {totalTrades} trades
+            </span>
+          </div>
+        )}
 
         {/* Multi-TF bias */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
