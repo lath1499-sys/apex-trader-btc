@@ -32,7 +32,14 @@
       "Bash(git init *)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(curl -s \"https://apex-trader-btc.vercel.app/api/binance\")",
+      "Bash(git push *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(git commit *)",
+      "Bash(taskkill /PID 14876 /F)",
+      "Bash(git restore *)",
+      "Bash(grep -v \"//\\\\|^\\\\s*//\")"
     ]
   }
 }
