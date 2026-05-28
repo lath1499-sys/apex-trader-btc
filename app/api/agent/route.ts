@@ -12,7 +12,8 @@ import { detectScalpSignals, detectBOSCHoCH, getICTKillzones, calcVWAP } from '@
 import { evaluateStopManagement }  from '@/lib/stopManagement'
 import { getCurrentTradingSession, shouldGenerateSignal } from '@/lib/tradingHours'
 import { getActiveBlockingEvent, getUpcomingEvent, minutesUntilEvent } from '@/lib/macroCalendar'
-import { saveSignalToCloud, loadSignalsFromCloud }        from '@/lib/supabase'
+import { saveSignalToCloud, loadSignalsFromCloud, getSupabaseServer } from '@/lib/supabase'
+import { calcLearnedWeights }                             from '@/lib/selfLearning'
 import { fetchMarketData }                               from '@/lib/marketFetch'
 import { writeTradeAnalysis }                            from '@/lib/analysisWriter'
 import { ntfyBBSqueeze }                                 from '@/lib/ntfy'
@@ -117,9 +118,10 @@ export async function GET(req: Request): Promise<NextResponse> {
     const mins   = nowUtc.getUTCMinutes()
     const hours  = nowUtc.getUTCHours()
 
-    // ── 3. Load existing signals, monitor SL/TP + stop management ────────────
-    const allSignals  = await loadSignalsFromCloud() ?? []
-    const active      = allSignals.filter(s => s.status === 'active')
+    // ── 3. Load existing signals + compute learned weights ────────────────────
+    const allSignals     = await loadSignalsFromCloud() ?? []
+    const active         = allSignals.filter(s => s.status === 'active')
+    const learnedWeights = await calcLearnedWeights(getSupabaseServer())
 
     for (const sig of active) {
       const isLong = sig.idea.side === 'LONG'
@@ -185,7 +187,22 @@ export async function GET(req: Request): Promise<NextResponse> {
         }
       }
 
-      if (changed) await saveSignalToCloud(updated)
+      if (changed) {
+        await saveSignalToCloud(updated)
+        // Record outcome in apex_decisions so the agent can learn from it
+        const outcome = updated.status === 'sl_hit' ? 'loss'
+          : updated.status === 'tp3_hit' || updated.status === 'tp2_hit' || updated.status === 'tp1_hit' ? 'win'
+          : 'breakeven'
+        const closeSb = getSupabaseServer()
+        if (closeSb && updated.pnl != null) {
+          await closeSb.from('apex_decisions')
+            .update({ outcome, pnl: updated.pnl })
+            .eq('signal_id', sig.id)
+            .then(({ error }: { error: { message: string } | null }) => {
+              if (error) console.error('[APEX Decisions] outcome update error:', error.message)
+            })
+        }
+      }
     }
 
     // ── 3b. Macro event blocker — alert once when a block window starts ────────
@@ -217,14 +234,43 @@ export async function GET(req: Request): Promise<NextResponse> {
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
 
     if (activeCount < 3) {
-      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals)
+      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights)
+
+      // ── Log decision to apex_decisions (learn from everything, win or skip) ──
+      const sb = getSupabaseServer()
+      if (sb) {
+        const decisionId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+        await sb.from('apex_decisions').insert({
+          id:            decisionId,
+          decision_type: newSignal ? 'signal_generated' : 'signal_skipped',
+          side:          newSignal?.side ?? null,
+          trade_type:    newSignal?.tradeType ?? null,
+          score:         newSignal?.maxSc ?? null,
+          confidence:    newSignal?.confidence ?? null,
+          regime:        regime?.regime ?? null,
+          session:       session.name,
+          bias_1d:       inds['1d']?.bias ?? null,
+          bias_4h:       inds['4h']?.bias ?? null,
+          bias_1h:       inds['1h']?.bias ?? null,
+          rsi_4h:        inds['4h']?.rsi ?? null,
+          macd_4h:       inds['4h']?.macd?.hist ?? null,
+          stoch_4h:      inds['4h']?.stoch?.k ?? null,
+          fg:            mkt.fg ?? null,
+          funding:       mkt.funding ?? null,
+          skip_reason:   newSignal ? null : 'score_or_filter',
+          signal_id:     null,   // updated after saveSignalToCloud
+        }).then(({ error }: { error: { message: string } | null }) => {
+          if (error) console.error('[APEX Decisions] insert error:', error.message)
+        })
+      }
 
       if (newSignal && !newSignal.consolidation) {
         // Dedup: don't add same-side signal if one already active
         const sameActive = active.some(s => s.idea.side === newSignal.side && s.status === 'active')
         if (!sameActive && shouldGenerateSignal(newSignal.tradeType, newSignal.confidence)) {
+          const recId = Date.now().toString()
           const rec: SignalRecord = {
-            id:        Date.now().toString(),
+            id:        recId,
             createdAt: time,
             status:    'active',
             exitPrice: null,
@@ -252,6 +298,18 @@ export async function GET(req: Request): Promise<NextResponse> {
             },
           }
           await saveSignalToCloud(rec)
+          // Link decision record to the generated signal
+          if (sb) {
+            await sb.from('apex_decisions')
+              .update({ signal_id: recId, decision_type: 'signal_generated' })
+              .eq('session', session.name)
+              .is('signal_id', null)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .then(({ error }: { error: { message: string } | null }) => {
+                if (error) console.error('[APEX Decisions] link error:', error.message)
+              })
+          }
           if (ntfyTopic && newSignal.confidence !== 'BAJA') {
             const reasons = newSignal.reasons.slice(0, 3).map(r => r.txt).join('\n')
             await ntfy(

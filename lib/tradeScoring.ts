@@ -1,5 +1,6 @@
 import type { MarketData, IndicatorMap, TradeIdea, TradeReason, OrderBook, Kline, SignalRecord } from './types'
 import type { WeightMap } from './scoreWeights'
+import type { LearnedWeights } from './selfLearning'
 import { detectCandlePatterns } from './candlePatterns'
 import { detectMarketRegime }   from './marketRegime'
 import { calcWinProbability }   from './probabilisticModel'
@@ -33,6 +34,7 @@ export function scoreTradeIdea(
   rawK: RawK,
   weights?: WeightMap,
   signalHistory: SignalRecord[] = [],
+  learnedWeights?: LearnedWeights,
 ): TradeIdea | null {
   const i4 = inds['4h'], i1 = inds['1h'], i1d = inds['1d'], i15 = inds['15m']
   if (!i4 || !i1) return null
@@ -219,8 +221,14 @@ export function scoreTradeIdea(
   // 3. Self-learning weights + confidence
   const wKey   = `${tradeType}_${side}`
   const wMult  = weights?.[wKey] ?? 1.0
-  const adjSc  = maxSc * wMult
+  // Apply learned outcome-based weights (session+type combo stored in sessionWeights)
+  const learnedMult = learnedWeights?.sessionWeights[wKey] ?? 1.0
+  const adjSc  = maxSc * wMult * learnedMult
   const confidence: 'ALTA' | 'MEDIA' | 'BAJA' = adjSc >= 7 ? 'ALTA' : adjSc >= 5 ? 'MEDIA' : 'BAJA'
+
+  // 3c. Dynamic min-score threshold — tighten when recent WR < 40%, loosen when > 65%
+  const minScoreAdj = learnedWeights?.minScoreAdjustment ?? 0
+  if (minScoreAdj > 0 && maxSc < MIN_CONF[tradeType] + minScoreAdj) return null
 
   // 3b. Trading session gate — don't trade during low-liquidity hours
   if (!shouldGenerateSignal(tradeType, confidence)) return null

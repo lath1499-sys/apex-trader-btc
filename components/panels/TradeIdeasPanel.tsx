@@ -857,6 +857,37 @@ function PerformanceTab() {
           })}
         </div>
       )}
+
+      {/* Agent Learning Summary — computed client-side from signalHistory */}
+      {(() => {
+        const closed20  = sigH.filter(r => r.pnl != null && r.status !== 'active').slice(0, 20)
+        const wr20      = closed20.length > 0 ? closed20.filter(r => (r.pnl ?? 0) > 0).length / closed20.length : null
+        const minAdj    = wr20 == null ? 0 : wr20 < 0.40 ? 1 : wr20 > 0.65 ? -1 : 0
+        const allClosed = sigH.filter(r => r.pnl != null && r.status !== 'active')
+        const allWR     = allClosed.length > 0 ? allClosed.filter(r => (r.pnl ?? 0) > 0).length / allClosed.length : null
+        if (allClosed.length === 0) return null
+        return (
+          <div style={{ padding: 10, border: `1px solid ${T.border}`, borderRadius: 6 }}>
+            <div style={{ fontSize: 9, color: T.accent, fontWeight: 700, marginBottom: 8, letterSpacing: '.08em' }}>
+              🧠 APRENDIZAJE DEL AGENTE
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 8, color: T.textSec }}>
+              <div>Total analizadas: <b style={{ color: T.text }}>{allClosed.length}</b></div>
+              <div>Win Rate real: <b style={{ color: allWR != null && allWR > 0.5 ? T.bull : T.danger }}>
+                {allWR != null ? Math.round(allWR * 100) : 0}%
+              </b></div>
+              <div>Score mínimo: <b style={{ color: T.text }}>{5 + minAdj}/12</b></div>
+              <div>Ajuste reciente: <b style={{ color: minAdj < 0 ? T.bull : minAdj > 0 ? T.danger : T.muted }}>
+                {minAdj > 0 ? 'Más estricto ↑' : minAdj < 0 ? 'Más permisivo ↓' : 'Normal'}
+              </b></div>
+            </div>
+            <div style={{ fontSize: 7, color: T.muted, marginTop: 6, lineHeight: 1.5 }}>
+              El agente ajusta su umbral basado en historial real.
+              Pérdidas recientes → más confluencias requeridas. Buenas rachas → umbral reducido.
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
