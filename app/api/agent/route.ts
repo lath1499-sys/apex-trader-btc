@@ -219,20 +219,6 @@ export async function GET(req: Request): Promise<NextResponse> {
     if (activeCount < 3) {
       const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals)
 
-      console.log('[APEX DEBUG] Score result:', JSON.stringify({
-        signal:   newSignal ? { side: newSignal.side, score: newSignal.maxSc, confidence: newSignal.confidence, tradeType: newSignal.tradeType } : null,
-        regime:   regime?.regime ?? 'null',
-        bias1d:   inds['1d']?.bias,
-        bias4h:   inds['4h']?.bias,
-        bias1h:   inds['1h']?.bias,
-        rsi4h:    inds['4h']?.rsi?.toFixed(1),
-        score4h:  inds['4h']?.score,
-        price:    mkt.price,
-        session:  session.name,
-        activeCount,
-        macroBlock: getActiveBlockingEvent()?.name ?? null,
-      }))
-
       if (newSignal && !newSignal.consolidation) {
         // Dedup: don't add same-side signal if one already active
         const sameActive = active.some(s => s.idea.side === newSignal.side && s.status === 'active')

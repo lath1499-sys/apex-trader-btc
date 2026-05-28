@@ -30,7 +30,7 @@ export const TRADING_SESSIONS: TradingSession[] = [
     quality: 'caution',
     reason: 'Liquidez baja, tendencia a falsas rupturas',
     allowScalp: false, allowDayTrade: true, allowSwing: true,
-    minConfidence: 'ALTA',
+    minConfidence: 'MEDIA',
   },
   {
     name: 'Asia Session',
@@ -38,7 +38,7 @@ export const TRADING_SESSIONS: TradingSession[] = [
     quality: 'caution',
     reason: 'Rango asiatico - generalmente consolidacion',
     allowScalp: false, allowDayTrade: true, allowSwing: true,
-    minConfidence: 'ALTA',
+    minConfidence: 'MEDIA',
   },
   {
     name: 'Frankfurt Pre-Market',

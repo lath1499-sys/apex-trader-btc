@@ -56,6 +56,13 @@ export function scoreTradeIdea(
   if (i1d?.bias === 'BAJISTA') { bear++; be('1D bajista') }
   if (i4.rsi <= 32 && i1.rsi <= 38)  { bull += 2; b('RSI sobreventa 4H+1H') }
   if (i4.rsi >= 68 && i1.rsi >= 65)  { bear += 2; be('RSI sobrecompra 4H+1H') }
+  // Extreme oversold / overbought — higher weight for reversal probability
+  if (i4.rsi <= 25) { bull += 3; b('RSI 4H extremadamente sobrevendido — rebote de alta probabilidad') }
+  if (i4.rsi >= 75) { bear += 3; be('RSI 4H extremadamente sobrecomprado — corrección de alta probabilidad') }
+  if (i4.stoch.k != null && i4.stoch.k <= 5)  { bull += 2; b('Stoch 4H en mínimo absoluto — reversión inminente') }
+  if (i4.stoch.k != null && i4.stoch.k >= 95) { bear += 2; be('Stoch 4H en máximo absoluto — reversión inminente') }
+  if (i4.rsi <= 25 && i4.stoch.k != null && i4.stoch.k <= 5) { bull += 2; b('RSI+Stoch doble sobreventa extrema — confluencia de reversión') }
+  if (i4.rsi >= 75 && i4.stoch.k != null && i4.stoch.k >= 95) { bear += 2; be('RSI+Stoch doble sobrecompra extrema — confluencia de reversión') }
   if (i4.macd.hist > 0 && i4.macd.hist > i4.macd.prev) { bull++; b('MACD 4H acelerando') }
   if (i4.macd.hist < 0 && i4.macd.hist < i4.macd.prev) { bear++; be('MACD 4H bajista') }
   if (i4.stoch.k != null && i4.stoch.k < 20) { bull++; b('Stoch sobreventa') }
@@ -178,22 +185,6 @@ export function scoreTradeIdea(
   const side: 'LONG' | 'SHORT' | null = bull > bear ? 'LONG' : bear > bull ? 'SHORT' : null
   const maxSc = Math.max(bull, bear)
 
-  // EARLY DEBUG — always fires so we see bull/bear even when signal is rejected
-  console.log('[APEX SCORE DEBUG]', JSON.stringify({
-    bull, bear,
-    side: side ?? 'NEUTRAL',
-    score: maxSc,
-    regime:   regime?.regime ?? null,
-    bias1d:   i1d?.bias,
-    bias4h:   i4.bias,
-    bias1h:   i1.bias,
-    rsi4h:    i4.rsi?.toFixed(1),
-    macd4h:   i4.macd?.hist?.toFixed(2),
-    stoch4h:  i4.stoch?.k?.toFixed(1),
-    score4h:  i4.score,
-    rejectEarly: !side ? 'tie' : maxSc < 2 ? 'score<2' : 'ok',
-  }))
-
   if (!side || maxSc < 2) return null
 
   const av       = i4.atr
@@ -232,10 +223,7 @@ export function scoreTradeIdea(
   const confidence: 'ALTA' | 'MEDIA' | 'BAJA' = adjSc >= 7 ? 'ALTA' : adjSc >= 5 ? 'MEDIA' : 'BAJA'
 
   // 3b. Trading session gate — don't trade during low-liquidity hours
-  if (!shouldGenerateSignal(tradeType, confidence)) {
-    console.log(`[APEX] Signal skipped: ${tradeType} ${confidence} — session: ${getCurrentTradingSession().name}`)
-    return null
-  }
+  if (!shouldGenerateSignal(tradeType, confidence)) return null
 
   // 4. Regime gate — no_signal only; bias is now handled by penalties/bonuses below
   if (regime?.signalBias === 'no_signal') return null
@@ -332,14 +320,6 @@ export function scoreTradeIdea(
     `Invalidación por cierre ${isLong ? 'bajo' : 'sobre'} $${Math.round(sl).toLocaleString()} ` +
     `(SL ${Math.abs(sl - price).toFixed(0)} pts). Apalancamiento máximo: ${maxLev}x. ` +
     `Calidad del setup: ${qualityLabel}.${learnNote}${patternBlock}`
-
-  console.log('[APEX SCORE PASS]', JSON.stringify({
-    side, tradeType, confidence, score: maxSc,
-    winProb: probScore.winProbability?.toFixed(1),
-    ev: probScore.expectedValue?.toFixed(3),
-    ruin: mc.ruinProbability?.toFixed(1),
-    regime: regime?.regime ?? null,
-  }))
 
   return {
     side, tradeType, confidence,
