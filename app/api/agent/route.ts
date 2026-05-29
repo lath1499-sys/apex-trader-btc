@@ -12,7 +12,7 @@ import { detectScalpSignals, detectBOSCHoCH, getICTKillzones, calcVWAP } from '@
 import { evaluateStopManagement }  from '@/lib/stopManagement'
 import { getCurrentTradingSession, shouldGenerateSignal } from '@/lib/tradingHours'
 import { getActiveBlockingEvent, getUpcomingEvent, minutesUntilEvent } from '@/lib/macroCalendar'
-import { saveSignalToCloud, loadSignalsFromCloud, getSupabaseServer } from '@/lib/supabase'
+import { saveSignalToCloud, loadSignalsFromCloud, getSupabaseServer, getSupabase } from '@/lib/supabase'
 import { calcLearnedWeights }                             from '@/lib/selfLearning'
 import { fetchMarketData }                               from '@/lib/marketFetch'
 import { writeTradeAnalysis }                            from '@/lib/analysisWriter'
@@ -21,6 +21,10 @@ import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
 export const maxDuration = 30
+
+// ── Supabase client — service key preferred, anon key as fallback ─────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getDbClient(): any { return getSupabaseServer() ?? getSupabase() }
 
 // ── Server-side NTFY (no localStorage — uses env var directly) ───────────────
 
@@ -121,7 +125,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     // ── 3. Load existing signals + compute learned weights ────────────────────
     const allSignals     = await loadSignalsFromCloud() ?? []
     const active         = allSignals.filter(s => s.status === 'active')
-    const learnedWeights = await calcLearnedWeights(getSupabaseServer())
+    const learnedWeights = await calcLearnedWeights(getDbClient())
 
     for (const sig of active) {
       const isLong = sig.idea.side === 'LONG'
@@ -193,7 +197,7 @@ export async function GET(req: Request): Promise<NextResponse> {
         const outcome = updated.status === 'sl_hit' ? 'loss'
           : updated.status === 'tp3_hit' || updated.status === 'tp2_hit' || updated.status === 'tp1_hit' ? 'win'
           : 'breakeven'
-        const closeSb = getSupabaseServer()
+        const closeSb = getDbClient()
         if (closeSb && updated.pnl != null) {
           await closeSb.from('apex_decisions')
             .update({ outcome, pnl: updated.pnl })
@@ -237,7 +241,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights)
 
       // ── Log decision to apex_decisions (learn from everything, win or skip) ──
-      const sb = getSupabaseServer()
+      const sb = getDbClient()
       if (sb) {
         const decisionId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
         await sb.from('apex_decisions').insert({
