@@ -156,15 +156,19 @@ export async function GET(req: Request): Promise<NextResponse> {
       // TP2
       else if (((isLong && price >= sig.idea.tp2) || (!isLong && price <= sig.idea.tp2)) && !(sig as { tp2Hit?: boolean }).tp2Hit) {
         const pnl = Math.abs(sig.idea.tp2 - sig.idea.price) / sig.idea.price * 100
-        updated = { ...sig, pnl } as SignalRecord
+        updated = { ...sig, status: 'tp2_hit', pnl, closedAt: time, exitPrice: sig.idea.tp2, closeReason: 'TP2 alcanzado' } as SignalRecord
         ;(updated as { tp2Hit?: boolean }).tp2Hit = true
         if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`TP2 ALCANZADO - ${sig.idea.side} BTC`), `TP2 $${Math.round(sig.idea.tp2).toLocaleString()} | +${pnl.toFixed(2)}%`, 4, 'green_circle')
         changed = true
       }
       // TP1
       else if (((isLong && price >= sig.idea.tp1) || (!isLong && price <= sig.idea.tp1)) && !(sig as { tp1Hit?: boolean }).tp1Hit) {
+        const pnl = isLong
+          ? (sig.idea.tp1 - sig.idea.price) / sig.idea.price * 100
+          : (sig.idea.price - sig.idea.tp1) / sig.idea.price * 100
+        updated = { ...sig, status: 'tp1_hit', pnl, closedAt: time, exitPrice: sig.idea.tp1, closeReason: 'TP1 alcanzado' } as SignalRecord
         ;(updated as { tp1Hit?: boolean }).tp1Hit = true
-        if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`TP1 ALCANZADO - ${sig.idea.side} BTC`), `TP1 $${Math.round(sig.idea.tp1).toLocaleString()} — mover SL a breakeven`, 3, 'green_circle')
+        if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`TP1 ALCANZADO - ${sig.idea.side} BTC`), `TP1 $${Math.round(sig.idea.tp1).toLocaleString()} | +${pnl.toFixed(2)}%`, 3, 'green_circle')
         changed = true
       }
 
@@ -193,12 +197,11 @@ export async function GET(req: Request): Promise<NextResponse> {
 
       if (changed) {
         await saveSignalToCloud(updated)
-        // Record outcome in apex_decisions so the agent can learn from it
-        const outcome = updated.status === 'sl_hit' ? 'loss'
-          : updated.status === 'tp3_hit' || updated.status === 'tp2_hit' || updated.status === 'tp1_hit' ? 'win'
-          : 'breakeven'
+        // Record outcome in apex_decisions for closed signals (learning system)
+        const wasClosed = (['sl_hit', 'tp1_hit', 'tp2_hit', 'tp3_hit'] as string[]).includes(updated.status)
         const closeSb = getDbClient()
-        if (closeSb && updated.pnl != null) {
+        if (closeSb && wasClosed && updated.pnl != null) {
+          const outcome = updated.pnl > 0 ? 'win' : 'loss'
           await closeSb.from('apex_decisions')
             .update({ outcome, pnl: updated.pnl })
             .eq('signal_id', sig.id)
