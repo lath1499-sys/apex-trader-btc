@@ -12,6 +12,7 @@ import { calcWinProbability }    from '@/lib/probabilisticModel'
 import { writeTradeAnalysis }    from '@/lib/analysisWriter'
 import { detectMarketRegime }    from '@/lib/marketRegime'
 import type { ScalpSignal }      from '@/lib/scalpSignals'
+import { usePerformanceStats }  from '@/hooks/useSignalHistory'
 
 const STATUS_COLOR: Record<string, string> = {
   active: '#a78bfa', pending_confirmation: '#fbbf24',
@@ -721,6 +722,7 @@ function PerformanceTab() {
     ? scalpClosed.reduce((sum, s) => sum + (s.pnl ?? 0), 0) / scalpClosed.length
     : null
   const wtEntries = Object.entries(wts)
+  const sbStats   = usePerformanceStats()
 
   // Scalp-specific stats
   const scalpRecs     = sigH.filter(r => r.isScalp)
@@ -888,6 +890,43 @@ function PerformanceTab() {
           </div>
         )
       })()}
+
+      {/* Real Supabase stats */}
+      {sbStats && (
+        <div style={{ padding: 10, border: `1px solid ${T.border}`, borderRadius: 6 }}>
+          <div style={{ fontSize: 9, color: T.accent, fontWeight: 700, marginBottom: 8, letterSpacing: '.08em' }}>
+            ☁️ ESTADÍSTICAS REALES (SUPABASE)
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, marginBottom: 10 }}>
+            <PerfCell label="TOTAL DB" val={String(sbStats.total)} />
+            <PerfCell label="WIN RATE" val={`${sbStats.winRate}%`}
+              col={sbStats.winRate >= 55 ? T.bull : sbStats.winRate < 40 ? T.danger : T.warn} />
+            <PerfCell label="P&L TOTAL" val={`${sbStats.totalPnl >= 0 ? '+' : ''}${sbStats.totalPnl.toFixed(1)}%`}
+              col={sbStats.totalPnl >= 0 ? T.bull : T.danger} />
+          </div>
+          <div style={{ fontSize: 7, color: T.muted, letterSpacing: '.1em', marginBottom: 6 }}>POR TIPO</div>
+          {sbStats.byType.filter(t => t.total > 0).map(t => (
+            <div key={t.type} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, padding: '3px 0', borderBottom: `1px solid ${T.border}22` }}>
+              <span style={{ color: T.textSec }}>{t.type}</span>
+              <span style={{ color: T.muted }}>{t.total}</span>
+              <span style={{ color: t.winRate >= 55 ? T.bull : t.winRate < 40 ? T.danger : T.warn }}>{t.winRate}% WR</span>
+              <span style={{ color: t.avgPnl >= 0 ? T.bull : T.danger }}>{t.avgPnl >= 0 ? '+' : ''}{t.avgPnl.toFixed(2)}%</span>
+            </div>
+          ))}
+          {sbStats.byConf.filter(c => c.total > 0).length > 0 && (
+            <>
+              <div style={{ fontSize: 7, color: T.muted, letterSpacing: '.1em', marginTop: 8, marginBottom: 6 }}>POR CONFIANZA</div>
+              {sbStats.byConf.filter(c => c.total > 0).map(c => (
+                <div key={c.conf} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, padding: '3px 0', borderBottom: `1px solid ${T.border}22` }}>
+                  <span style={{ color: T.textSec }}>{c.conf}</span>
+                  <span style={{ color: T.muted }}>{c.total} señales</span>
+                  <span style={{ color: c.winRate >= 55 ? T.bull : c.winRate < 40 ? T.danger : T.warn }}>{c.winRate}% WR</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

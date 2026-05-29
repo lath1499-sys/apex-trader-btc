@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useApexStore } from '@/store/apexStore'
 import {
   loadSignalHistory, saveSignalHistory,
@@ -242,4 +242,88 @@ export function useSignalHistory() {
     saveSignalHistory(updated)
     setSignalHistory(updated)
   }, [rawK, setSignalHistory])
+}
+
+// ── Performance stats from Supabase (real closed signals) ────────────────────
+
+export interface PerformanceStats {
+  total:    number
+  wins:     number
+  losses:   number
+  winRate:  number
+  totalPnl: number
+  avgPnl:   number
+  byType:   Array<{ type: string; total: number; winRate: number; avgPnl: number }>
+  byConf:   Array<{ conf: string; total: number; winRate: number }>
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SbClient = any
+
+export async function loadPerformanceStats(sb: SbClient): Promise<PerformanceStats | null> {
+  if (!sb) return null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (sb.from('apex_signals') as any)
+    .select('side, trade_type, pnl, status, confidence, created_at')
+    .not('pnl', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(500)
+
+  if (error || !data || !data.length) return null
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wins   = (data as any[]).filter(s => s.pnl > 0)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const losses = (data as any[]).filter(s => s.pnl <= 0)
+
+  const byType = ['Scalp', 'DayTrade', 'Swing'].map(type => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const group = (data as any[]).filter(s => s.trade_type === type)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const gWins = group.filter(s => s.pnl > 0)
+    return {
+      type,
+      total:   group.length,
+      winRate: group.length > 0 ? Math.round(gWins.length / group.length * 100) : 0,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      avgPnl:  group.length > 0 ? group.reduce((a: number, s: any) => a + s.pnl, 0) / group.length : 0,
+    }
+  })
+
+  const byConf = ['ALTA', 'MEDIA', 'BAJA'].map(conf => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const group = (data as any[]).filter(s => s.confidence === conf)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const gWins = group.filter(s => s.pnl > 0)
+    return {
+      conf,
+      total:   group.length,
+      winRate: group.length > 0 ? Math.round(gWins.length / group.length * 100) : 0,
+    }
+  })
+
+  return {
+    total:    data.length,
+    wins:     wins.length,
+    losses:   losses.length,
+    winRate:  Math.round(wins.length / data.length * 100),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    totalPnl: (data as any[]).reduce((a: number, s: any) => a + s.pnl, 0),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    avgPnl:   (data as any[]).reduce((a: number, s: any) => a + s.pnl, 0) / data.length,
+    byType,
+    byConf,
+  }
+}
+
+export function usePerformanceStats(): PerformanceStats | null {
+  const [stats, setStats] = useState<PerformanceStats | null>(null)
+  useEffect(() => {
+    const sb = getSupabase()
+    if (!sb) return
+    loadPerformanceStats(sb)
+      .then(s => { if (s) setStats(s) })
+      .catch(() => {})
+  }, [])
+  return stats
 }

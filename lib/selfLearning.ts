@@ -63,7 +63,6 @@ export async function calcLearnedWeights(
       .limit(200)
 
     if (error || !data || data.length < 5) {
-      console.log('[APEX Learning] Insufficient history:', data?.length ?? 0, 'trades')
       return DEFAULT_WEIGHTS
     }
 
@@ -114,10 +113,7 @@ export async function calcLearnedWeights(
     // <40% recently → demand higher score (+1), >65% → relax threshold (-1)
     const minScoreAdjustment = recent20WR < 0.40 ? 1 : recent20WR > 0.65 ? -1 : 0
 
-    console.log(
-      `[APEX Learning] ${closed.length} trades | WR ${Math.round(winRate * 100)}% | ` +
-      `recent20WR ${Math.round(recent20WR * 100)}% | minScoreAdj ${minScoreAdjustment}`,
-    )
+
 
     return {
       sessionWeights,
