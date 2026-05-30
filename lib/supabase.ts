@@ -57,6 +57,7 @@ export function getSupabaseServer() {
 }
 
 export function transformSignal(s: Record<string, unknown>): SignalRecord {
+  const reasons = (s.reasons as Array<{ s: 'bull' | 'bear'; txt: string }>) ?? []
   return {
     id:          String(s.id),
     createdAt:   String(s.created_at),
@@ -77,8 +78,10 @@ export function transformSignal(s: Record<string, unknown>): SignalRecord {
       tp2:        Number(s.tp2),
       tp3:        Number(s.tp3),
       maxLev:     Number(s.max_lev ?? 5),
-      bull: 0, bear: 0, maxSc: 12,
-      reasons:    (s.reasons as Array<{ s: 'bull' | 'bear'; txt: string }>) ?? [],
+      bull:    reasons.filter(r => r.s === 'bull').length,
+      bear:    reasons.filter(r => r.s === 'bear').length,
+      maxSc:   12,
+      reasons,
       analysis:   '',
       ts:         new Date(String(s.created_at)),
     },

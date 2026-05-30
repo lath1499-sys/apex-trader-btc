@@ -262,6 +262,26 @@ export function scoreTradeIdea(
   if (side === 'LONG'  && allTFsBearish) return null
   if (side === 'SHORT' && allTFsBullish) return null
 
+  // 4e. Triple confirmation bonus — all TFs aligned = high confidence entry
+  if (allTFsBullish && side === 'LONG') {
+    bull += 3
+    b('Triple confirmación alcista 1D+4H+1H — alineación perfecta')
+  }
+  if (allTFsBearish && side === 'SHORT') {
+    bear += 3
+    be('Triple confirmación bajista 1D+4H+1H — alineación perfecta')
+  }
+
+  // 4f. 1H momentum confirming 4H trend — optimal entry timing
+  if (i4.bias === 'ALCISTA' && i1.bias === 'ALCISTA' && i1.rsi > 50 && (i1.macd?.hist ?? 0) > 0) {
+    bull += 2
+    b('1H momentum alcista confirmando tendencia 4H — entrada óptima')
+  }
+  if (i4.bias === 'BAJISTA' && i1.bias === 'BAJISTA' && i1.rsi < 50 && (i1.macd?.hist ?? 0) < 0) {
+    bear += 2
+    be('1H momentum bajista confirmando tendencia 4H — entrada óptima')
+  }
+
   // 5. Candle confirmation on entry TF
   // Scalp confirms on 15m; DayTrade and Swing both confirm on 4h (the primary signal driver)
   const entryKlines = tradeType === 'Scalp' ? rawK['15m'] : rawK['4h']
