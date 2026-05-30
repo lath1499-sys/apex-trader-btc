@@ -17,6 +17,7 @@ import { calcLearnedWeights }                             from '@/lib/selfLearni
 import { fetchMarketData }                               from '@/lib/marketFetch'
 import { writeTradeAnalysis }                            from '@/lib/analysisWriter'
 import { analyzeMacroSentiment }                         from '@/lib/macroSentiment'
+import { fetchGlobalMarkets }                            from '@/lib/marketCorrelation'
 import { ntfyBBSqueeze }                                 from '@/lib/ntfy'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
@@ -72,7 +73,8 @@ export async function GET(req: Request): Promise<NextResponse> {
     signals: Array<{ type: string; side: string; confidence: string }>
     updates: Array<{ id: string; action: string; newSL: number }>
     errors:  string[]
-  } = { time, session: '', regime: '', signals: [], updates: [], errors: [] }
+    globalMarkets: { spxChange: number; dxyStrength: string; riskOff: boolean; impact: string } | null
+  } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null }
 
   try {
     // ── 1. Fetch market data (direct import — no HTTP hop, no geo-block risk) ──
@@ -111,6 +113,15 @@ export async function GET(req: Request): Promise<NextResponse> {
       mkt.change   ?? 0,
       {},
     )
+
+    // ── 1c. Global markets correlation (SPX, DXY, Gold) ─────────────────────────
+    const globalMarkets = await fetchGlobalMarkets()
+    results.globalMarkets = globalMarkets ? {
+      spxChange:   globalMarkets.spx.change1h,
+      dxyStrength: globalMarkets.dxy.strength,
+      riskOff:     globalMarkets.riskOff,
+      impact:      globalMarkets.signalImpact,
+    } : null
 
     // Store macro snapshot (fire-and-forget, non-blocking)
     const snapSb = getDbClient()
@@ -273,6 +284,13 @@ export async function GET(req: Request): Promise<NextResponse> {
     if (activeCount < 3) {
       const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment)
 
+      // ── Block longs in global risk-off environment ───────────────────────────
+      const blockedByCorrelation =
+        globalMarkets?.signalImpact === 'BLOCK_LONGS' && newSignal?.side === 'LONG'
+      if (blockedByCorrelation) {
+        results.errors.push(`[APEX Correlation] Long bloqueado: ${globalMarkets!.btcCorrelation}`)
+      }
+
       // ── Log decision to apex_decisions (learn from everything, win or skip) ──
       const sb = getDbClient()
       if (sb) {
@@ -294,14 +312,14 @@ export async function GET(req: Request): Promise<NextResponse> {
           stoch_4h:      inds['4h']?.stoch?.k ?? null,
           fg:            mkt.fg ?? null,
           funding:       mkt.funding ?? null,
-          skip_reason:   newSignal ? null : 'score_or_filter',
+          skip_reason:   blockedByCorrelation ? 'correlation_risk_off' : newSignal ? null : 'score_or_filter',
           signal_id:     null,   // updated after saveSignalToCloud
         }).then(({ error }: { error: { message: string } | null }) => {
           if (error) console.error('[APEX Decisions] insert error:', error.message)
         })
       }
 
-      if (newSignal && !newSignal.consolidation) {
+      if (newSignal && !newSignal.consolidation && !blockedByCorrelation) {
         // Dedup: don't add same-side signal if one already active
         const sameActive = active.some(s => s.idea.side === newSignal.side && s.status === 'active')
         if (!sameActive && shouldGenerateSignal(newSignal.tradeType, newSignal.confidence)) {
