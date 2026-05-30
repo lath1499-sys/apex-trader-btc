@@ -1407,10 +1407,12 @@ export default function TradeIdeasPanel() {
           : activeRecs.length > 0
             ? <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {/* Active signals count badge when more than 1 */}
-                {activeRecs.length > 1 && (
-                  <div style={{ fontSize: 9, color: T.warn, background: T.warn + '18', border: `1px solid ${T.warn}44`,
-                    borderRadius: 6, padding: '4px 10px', textAlign: 'center' }}>
-                    ⚡ {activeRecs.length} señales activas simultáneas
+                {activeRecs.length > 0 && (
+                  <div style={{ fontSize: 9, color: activeRecs.length > 1 ? T.warn : T.accent,
+                    background: (activeRecs.length > 1 ? T.warn : T.accent) + '18',
+                    border: `1px solid ${(activeRecs.length > 1 ? T.warn : T.accent)}44`,
+                    borderRadius: 6, padding: '4px 10px', textAlign: 'center', letterSpacing: '.08em', fontWeight: 700 }}>
+                    {activeRecs.length > 1 ? `⚡ ${activeRecs.length} SEÑALES ACTIVAS` : '● 1 SEÑAL ACTIVA'}
                   </div>
                 )}
                 {activeRecs.map((rec, i) => (

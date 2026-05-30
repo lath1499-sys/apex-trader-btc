@@ -71,7 +71,10 @@ export function useSignalHistory() {
   // Dedup: same-side signal requires 0.5% price move
   useEffect(() => {
     if (!tradeHistory.length) return
-    const current = loadSignalHistory()
+    // Prefer store state (includes Supabase-loaded signals) over localStorage
+    // localStorage only has client-generated signals; cron signals only exist in Supabase
+    const storeHistory = useApexStore.getState().signalHistory
+    const current = storeHistory.length > 0 ? storeHistory : loadSignalHistory()
 
     // For dedup: track the most-recent active entry per side
     const lastActiveBySide: Record<string, number> = {}
