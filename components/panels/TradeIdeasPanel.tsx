@@ -13,6 +13,8 @@ import { writeTradeAnalysis }    from '@/lib/analysisWriter'
 import { detectMarketRegime }    from '@/lib/marketRegime'
 import type { ScalpSignal }      from '@/lib/scalpSignals'
 import { usePerformanceStats }  from '@/hooks/useSignalHistory'
+import { analyzeMacroSentiment } from '@/lib/macroSentiment'
+import type { MacroSentiment }   from '@/lib/macroSentiment'
 
 const STATUS_COLOR: Record<string, string> = {
   active: '#a78bfa', pending_confirmation: '#fbbf24',
@@ -1244,6 +1246,18 @@ export default function TradeIdeasPanel() {
   const rawKMain       = useApexStore(s => s.rawK)
   const cycleMain      = useApexStore(s => s.cycle)
   const newsMain       = useApexStore(s => s.news)
+
+  const macroInfo = useMemo((): MacroSentiment | null => {
+    if (mkt.fg == null) return null
+    return analyzeMacroSentiment(
+      newsMain ?? [],
+      mkt.fg,
+      mkt.funding  ?? 0,
+      mkt.lsr      ?? 1,
+      mkt.change   ?? 0,
+      {},
+    )
+  }, [mkt.fg, mkt.funding, mkt.lsr, mkt.change, newsMain])
   const killzones      = useApexStore(s => s.killzones)
   const vwap           = useApexStore(s => s.vwap)
   const lastAutoAlert  = useRef<string | null>(null)
@@ -1423,6 +1437,40 @@ export default function TradeIdeasPanel() {
                 )}
               </div>
             : <div style={{ color: T.textSec, textAlign: 'center', padding: 40, fontSize: 11 }}>Analizando confluencias técnicas…</div>
+      )}
+
+      {/* ── Macro Sentiment block — always visible on Actual tab ── */}
+      {tab === 'Actual' && macroInfo && (
+        <div style={{ padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.card }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 8, color: T.muted, letterSpacing: '.1em' }}>🌍 SENTIMIENTO MACRO</span>
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '.06em', padding: '2px 8px', borderRadius: 4,
+              color: macroInfo.score > 20 ? T.bull : macroInfo.score < -20 ? T.danger : T.warn,
+              background: (macroInfo.score > 20 ? T.bull : macroInfo.score < -20 ? T.danger : T.warn) + '22',
+            }}>
+              {macroInfo.score > 0 ? '+' : ''}{macroInfo.score} {macroInfo.label}
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+            {[
+              { k: 'RIESGO', v: macroInfo.riskAppetite, c: macroInfo.riskAppetite === 'RISK_ON' ? T.bull : macroInfo.riskAppetite === 'RISK_OFF' ? T.danger : T.warn },
+              { k: 'USD',    v: macroInfo.usdStrength,  c: macroInfo.usdStrength  === 'FUERTE'   ? T.danger : macroInfo.usdStrength === 'DEBIL' ? T.bull : T.muted },
+            ].map(({ k, v, c }) => (
+              <span key={k} style={{ fontSize: 8, color: c, background: c + '18', border: `1px solid ${c}44`, borderRadius: 3, padding: '1px 6px' }}>
+                {k}: {v}
+              </span>
+            ))}
+            <span style={{ fontSize: 8, color: T.muted, marginLeft: 'auto' }}>Confianza: {macroInfo.confidence}%</span>
+          </div>
+          {macroInfo.topEvents.slice(0, 3).map((ev, i) => (
+            <div key={i} style={{ fontSize: 8, color: T.textSec, padding: '2px 0', borderTop: i > 0 ? `1px solid ${T.border}22` : 'none' }}>
+              · {ev}
+            </div>
+          ))}
+          <div style={{ fontSize: 8, color: T.muted, marginTop: 6, fontStyle: 'italic' }}>{macroInfo.cryptoSpecific}</div>
+          <div style={{ fontSize: 7, color: T.muted, marginTop: 4 }}>{macroInfo.sources.join(' · ')}</div>
+        </div>
       )}
 
       {tab === 'Historial' && <HistorialTabView sigH={sigH} hFilter={hFilter} setHFilter={setHFilter} onClose={handleClose} />}

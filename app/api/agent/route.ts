@@ -16,6 +16,7 @@ import { saveSignalToCloud, loadSignalsFromCloud, getSupabaseServer, getSupabase
 import { calcLearnedWeights }                             from '@/lib/selfLearning'
 import { fetchMarketData }                               from '@/lib/marketFetch'
 import { writeTradeAnalysis }                            from '@/lib/analysisWriter'
+import { analyzeMacroSentiment }                         from '@/lib/macroSentiment'
 import { ntfyBBSqueeze }                                 from '@/lib/ntfy'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
@@ -99,6 +100,35 @@ export async function GET(req: Request): Promise<NextResponse> {
       lsr:      md.lsr      ?? 1,
       fg:       md.fg       ?? undefined,
       fgLabel:  md.fgLabel  ?? undefined,
+    }
+
+    // ── 1b. Macro sentiment (uses existing mkt data, no extra API calls) ────────
+    const macroSentiment = analyzeMacroSentiment(
+      [],                    // news not available server-side; UI uses real news
+      mkt.fg       ?? 50,
+      mkt.funding  ?? 0,
+      mkt.lsr      ?? 1,
+      mkt.change   ?? 0,
+      {},
+    )
+
+    // Store macro snapshot (fire-and-forget, non-blocking)
+    const snapSb = getDbClient()
+    if (snapSb) {
+      snapSb.from('apex_macro_snapshots').insert({
+        macro_score:      macroSentiment.score,
+        macro_label:      macroSentiment.label,
+        risk_appetite:    macroSentiment.riskAppetite,
+        usd_strength:     macroSentiment.usdStrength,
+        fg:               mkt.fg ?? null,
+        funding:          mkt.funding ?? null,
+        lsr:              mkt.lsr ?? null,
+        price_change_24h: mkt.change ?? null,
+        top_events:       macroSentiment.topEvents,
+        crypto_context:   macroSentiment.cryptoSpecific,
+      }).then(({ error }: { error: { message: string } | null }) => {
+        if (error) console.error('[APEX Macro] snapshot insert error:', error.message)
+      })
     }
 
     // ── 2. Indicators, regime, FVGs, liquidity ────────────────────────────────
@@ -241,7 +271,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
 
     if (activeCount < 3) {
-      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights)
+      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment)
 
       // ── Log decision to apex_decisions (learn from everything, win or skip) ──
       const sb = getDbClient()

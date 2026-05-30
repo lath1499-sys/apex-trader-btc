@@ -1,6 +1,8 @@
 import type { MarketData, IndicatorMap, TradeIdea, TradeReason, OrderBook, Kline, SignalRecord } from './types'
 import type { WeightMap } from './scoreWeights'
 import type { LearnedWeights } from './selfLearning'
+import type { MacroSentiment } from './macroSentiment'
+import { getMacroSignalBias }  from './macroSentiment'
 import { detectCandlePatterns } from './candlePatterns'
 import { detectMarketRegime }   from './marketRegime'
 import { calcWinProbability }   from './probabilisticModel'
@@ -35,6 +37,7 @@ export function scoreTradeIdea(
   weights?: WeightMap,
   signalHistory: SignalRecord[] = [],
   learnedWeights?: LearnedWeights,
+  macroSentiment?: MacroSentiment,
 ): TradeIdea | null {
   const i4 = inds['4h'], i1 = inds['1h'], i1d = inds['1d'], i15 = inds['15m']
   if (!i4 || !i1) return null
@@ -330,6 +333,22 @@ export function scoreTradeIdea(
     ? ` [Aprendizaje: ${wKey} WR histórico → factor ${wMult.toFixed(2)}x]`
     : ''
   const qualityLabel = expScore(maxSc)
+
+  // ── MACRO SENTIMENT CONTEXT ───────────────────────────────────────────────
+  if (macroSentiment) {
+    const macroBias = getMacroSignalBias(macroSentiment)
+    bull = Math.round(bull * macroBias.longBias)
+    bear = Math.round(bear * macroBias.shortBias)
+    if (macroSentiment.score > 20) {
+      reasons.push({ s: 'bull', txt: `Macro alcista (${macroSentiment.score}/100): ${macroSentiment.cryptoSpecific}` })
+    }
+    if (macroSentiment.score < -20) {
+      reasons.push({ s: 'bear', txt: `Macro bajista (${macroSentiment.score}/100): ${macroSentiment.cryptoSpecific}` })
+    }
+    macroSentiment.topEvents.slice(0, 2).forEach(event => {
+      reasons.push({ s: macroSentiment.score >= 0 ? 'bull' as const : 'bear' as const, txt: `🌍 ${event}` })
+    })
+  }
 
   const patternLines = patterns4h.slice(0, 3)
     .map(p => `  · ${p.pattern.name}${p.pattern.nameJP ? ` (${p.pattern.nameJP})` : ''} ${p.confidence}% — ${p.pattern.tradingAdvice}`)
