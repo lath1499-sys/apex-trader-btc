@@ -204,7 +204,8 @@ export function LiquidationsCard() {
           Mayor: {fmtM(data.biggestVal)} ({data.biggestSide}) · {data.biggestTime ? new Date(data.biggestTime).toLocaleTimeString() : ''}
         </div>
       )}
-      {!data?.ok && <div style={{ fontSize: 9, color: T.muted }}>Cargando liquidaciones...</div>}
+      {data === undefined && <div style={{ fontSize: 9, color: T.muted }}>Cargando liquidaciones...</div>}
+      {data !== undefined && !data.ok && <div style={{ fontSize: 9, color: T.muted }}>Datos no disponibles en esta región</div>}
     </div>
   )
 }
