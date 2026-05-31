@@ -80,6 +80,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       overallSignal?: string; overallScore?: number; fedTrend?: string; cpiYoY?: number
       m2Trend?: string; liquidityScore?: number; fedExpectations?: string
       nextFOMC?: string; upcomingHighImpact?: number
+      yieldCurveT10y2y?: number | null; yieldSignal?: string; sofr?: number | null; cutProbability?: number
     } | null
   } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null, macro: null }
 
@@ -144,6 +145,10 @@ export async function GET(req: Request): Promise<NextResponse> {
       fedExpectations:     fedExpectations?.marketSentiment,
       nextFOMC:            fedExpectations?.nextMeetingDate,
       upcomingHighImpact:  (upcomingEvents ?? []).filter(e => e.impact === 'HIGH').length,
+      yieldCurveT10y2y:    fedExpectations?.yieldCurve?.t10y2y,
+      yieldSignal:         fedExpectations?.yieldCurve?.signal,
+      sofr:                fedExpectations?.sofr,
+      cutProbability:      fedExpectations?.cutProbability,
     }
 
     results.globalMarkets = globalMarkets ? {
@@ -322,7 +327,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
 
     if (activeCount < 3) {
-      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined)
+      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined, fedExpectations ?? undefined)
 
       // ── Block longs in global risk-off environment ───────────────────────────
       const blockedByCorrelation =

@@ -3,7 +3,7 @@ import type { WeightMap } from './scoreWeights'
 import type { LearnedWeights } from './selfLearning'
 import type { MacroSentiment } from './macroSentiment'
 import { getMacroSignalBias }  from './macroSentiment'
-import type { MacroIndicators } from './macroEconomics'
+import type { MacroIndicators, FedExpectations } from './macroEconomics'
 import type { GlobalLiquidity } from './globalLiquidity'
 import { detectCandlePatterns } from './candlePatterns'
 import { detectMarketRegime }   from './marketRegime'
@@ -40,8 +40,9 @@ export function scoreTradeIdea(
   signalHistory: SignalRecord[] = [],
   learnedWeights?: LearnedWeights,
   macroSentiment?:  MacroSentiment,
-  macroIndicators?: MacroIndicators,
-  globalLiquidity?: GlobalLiquidity,
+  macroIndicators?:  MacroIndicators,
+  globalLiquidity?:  GlobalLiquidity,
+  fedExpectations?:  FedExpectations,
 ): TradeIdea | null {
   const i4 = inds['4h'], i1 = inds['1h'], i1d = inds['1d'], i15 = inds['15m']
   if (!i4 || !i1) return null
@@ -386,6 +387,23 @@ export function scoreTradeIdea(
     bull += 2; reasons.push({ s: 'bull', txt: `💧 ${globalLiquidity.btcCorrelation}` })
   } else if (globalLiquidity?.trend === 'CONTRACTING') {
     bear += 2; reasons.push({ s: 'bear', txt: `💧 ${globalLiquidity.btcCorrelation}` })
+  }
+
+  // ── FED EXPECTATIONS (yield curve + SOFR) ────────────────────────────────
+  if (fedExpectations?.signalAdjustment) {
+    const adj = fedExpectations.signalAdjustment
+    const snippet = fedExpectations.btcImplication.slice(0, 100)
+    if (adj > 0) {
+      bull += adj
+      reasons.push({ s: 'bull', txt: `🏦 Fed expectations: ${snippet}` })
+    } else {
+      bear += Math.abs(adj)
+      reasons.push({ s: 'bear', txt: `🏦 Fed hawkish: ${snippet}` })
+    }
+  }
+  if (fedExpectations?.yieldCurve?.signal === 'RECESSION_RISK_HIGH') {
+    bull += 1
+    reasons.push({ s: 'bull', txt: `📉 Curva invertida (T10Y-2Y ${fedExpectations.yieldCurve.t10y2y?.toFixed(2)}%) — Fed pivotará, alcista BTC largo plazo` })
   }
 
   const patternLines = patterns4h.slice(0, 3)
