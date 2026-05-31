@@ -126,7 +126,8 @@ export function useSignalHistory() {
   useEffect(() => {
     const price = mkt.price
     if (!price) return
-    const current = loadSignalHistory()
+    // Use store state (includes Supabase-loaded signals); localStorage only has client signals
+    const current = useApexStore.getState().signalHistory
     if (!current.some(r => r.status === 'active' || r.status === 'pending_confirmation')) return
 
     // ── 1. TP/SL hit detection ────────────────────────────────────────────────
@@ -252,7 +253,8 @@ export function useSignalHistory() {
 
   // Candle-based update for accurate OHLC TP/SL fills (runs on kline refresh)
   useEffect(() => {
-    const current = loadSignalHistory()
+    // Use store state — same reason as price-update effect above
+    const current = useApexStore.getState().signalHistory
     if (!current.some(r => r.status === 'active')) return
     const klines = rawK['1h'] ?? rawK['4h'] ?? []
     if (!klines.length) return
