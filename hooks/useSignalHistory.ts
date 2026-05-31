@@ -47,39 +47,62 @@ export function useSignalHistory() {
       syncFromCloud().catch(() => { /* silent — realtime covers this */ })
     }, 60_000)
 
-    // ── Realtime: instant push for INSERT/UPDATE ──────────────────────────
+    // ── Realtime: instant push for INSERT/UPDATE (with reconnect on 1006) ──
     const sb = getSupabase()
     if (!sb) return () => clearInterval(pollInterval)
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const channel = (sb as any)
-      .channel('apex_signals_realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'apex_signals' },
-        (payload: { eventType: string; new: Record<string, unknown> }) => {
-          const cur = useApexStore.getState().signalHistory
-          if (payload.eventType === 'INSERT') {
-            if (cur.some(s => s.id === String(payload.new.id))) return
-            setSignalHistory([transformSignal(payload.new), ...cur])
-          }
-          if (payload.eventType === 'UPDATE') {
-            setSignalHistory(cur.map(s =>
-              s.id === String(payload.new.id) ? transformSignal(payload.new) : s
-            ))
-          }
-        },
-      )
+    let channel: any = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let destroyed = false   // set on cleanup so reconnect doesn't fire after unmount
+
+    const subscribe = () => {
+      if (destroyed) return
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .subscribe((status: string, err?: any) => {
-        if (err) console.error('[APEX Realtime] subscribe error:', err)
-        else if (status === 'SUBSCRIBED') console.log('[APEX Realtime] apex_signals live')
-      })
+      if (channel) { (sb as any).removeChannel(channel); channel = null }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      channel = (sb as any)
+        .channel('apex_signals_realtime', {
+          config: { broadcast: { self: false } },
+        })
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'apex_signals' },
+          (payload: { eventType: string; new: Record<string, unknown> }) => {
+            const cur = useApexStore.getState().signalHistory
+            if (payload.eventType === 'INSERT') {
+              if (cur.some(s => s.id === String(payload.new.id))) return
+              setSignalHistory([transformSignal(payload.new), ...cur])
+            }
+            if (payload.eventType === 'UPDATE') {
+              setSignalHistory(cur.map(s =>
+                s.id === String(payload.new.id) ? transformSignal(payload.new) : s
+              ))
+            }
+          },
+        )
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .subscribe((status: string, err?: any) => {
+          if (status === 'SUBSCRIBED') {
+            console.log('[APEX Realtime] apex_signals live')
+          } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+            console.warn(`[APEX Realtime] ${status} — reconectando en 5s…`)
+            reconnectTimer = setTimeout(subscribe, 5_000)
+          } else if (err) {
+            console.error('[APEX Realtime] error:', err)
+          }
+        })
+    }
+
+    subscribe()
 
     return () => {
+      destroyed = true
       clearInterval(pollInterval)
+      if (reconnectTimer) clearTimeout(reconnectTimer)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(sb as any).removeChannel(channel)
+      if (channel) (sb as any).removeChannel(channel)
     }
   }, [setSignalHistory])
 

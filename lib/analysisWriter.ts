@@ -29,6 +29,7 @@ interface OptionsData {
 import type { MacroIndicators, FedExpectations } from './macroEconomics'
 import type { GlobalLiquidity }                  from './globalLiquidity'
 import type { EconomicEvent }                    from './macroCalendar'
+import type { SocialSentiment }                  from './socialSentiment'
 
 export function writeTradeAnalysis(opts: {
   idea:             TradeIdea
@@ -46,9 +47,10 @@ export function writeTradeAnalysis(opts: {
   globalLiquidity?: GlobalLiquidity | null
   fedExpectations?: FedExpectations | null
   upcomingEvents?:  EconomicEvent[]
+  socialSentiment?: SocialSentiment | null
 }): string {
   const { idea, inds, regime, ew, confluence, probScore, mc, mkt, cycle, news, optionsData,
-          macroIndicators, globalLiquidity, fedExpectations, upcomingEvents } = opts
+          macroIndicators, globalLiquidity, fedExpectations, upcomingEvents, socialSentiment } = opts
   const sess  = getSession()
   const now   = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
   const i4    = inds['4h']
@@ -110,6 +112,10 @@ export function writeTradeAnalysis(opts: {
     buildInvalidation(idea),
     ``,
     `📰 NOTICIAS: ${bullNews} alcistas | ${bearNews} bajistas`,
+    socialSentiment?.source === 'lunarcrush' ? `` : null,
+    socialSentiment?.source === 'lunarcrush' ? `📱 SOCIAL (LunarCrush)` : null,
+    socialSentiment?.source === 'lunarcrush' ? `Galaxy Score: ${socialSentiment.galaxyScore}/100 | Alt Rank: #${socialSentiment.altRank} | Dominancia: ${socialSentiment.socialDominance.toFixed(1)}%` : null,
+    socialSentiment?.source === 'lunarcrush' ? `Sentimiento: ${socialSentiment.bullishPercent.toFixed(0)}% alcista / ${socialSentiment.bearishPercent.toFixed(0)}% bajista — ${socialSentiment.signal}` : null,
     macroIndicators ? `` : null,
     macroIndicators ? `🏛️ ENTORNO MACRO` : null,
     macroIndicators ? macroIndicators.summary : null,

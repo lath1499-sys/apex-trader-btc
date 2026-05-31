@@ -21,6 +21,8 @@ import { writeTradeAnalysis }                            from '@/lib/analysisWri
 import { analyzeMacroSentiment }                         from '@/lib/macroSentiment'
 import { fetchGlobalMarkets }                            from '@/lib/marketCorrelation'
 import { ntfyBBSqueeze }                                 from '@/lib/ntfy'
+import { loadAgentState, saveAgentState, detectOpinionChange } from '@/lib/agentMemory'
+import { fetchSocialSentiment } from '@/lib/socialSentiment'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
@@ -123,11 +125,12 @@ export async function GET(req: Request): Promise<NextResponse> {
     )
 
     // ── 1c. Global markets + FRED macro (parallel, all graceful fallbacks) ──────
-    const [globalMarkets, macroIndicators, globalLiquidity, upcomingEvents] = await Promise.all([
+    const [globalMarkets, macroIndicators, globalLiquidity, upcomingEvents, socialSentiment] = await Promise.all([
       fetchGlobalMarkets(),
       fetchMacroIndicators(),
       fetchGlobalLiquidity(),
       fetchUpcomingEvents(),
+      fetchSocialSentiment(),
     ])
 
     // Fed expectations (needs fedRate from macroIndicators)
@@ -327,7 +330,24 @@ export async function GET(req: Request): Promise<NextResponse> {
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
 
     if (activeCount < 3) {
-      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined, fedExpectations ?? undefined)
+      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined, fedExpectations ?? undefined, socialSentiment ?? undefined)
+
+      // ── Agent memory: detect & record opinion changes ────────────────────────
+      const memorySb    = getDbClient()
+      const prevState   = await loadAgentState(memorySb)
+      const newBias     = newSignal ? newSignal.side : 'NEUTRAL'
+      const opinionNote = detectOpinionChange(prevState, newBias, newSignal ?? null, inds, regime ?? null)
+      // Save new state (fire-and-forget)
+      saveAgentState(memorySb, {
+        id:             'current',
+        lastBias:       newBias,
+        lastTradeType:  newSignal?.tradeType ?? null,
+        lastConfidence: newSignal?.confidence ?? null,
+        lastPrice:      mkt.price ?? 0,
+        lastScore:      newSignal?.maxSc ?? 0,
+        changeReason:   opinionNote,
+        updatedAt:      new Date().toISOString(),
+      }).catch(() => {})
 
       // ── Block longs in global risk-off environment ───────────────────────────
       const blockedByCorrelation =
@@ -393,12 +413,16 @@ export async function GET(req: Request): Promise<NextResponse> {
               bear:       newSignal.bear,
               maxSc:      newSignal.maxSc,
               reasons:    newSignal.reasons,
-              analysis:   writeTradeAnalysis({ idea: newSignal, inds, mkt, regime: regime ?? null,
-                            macroIndicators: macroIndicators ?? null,
-                            globalLiquidity: globalLiquidity ?? null,
-                            fedExpectations: fedExpectations ?? null,
-                            upcomingEvents:  upcomingEvents ?? [],
-                          }),
+              analysis:   [
+                            opinionNote,
+                            writeTradeAnalysis({ idea: newSignal, inds, mkt, regime: regime ?? null,
+                              macroIndicators:  macroIndicators ?? null,
+                              globalLiquidity:  globalLiquidity ?? null,
+                              fedExpectations:  fedExpectations ?? null,
+                              upcomingEvents:   upcomingEvents ?? [],
+                              socialSentiment:  socialSentiment ?? null,
+                            }),
+                          ].filter(Boolean).join('\n\n'),
               ts:         new Date(time),
             },
           }

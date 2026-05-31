@@ -5,6 +5,7 @@ import type { MacroSentiment } from './macroSentiment'
 import { getMacroSignalBias }  from './macroSentiment'
 import type { MacroIndicators, FedExpectations } from './macroEconomics'
 import type { GlobalLiquidity } from './globalLiquidity'
+import type { SocialSentiment } from './socialSentiment'
 import { detectCandlePatterns } from './candlePatterns'
 import { detectMarketRegime }   from './marketRegime'
 import { calcWinProbability }   from './probabilisticModel'
@@ -43,6 +44,7 @@ export function scoreTradeIdea(
   macroIndicators?:  MacroIndicators,
   globalLiquidity?:  GlobalLiquidity,
   fedExpectations?:  FedExpectations,
+  socialSentiment?:  SocialSentiment,
 ): TradeIdea | null {
   const i4 = inds['4h'], i1 = inds['1h'], i1d = inds['1d'], i15 = inds['15m']
   if (!i4 || !i1) return null
@@ -404,6 +406,30 @@ export function scoreTradeIdea(
   if (fedExpectations?.yieldCurve?.signal === 'RECESSION_RISK_HIGH') {
     bull += 1
     reasons.push({ s: 'bull', txt: `📉 Curva invertida (T10Y-2Y ${fedExpectations.yieldCurve.t10y2y?.toFixed(2)}%) — Fed pivotará, alcista BTC largo plazo` })
+  }
+
+  // ── SOCIAL SENTIMENT (LunarCrush) ─────────────────────────────────────────
+  if (socialSentiment && socialSentiment.source === 'lunarcrush') {
+    const { galaxyScore, sentimentScore, altRank } = socialSentiment
+    if (galaxyScore >= 65) {
+      bull += 2
+      reasons.push({ s: 'bull', txt: `📱 Galaxy Score ${galaxyScore}/100 — alta energía social alcista` })
+    } else if (galaxyScore <= 35) {
+      bear += 2
+      reasons.push({ s: 'bear', txt: `📱 Galaxy Score ${galaxyScore}/100 — sentimiento social bajista` })
+    }
+    if (sentimentScore > 30) {
+      bull += 1
+      reasons.push({ s: 'bull', txt: `📱 Sentimiento social ${socialSentiment.bullishPercent.toFixed(0)}% alcista (LunarCrush)` })
+    } else if (sentimentScore < -30) {
+      bear += 1
+      reasons.push({ s: 'bear', txt: `📱 Sentimiento social ${socialSentiment.bearishPercent.toFixed(0)}% bajista (LunarCrush)` })
+    }
+    // Very low alt rank = BTC is dominating social attention → supports trend
+    if (altRank <= 5 && isLong) {
+      bull += 1
+      reasons.push({ s: 'bull', txt: `📱 Alt Rank #${altRank} — BTC domina atención social, momentum alcista` })
+    }
   }
 
   const patternLines = patterns4h.slice(0, 3)

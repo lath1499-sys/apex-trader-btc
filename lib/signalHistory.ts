@@ -6,7 +6,7 @@ const MAX_RECS = 200
 
 const EXPIRY: Record<string, number> = {
   Scalp:    2  * 60 * 60 * 1000,
-  DayTrade: 24 * 60 * 60 * 1000,
+  DayTrade: 36 * 60 * 60 * 1000,  // 36h — matches autoClose.ts
   Swing:    7  * 24 * 60 * 60 * 1000,
 }
 
@@ -66,7 +66,13 @@ export function updateSignalStatusesByPrice(
     const age = Date.now() - new Date(rec.createdAt).getTime()
     if (age > (EXPIRY[idea.tradeType] ?? EXPIRY.DayTrade)) {
       changed = true
-      return { ...rec, status: 'expired' as SignalStatus }
+      return {
+        ...rec,
+        status:      'expired' as SignalStatus,
+        closedAt:    now,
+        exitTs:      now,
+        closeReason: `${idea.tradeType} expirado tras ${Math.round(age / 3_600_000)}h`,
+      }
     }
 
     const hit = (target: number) =>
@@ -118,7 +124,15 @@ export function updateSignalStatuses(
     const expiry   = EXPIRY[idea.tradeType] ?? EXPIRY.DayTrade
 
     if (Date.now() - signalMs > expiry) {
-      return { ...rec, status: 'expired' as SignalStatus }
+      const ageH = Math.round((Date.now() - signalMs) / 3_600_000)
+      const ts   = new Date().toISOString()
+      return {
+        ...rec,
+        status:      'expired' as SignalStatus,
+        closedAt:    ts,
+        exitTs:      ts,
+        closeReason: `${idea.tradeType} expirado tras ${ageH}h`,
+      }
     }
 
     const isLong = idea.side === 'LONG'
