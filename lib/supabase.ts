@@ -89,8 +89,12 @@ export function transformSignal(s: Record<string, unknown>): SignalRecord {
 }
 
 // ── Signal CRUD ─────────────────────────────────────────────────────────────
-// getDb(): server routes get the service-key client; browser gets the anon client
-function getDb() { return getSupabaseServer() ?? getSupabase() }
+function getDb() {
+  // Server-side: prefer service key (bypasses RLS)
+  if (typeof window === 'undefined') return getSupabaseServer() ?? getSupabase()
+  // Browser: anon key only — service key is not available client-side
+  return getSupabase()
+}
 
 export async function saveSignalToCloud(signal: SignalRecord): Promise<void> {
   const sb = getDb()
