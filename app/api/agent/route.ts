@@ -11,7 +11,9 @@ import { detectMarketRegime }      from '@/lib/marketRegime'
 import { detectScalpSignals, detectBOSCHoCH, getICTKillzones, calcVWAP } from '@/lib/scalpSignals'
 import { evaluateStopManagement }  from '@/lib/stopManagement'
 import { getCurrentTradingSession, shouldGenerateSignal } from '@/lib/tradingHours'
-import { getActiveBlockingEvent, getUpcomingEvent, minutesUntilEvent } from '@/lib/macroCalendar'
+import { getActiveBlockingEvent, getUpcomingEvent, minutesUntilEvent, fetchUpcomingEvents } from '@/lib/macroCalendar'
+import { fetchMacroIndicators, fetchFedExpectations }  from '@/lib/macroEconomics'
+import { fetchGlobalLiquidity }                        from '@/lib/globalLiquidity'
 import { saveSignalToCloud, loadSignalsFromCloud, getSupabaseServer, getSupabase } from '@/lib/supabase'
 import { calcLearnedWeights }                             from '@/lib/selfLearning'
 import { fetchMarketData }                               from '@/lib/marketFetch'
@@ -74,7 +76,12 @@ export async function GET(req: Request): Promise<NextResponse> {
     updates: Array<{ id: string; action: string; newSL: number }>
     errors:  string[]
     globalMarkets: { spxChange: number; dxyStrength: string; riskOff: boolean; impact: string } | null
-  } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null }
+    macro: {
+      overallSignal?: string; overallScore?: number; fedTrend?: string; cpiYoY?: number
+      m2Trend?: string; liquidityScore?: number; fedExpectations?: string
+      nextFOMC?: string; upcomingHighImpact?: number
+    } | null
+  } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null, macro: null }
 
   try {
     // ── 1. Fetch market data (direct import — no HTTP hop, no geo-block risk) ──
@@ -114,8 +121,31 @@ export async function GET(req: Request): Promise<NextResponse> {
       {},
     )
 
-    // ── 1c. Global markets correlation (SPX, DXY, Gold) ─────────────────────────
-    const globalMarkets = await fetchGlobalMarkets()
+    // ── 1c. Global markets + FRED macro (parallel, all graceful fallbacks) ──────
+    const [globalMarkets, macroIndicators, globalLiquidity, upcomingEvents] = await Promise.all([
+      fetchGlobalMarkets(),
+      fetchMacroIndicators(),
+      fetchGlobalLiquidity(),
+      fetchUpcomingEvents(),
+    ])
+
+    // Fed expectations (needs fedRate from macroIndicators)
+    const fedExpectations = macroIndicators?.fedRate?.current
+      ? await fetchFedExpectations(macroIndicators.fedRate.current)
+      : null
+
+    results.macro = {
+      overallSignal:       macroIndicators?.overallSignal,
+      overallScore:        macroIndicators?.overallScore,
+      fedTrend:            macroIndicators?.fedRate?.trend,
+      cpiYoY:              macroIndicators?.cpi?.yoy,
+      m2Trend:             globalLiquidity?.trend,
+      liquidityScore:      globalLiquidity?.liquidityIndex,
+      fedExpectations:     fedExpectations?.marketSentiment,
+      nextFOMC:            fedExpectations?.nextMeetingDate,
+      upcomingHighImpact:  (upcomingEvents ?? []).filter(e => e.impact === 'HIGH').length,
+    }
+
     results.globalMarkets = globalMarkets ? {
       spxChange:   globalMarkets.spx.change1h,
       dxyStrength: globalMarkets.dxy.strength,
@@ -137,6 +167,16 @@ export async function GET(req: Request): Promise<NextResponse> {
         price_change_24h: mkt.change ?? null,
         top_events:       macroSentiment.topEvents,
         crypto_context:   macroSentiment.cryptoSpecific,
+        // FRED macro data (Section 7)
+        cpi_yoy:                  macroIndicators?.cpi?.yoy ?? null,
+        fed_rate:                 macroIndicators?.fedRate?.current ?? null,
+        fed_trend:                macroIndicators?.fedRate?.trend ?? null,
+        gdp_growth:               macroIndicators?.gdp?.growthRate ?? null,
+        m2_yoy:                   macroIndicators?.m2?.yoyChange ?? null,
+        treasury_10y:             macroIndicators?.treasury10y?.yield ?? null,
+        global_liquidity_score:   globalLiquidity?.liquidityIndex ?? null,
+        macro_overall_signal:     macroIndicators?.overallSignal ?? null,
+        fed_expectations:         fedExpectations?.marketSentiment ?? null,
       }).then(({ error }: { error: { message: string } | null }) => {
         if (error) console.error('[APEX Macro] snapshot insert error:', error.message)
       })
@@ -282,7 +322,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
 
     if (activeCount < 3) {
-      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment)
+      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined)
 
       // ── Block longs in global risk-off environment ───────────────────────────
       const blockedByCorrelation =
@@ -348,7 +388,12 @@ export async function GET(req: Request): Promise<NextResponse> {
               bear:       newSignal.bear,
               maxSc:      newSignal.maxSc,
               reasons:    newSignal.reasons,
-              analysis:   writeTradeAnalysis({ idea: newSignal, inds, mkt, regime: regime ?? null }),
+              analysis:   writeTradeAnalysis({ idea: newSignal, inds, mkt, regime: regime ?? null,
+                            macroIndicators: macroIndicators ?? null,
+                            globalLiquidity: globalLiquidity ?? null,
+                            fedExpectations: fedExpectations ?? null,
+                            upcomingEvents:  upcomingEvents ?? [],
+                          }),
               ts:         new Date(time),
             },
           }

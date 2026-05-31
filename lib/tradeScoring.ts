@@ -3,6 +3,8 @@ import type { WeightMap } from './scoreWeights'
 import type { LearnedWeights } from './selfLearning'
 import type { MacroSentiment } from './macroSentiment'
 import { getMacroSignalBias }  from './macroSentiment'
+import type { MacroIndicators } from './macroEconomics'
+import type { GlobalLiquidity } from './globalLiquidity'
 import { detectCandlePatterns } from './candlePatterns'
 import { detectMarketRegime }   from './marketRegime'
 import { calcWinProbability }   from './probabilisticModel'
@@ -37,7 +39,9 @@ export function scoreTradeIdea(
   weights?: WeightMap,
   signalHistory: SignalRecord[] = [],
   learnedWeights?: LearnedWeights,
-  macroSentiment?: MacroSentiment,
+  macroSentiment?:  MacroSentiment,
+  macroIndicators?: MacroIndicators,
+  globalLiquidity?: GlobalLiquidity,
 ): TradeIdea | null {
   const i4 = inds['4h'], i1 = inds['1h'], i1d = inds['1d'], i15 = inds['15m']
   if (!i4 || !i1) return null
@@ -348,6 +352,40 @@ export function scoreTradeIdea(
     macroSentiment.topEvents.slice(0, 2).forEach(event => {
       reasons.push({ s: macroSentiment.score >= 0 ? 'bull' as const : 'bear' as const, txt: `🌍 ${event}` })
     })
+  }
+
+  // ── FRED MACRO INDICATORS ─────────────────────────────────────────────────
+  if (macroIndicators) {
+    if (macroIndicators.fedRate.trend === 'CUTTING') {
+      bull += 3; reasons.push({ s: 'bull', txt: `🏦 ${macroIndicators.fedRate.note}` })
+    } else if (macroIndicators.fedRate.trend === 'HIKING') {
+      bear += 2; reasons.push({ s: 'bear', txt: `🏦 ${macroIndicators.fedRate.note}` })
+    }
+    if (macroIndicators.m2.trend === 'EXPANDING') {
+      bull += 2; reasons.push({ s: 'bull', txt: `💵 ${macroIndicators.m2.note}` })
+    } else if (macroIndicators.m2.trend === 'CONTRACTING') {
+      bear += 2; reasons.push({ s: 'bear', txt: `💵 ${macroIndicators.m2.note}` })
+    }
+    if (macroIndicators.cpi.btcImpact === 'BULLISH') {
+      bull += 1; reasons.push({ s: 'bull', txt: `📊 ${macroIndicators.cpi.note}` })
+    } else if (macroIndicators.cpi.btcImpact === 'BEARISH') {
+      bear += 1; reasons.push({ s: 'bear', txt: `📊 ${macroIndicators.cpi.note}` })
+    }
+    if (macroIndicators.treasury10y.btcImpact === 'BULLISH') { bull += 1 }
+    if (macroIndicators.treasury10y.btcImpact === 'BEARISH') { bear += 1 }
+    if (macroIndicators.overallSignal === 'STRONGLY_BULLISH') {
+      bull += 2; reasons.push({ s: 'bull', txt: `🌍 Entorno macro fuertemente alcista (score ${macroIndicators.overallScore.toFixed(1)})` })
+    }
+    if (macroIndicators.overallSignal === 'STRONGLY_BEARISH') {
+      bear += 2; reasons.push({ s: 'bear', txt: `🌍 Entorno macro fuertemente bajista (score ${macroIndicators.overallScore.toFixed(1)})` })
+    }
+  }
+
+  // ── GLOBAL LIQUIDITY ──────────────────────────────────────────────────────
+  if (globalLiquidity?.trend === 'EXPANDING') {
+    bull += 2; reasons.push({ s: 'bull', txt: `💧 ${globalLiquidity.btcCorrelation}` })
+  } else if (globalLiquidity?.trend === 'CONTRACTING') {
+    bear += 2; reasons.push({ s: 'bear', txt: `💧 ${globalLiquidity.btcCorrelation}` })
   }
 
   const patternLines = patterns4h.slice(0, 3)

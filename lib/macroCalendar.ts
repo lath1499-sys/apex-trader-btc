@@ -89,3 +89,73 @@ export function getUpcomingEvent(nowMs = Date.now(), lookaheadMs = 24 * 60 * 60_
 export function minutesUntilEvent(ev: MacroEvent, nowMs = Date.now()): number {
   return Math.round((ev.utcMs - nowMs) / 60_000)
 }
+
+// ── Section 3: Upcoming Events with real FRED previous values ─────────────────
+
+export interface EconomicEvent {
+  name:               string
+  date:               string
+  time:               string
+  country:            string
+  impact:             'HIGH' | 'MEDIUM' | 'LOW'
+  forecast:           number | null
+  previous:           number | null
+  actual:             number | null
+  unit:               string
+  btcReaction:        string
+  wasSurprise:        boolean | null
+  surpriseDirection:  'BETTER' | 'WORSE' | 'IN_LINE' | null
+}
+
+function getExpectedBTCReaction(name: string): string {
+  if (name.includes('CPI'))            return 'CPI alto → bajista BTC (Fed hawkish). CPI bajo → alcista (Fed dovish)'
+  if (name.includes('FOMC') || name.includes('Fed')) return 'Recorte → muy alcista BTC. Subida → bajista. Hawkish → bajista'
+  if (name.includes('NFP') || name.includes('Jobs')) return 'NFP fuerte → Fed no recorta → bajista BTC a corto plazo'
+  if (name.includes('GDP'))            return 'GDP negativo → recesión → Fed recorta → eventual alcista BTC'
+  if (name.includes('PCE'))            return 'PCE es el indicador de inflación preferido de la Fed — mismo impacto que CPI'
+  return 'Evento de alto impacto — posible volatilidad en BTC'
+}
+
+export async function fetchUpcomingEvents(): Promise<EconomicEvent[]> {
+  const FRED_KEY = process.env.FRED_API_KEY ?? ''
+  const now      = Date.now()
+
+  // Base: map MACRO_EVENTS to EconomicEvent shape
+  const base = MACRO_EVENTS
+    .filter(e => e.utcMs > now)
+    .slice(0, 10)
+    .map(e => ({
+      name:              e.label,
+      date:              new Date(e.utcMs).toISOString().slice(0, 10),
+      time:              `${new Date(e.utcMs).getUTCHours().toString().padStart(2, '0')}:${new Date(e.utcMs).getUTCMinutes().toString().padStart(2, '0')} UTC`,
+      country:           'US',
+      impact:            e.impact === 'CRITICAL' ? ('HIGH' as const) : e.impact,
+      forecast:          null as number | null,
+      previous:          null as number | null,
+      actual:            null as number | null,
+      unit:              e.name === 'CPI' ? 'índice' : e.name === 'NFP' ? 'K' : '',
+      btcReaction:       getExpectedBTCReaction(e.name),
+      wasSurprise:       null as boolean | null,
+      surpriseDirection: null as EconomicEvent['surpriseDirection'],
+    }))
+
+  if (!FRED_KEY) return base
+
+  // Enrich with real previous values from FRED
+  try {
+    const [cpiObs, gdpObs] = await Promise.all([
+      fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=2`).then(r => r.json()) as Promise<{ observations?: { value: string }[] }>,
+      fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=A191RL1Q225SBEA&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=2`).then(r => r.json()) as Promise<{ observations?: { value: string }[] }>,
+    ])
+    const latestCPI = cpiObs?.observations?.[0]?.value
+    const latestGDP = gdpObs?.observations?.[0]?.value
+    return base.map(e => ({
+      ...e,
+      previous: e.name.includes('CPI') && latestCPI ? parseFloat(latestCPI)
+                : e.name.includes('GDP') && latestGDP ? parseFloat(latestGDP)
+                : null,
+    }))
+  } catch {
+    return base
+  }
+}

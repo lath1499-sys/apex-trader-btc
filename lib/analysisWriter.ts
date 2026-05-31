@@ -26,20 +26,29 @@ interface OptionsData {
   daysToExpiry:     number
 }
 
+import type { MacroIndicators, FedExpectations } from './macroEconomics'
+import type { GlobalLiquidity }                  from './globalLiquidity'
+import type { EconomicEvent }                    from './macroCalendar'
+
 export function writeTradeAnalysis(opts: {
-  idea:          TradeIdea
-  inds:          IndicatorMap
-  regime?:       RegimeAnalysis | null
-  ew?:           Record<string, ElliottContext> | null
-  confluence?:   PatternConfluence | null
-  probScore?:    ProbabilityScore | null
-  mc?:           MonteCarloResult | null
-  mkt:           MarketData
-  cycle?:        BTCCycle | null
-  news?:         NewsItem[]
-  optionsData?:  OptionsData | null
+  idea:             TradeIdea
+  inds:             IndicatorMap
+  regime?:          RegimeAnalysis | null
+  ew?:              Record<string, ElliottContext> | null
+  confluence?:      PatternConfluence | null
+  probScore?:       ProbabilityScore | null
+  mc?:              MonteCarloResult | null
+  mkt:              MarketData
+  cycle?:           BTCCycle | null
+  news?:            NewsItem[]
+  optionsData?:     OptionsData | null
+  macroIndicators?: MacroIndicators | null
+  globalLiquidity?: GlobalLiquidity | null
+  fedExpectations?: FedExpectations | null
+  upcomingEvents?:  EconomicEvent[]
 }): string {
-  const { idea, inds, regime, ew, confluence, probScore, mc, mkt, cycle, news, optionsData } = opts
+  const { idea, inds, regime, ew, confluence, probScore, mc, mkt, cycle, news, optionsData,
+          macroIndicators, globalLiquidity, fedExpectations, upcomingEvents } = opts
   const sess  = getSession()
   const now   = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
   const i4    = inds['4h']
@@ -101,6 +110,19 @@ export function writeTradeAnalysis(opts: {
     buildInvalidation(idea),
     ``,
     `📰 NOTICIAS: ${bullNews} alcistas | ${bearNews} bajistas`,
+    macroIndicators ? `` : null,
+    macroIndicators ? `🏛️ ENTORNO MACRO` : null,
+    macroIndicators ? macroIndicators.summary : null,
+    macroIndicators ? `Fed: ${macroIndicators.fedRate.note}` : null,
+    macroIndicators ? `CPI: ${macroIndicators.cpi.note}` : null,
+    macroIndicators ? `M2: ${macroIndicators.m2.note}` : null,
+    macroIndicators ? `Treasury 10Y: ${macroIndicators.treasury10y.note}` : null,
+    fedExpectations ? `Expectativas Fed: ${fedExpectations.btcImplication}` : null,
+    globalLiquidity ? `Liquidez global: ${globalLiquidity.btcCorrelation}` : null,
+    upcomingEvents && upcomingEvents.filter(e => e.impact === 'HIGH').length > 0 ? `📅 PRÓXIMOS EVENTOS ALTO IMPACTO:` : null,
+    ...((upcomingEvents ?? []).filter(e => e.impact === 'HIGH').slice(0, 3).map(e =>
+      `• ${e.date} ${e.time}: ${e.name} — ${e.btcReaction}`
+    )),
     regime?.regime === 'RANGING' ? `⚠️ ATENCIÓN: Mercado en lateral — mayor ruido, señales menos fiables` : null,
     `Score: ${idea.bull + idea.bear}/${idea.maxSc} | Sesión: ${sess.n}`,
   ]
