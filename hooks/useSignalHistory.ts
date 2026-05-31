@@ -23,25 +23,34 @@ export function useSignalHistory() {
   const setSignalHistory = useApexStore(s => s.setSignalHistory)
 
   // Hydrate: try Supabase first, fall back to localStorage
-  // Then subscribe to Realtime so cron-created signals appear without refresh
+  // Then subscribe to Realtime AND poll every 60s so cron signals always appear
   useEffect(() => {
-    const load = async () => {
+    const syncFromCloud = async () => {
       const cloud = await loadSignalsFromCloud()
-      if (cloud && cloud.length) {
-        setSignalHistory(cloud)
-        return
-      }
-      const saved = loadSignalHistory()
-      if (saved.length) setSignalHistory(saved)
+      if (!cloud?.length) return
+      // Merge: keep any local-only signals not yet in cloud, update rest
+      const current = useApexStore.getState().signalHistory
+      const cloudIds = new Set(cloud.map(s => s.id))
+      const localOnly = current.filter(s => !cloudIds.has(s.id))
+      setSignalHistory([...cloud, ...localOnly])
     }
-    load().catch(() => {
+
+    // Initial load
+    syncFromCloud().catch(() => {
       const saved = loadSignalHistory()
       if (saved.length) setSignalHistory(saved)
     })
 
-    // Realtime: push INSERT/UPDATE events straight into state
+    // ── Polling fallback (60s) — guarantees new cron signals appear even if
+    //    Supabase Realtime publication is not enabled for apex_signals ──────
+    const pollInterval = setInterval(() => {
+      syncFromCloud().catch(() => { /* silent — realtime covers this */ })
+    }, 60_000)
+
+    // ── Realtime: instant push for INSERT/UPDATE ──────────────────────────
     const sb = getSupabase()
-    if (!sb) return
+    if (!sb) return () => clearInterval(pollInterval)
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const channel = (sb as any)
       .channel('apex_signals_realtime')
@@ -61,9 +70,17 @@ export function useSignalHistory() {
           }
         },
       )
-      .subscribe()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .subscribe((status: string, err?: any) => {
+        if (err) console.error('[APEX Realtime] subscribe error:', err)
+        else if (status === 'SUBSCRIBED') console.log('[APEX Realtime] apex_signals live')
+      })
 
-    return () => { (sb as any).removeChannel(channel) }
+    return () => {
+      clearInterval(pollInterval)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(sb as any).removeChannel(channel)
+    }
   }, [setSignalHistory])
 
   // Sync new trade ideas → signal records
