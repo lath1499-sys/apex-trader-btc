@@ -74,18 +74,23 @@ export function useMarketData() {
     const prev = useApexStore.getState().scalpSignal
     // Never overwrite an active signal with null — only replace with genuinely new signal
     if (sig) {
-      const isNew = !prev || prev.entry !== sig.entry || prev.side !== sig.side
-      if (isNew) {
-        // Don't overwrite a Supabase-backed active signal (has numeric id, no 'scalp_' prefix)
-        const isSupaBacked = prev && !String(prev.id).startsWith('scalp_')
-        if (!isSupaBacked) {
-          ntfyScalpSignal({
-            side: sig.side, entry: sig.entry, sl: sig.sl, tp1: sig.tp1,
-            killzone: sig.killzone, duration: sig.duration,
-            cvdSignal: sig.cvdSignal, qualityLabel: sig.qualityLabel,
-          })
-          setScalpSignal(sig)
-        }
+      const isSupaBacked = prev && !String(prev.id).startsWith('scalp_')
+      if (isSupaBacked) {
+        // Supabase-backed signal — never overwrite or re-notify from client side
+        return
+      }
+      // For client-generated signals: only notify/replace if side changed OR entry moved >1%
+      // (prevents spam from tiny price fluctuations re-triggering detectScalpSignals)
+      const isTrulyNew = !prev
+        || prev.side !== sig.side
+        || Math.abs(prev.entry - sig.entry) / prev.entry > 0.01
+      if (isTrulyNew) {
+        ntfyScalpSignal({
+          side: sig.side, entry: sig.entry, sl: sig.sl, tp1: sig.tp1,
+          killzone: sig.killzone, duration: sig.duration,
+          cvdSignal: sig.cvdSignal, qualityLabel: sig.qualityLabel,
+        })
+        setScalpSignal(sig)
       }
     }
     // null → do nothing; signal persists until SL/TP hit or manual close

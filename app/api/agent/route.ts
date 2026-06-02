@@ -536,8 +536,16 @@ export async function GET(req: Request): Promise<NextResponse> {
           new Date(s.createdAt).getTime() > twoHoursAgo,
         )
 
-        if (duplicate) {
-          results.scalpSkipped = 'duplicate'
+        // Secondary dedup: any scalp already notified in the last 1h (catches save-failure re-fires)
+        const oneHourAgo = Date.now() - 60 * 60_000
+        const recentlyNotified = allSignals.find(s =>
+          s.idea.tradeType === 'Scalp' &&
+          s.ntfySent === true &&
+          new Date(s.createdAt).getTime() > oneHourAgo,
+        )
+
+        if (duplicate || recentlyNotified) {
+          results.scalpSkipped = duplicate ? 'duplicate' : 'ntfy_sent_recently'
         } else {
           const rec: SignalRecord = {
             id:          String(Date.now()),   // numeric-only — bigint compatible
