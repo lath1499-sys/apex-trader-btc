@@ -234,12 +234,25 @@ export function scoreTradeIdea(
   const wKey   = `${tradeType}_${side}`
   const wMult  = weights?.[wKey] ?? 1.0
   // Apply learned outcome-based weights (session+type combo stored in sessionWeights)
-  const learnedMult = learnedWeights?.sessionWeights[wKey] ?? 1.0
-  const adjSc  = maxSc * wMult * learnedMult
-  const confidence: 'ALTA' | 'MEDIA' | 'BAJA' = adjSc >= 7 ? 'ALTA' : adjSc >= 5 ? 'MEDIA' : 'BAJA'
+  const learnedMult    = learnedWeights?.sessionWeights[wKey] ?? 1.0
+  const streakMult     = learnedWeights?.streakMultiplier ?? 1.0
+  const adjSc          = maxSc * wMult * learnedMult * streakMult
+  const rawConf: 'ALTA' | 'MEDIA' | 'BAJA' = adjSc >= 7 ? 'ALTA' : adjSc >= 5 ? 'MEDIA' : 'BAJA'
+  // Streak tier shift: hot streak bumps confidence up one level, cold streak drops it
+  const hotStreak  = learnedWeights?.hotStreak  ?? false
+  const coldStreak = learnedWeights?.coldStreak ?? false
+  const confidence: 'ALTA' | 'MEDIA' | 'BAJA' =
+    hotStreak  && rawConf === 'BAJA'  ? 'MEDIA' :
+    hotStreak  && rawConf === 'MEDIA' ? 'ALTA'  :
+    coldStreak && rawConf === 'ALTA'  ? 'MEDIA' :
+    coldStreak && rawConf === 'MEDIA' ? 'BAJA'  :
+    rawConf
 
   // 3c. Dynamic min-score threshold — tighten when recent WR < 40%, loosen when > 65%
-  const minScoreAdj = learnedWeights?.minScoreAdjustment ?? 0
+  // Hot streak relaxes by 1 extra, cold streak tightens by 1 extra
+  const minScoreAdj = (learnedWeights?.minScoreAdjustment ?? 0)
+    + (coldStreak ? 1 : 0)
+    - (hotStreak  ? 1 : 0)
   if (minScoreAdj > 0 && maxSc < MIN_CONF[tradeType] + minScoreAdj) return null
 
   // 3b. Trading session gate — don't trade during low-liquidity hours

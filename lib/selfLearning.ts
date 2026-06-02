@@ -14,6 +14,12 @@ export interface LearnedWeights {
   avgWinPct:           number
   avgLossPct:          number
   lastUpdated:         string
+  // ── Confidence Streak System ──────────────────────────────────────────────
+  currentStreak:       number          // +N = N wins in a row, -N = N losses in a row
+  streakType:         'win' | 'loss' | 'none'
+  streakMultiplier:    number          // 1.0 base; up to 1.25 on hot, down to 0.75 on cold
+  hotStreak:           boolean         // 3+ consecutive wins
+  coldStreak:          boolean         // 3+ consecutive losses
 }
 
 export const DEFAULT_WEIGHTS: LearnedWeights = {
@@ -28,6 +34,11 @@ export const DEFAULT_WEIGHTS: LearnedWeights = {
   avgWinPct:          0,
   avgLossPct:         0,
   lastUpdated:        new Date().toISOString(),
+  currentStreak:      0,
+  streakType:         'none',
+  streakMultiplier:   1.0,
+  hotStreak:          false,
+  coldStreak:         false,
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -113,7 +124,30 @@ export async function calcLearnedWeights(
     // <40% recently → demand higher score (+1), >65% → relax threshold (-1)
     const minScoreAdjustment = recent20WR < 0.40 ? 1 : recent20WR > 0.65 ? -1 : 0
 
-
+    // ── Confidence Streak System ──────────────────────────────────────────────
+    // Walk from most recent signal backward, count consecutive wins or losses
+    let currentStreak = 0
+    if (closed.length > 0) {
+      const firstWin = (closed[0].pnl ?? 0) > 0
+      for (const t of closed) {
+        const isWin = (t.pnl ?? 0) > 0
+        if (isWin === firstWin) {
+          currentStreak += firstWin ? 1 : -1
+        } else {
+          break
+        }
+      }
+    }
+    const streakType: 'win' | 'loss' | 'none' =
+      currentStreak >= 1 ? 'win' : currentStreak <= -1 ? 'loss' : 'none'
+    const hotStreak  = currentStreak >= 3
+    const coldStreak = currentStreak <= -3
+    // +0.05 per win above streak of 2 (max 1.25), -0.05 per loss below -2 (min 0.75)
+    const streakMultiplier = hotStreak
+      ? Math.min(1.25, 1.0 + (currentStreak - 2) * 0.05)
+      : coldStreak
+        ? Math.max(0.75, 1.0 + (currentStreak + 2) * 0.05)
+        : 1.0
 
     return {
       sessionWeights,
@@ -127,6 +161,11 @@ export async function calcLearnedWeights(
       avgWinPct,
       avgLossPct,
       lastUpdated:        new Date().toISOString(),
+      currentStreak,
+      streakType,
+      streakMultiplier,
+      hotStreak,
+      coldStreak,
     }
   } catch (err) {
     console.error('[APEX Learning] Error calculating weights:', err)

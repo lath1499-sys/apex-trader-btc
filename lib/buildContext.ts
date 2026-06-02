@@ -1,5 +1,6 @@
 import type { MarketData, IndicatorMap, OnChainData, BTCCycle, NewsItem, AutoAlert } from './types'
 import type { WhaleAlert } from './whaleDetector'
+import type { LearnedWeights } from './selfLearning'
 import { getSession } from './cycle'
 
 export function fmt(n: number | null | undefined, d = 2): string {
@@ -25,6 +26,7 @@ export function buildContext(
   cycle: BTCCycle | null,
   news: NewsItem[],
   whaleAlert?: WhaleAlert | null,
+  learnedWeights?: LearnedWeights | null,
 ): string {
   const i4 = inds['4h'], i1 = inds['1h'], i1d = inds['1d']
   function fi(i: typeof i4): string {
@@ -56,6 +58,20 @@ export function buildContext(
       `Ballenas:${whaleAlert.magnitude} ${Math.round(whaleAlert.topTxBTC)}BTC ` +
       `Flujo:${whaleAlert.exchangeFlowSignal} ${whaleAlert.btcImpact}`,
     )
+  }
+  if (learnedWeights && learnedWeights.totalDecisions >= 5) {
+    const { currentStreak, hotStreak, coldStreak, winRate, totalDecisions } = learnedWeights
+    const streakLine = hotStreak
+      ? `🔥 RACHA GANADORA: ${currentStreak} en fila — confianza aumentada`
+      : coldStreak
+        ? `🧊 RACHA PERDEDORA: ${Math.abs(currentStreak)} en fila — filtros más estrictos`
+        : currentStreak > 0
+          ? `✅ Racha actual: ${currentStreak} ganancias`
+          : currentStreak < 0
+            ? `⚠️ Racha actual: ${Math.abs(currentStreak)} pérdidas`
+            : null
+    if (streakLine) lines.push(streakLine)
+    lines.push(`Historial:${totalDecisions} señales WR:${(winRate * 100).toFixed(0)}%`)
   }
   return lines.join('\n')
 }
