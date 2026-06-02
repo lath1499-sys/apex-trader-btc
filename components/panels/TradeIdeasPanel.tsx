@@ -702,7 +702,7 @@ function PerfCell({ label, val, col }: { label: string; val: string; col?: strin
 }
 
 function kzWinRate(sigH: SignalRecord[], kz: string): string {
-  const sub = sigH.filter(r => r.isScalp && r.killzone === kz && r.pnlR != null)
+  const sub = sigH.filter(r => (r.isScalp || r.idea?.tradeType === 'Scalp') && r.killzone === kz && r.pnlR != null)
   if (!sub.length) return '–'
   const wins = sub.filter(r => (r.pnlR ?? 0) > 0).length
   return `${Math.round(wins / sub.length * 100)}% (${sub.length})`
@@ -727,7 +727,7 @@ function PerformanceTab() {
   const sbStats   = usePerformanceStats()
 
   // Scalp-specific stats
-  const scalpRecs     = sigH.filter(r => r.isScalp)
+  const scalpRecs     = sigH.filter(r => r.isScalp || r.idea?.tradeType === 'Scalp')
   const scalpResolved = scalpRecs.filter(r => r.pnlR != null)
   const scalpWins     = scalpResolved.filter(r => (r.pnlR ?? 0) > 0)
   const scalpWR       = scalpResolved.length ? Math.round(scalpWins.length / scalpResolved.length * 100) : null

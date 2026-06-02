@@ -159,6 +159,7 @@ export default function CandleChart() {
       const sigColors = ['#a78bfa', '#60a5fa', '#f97316', '#ffd700']
       const activeRecs = signalHistory.filter(r =>
         (r.status === 'active' || r.status === 'pending_confirmation') &&
+        r.idea?.tradeType !== 'Scalp' &&
         (!tradeIdea || Math.abs(r.idea.price - tradeIdea.price) > 1)
       )
       activeRecs.forEach((rec, idx) => {
@@ -170,6 +171,20 @@ export default function CandleChart() {
         candles.createPriceLine({ price: idea.tp1,   color: '#22c55e88', lineWidth: 1, lineStyle: LS.Dashed as LineStyle, axisLabelVisible: true, title: 'TP1' })
         candles.createPriceLine({ price: idea.tp2,   color: '#22c55eaa', lineWidth: 1, lineStyle: LS.Dotted as LineStyle, axisLabelVisible: true, title: 'TP2' })
         candles.createPriceLine({ price: idea.tp3,   color: '#22c55ecc', lineWidth: 1, lineStyle: LS.Solid  as LineStyle, axisLabelVisible: true, title: 'TP3' })
+      })
+
+      // Scalp signals — cyan, dashed, smaller labels
+      const activeScalps = signalHistory.filter(r =>
+        (r.status === 'active' || r.status === 'pending_confirmation') &&
+        r.idea?.tradeType === 'Scalp'
+      )
+      activeScalps.forEach(rec => {
+        const idea   = rec.idea
+        const isLong = idea.side === 'LONG'
+        candles.createPriceLine({ price: idea.price, color: '#22d3ee',   lineWidth: 1, lineStyle: LS.Dashed as LineStyle, axisLabelVisible: true, title: `⚡${isLong ? '▲' : '▼'} SCALP` })
+        candles.createPriceLine({ price: idea.sl,    color: '#f87171aa', lineWidth: 1, lineStyle: LS.Dashed as LineStyle, axisLabelVisible: true, title: 'S-SL' })
+        candles.createPriceLine({ price: idea.tp1,   color: '#6ee7b7aa', lineWidth: 1, lineStyle: LS.Dashed as LineStyle, axisLabelVisible: true, title: 'S-TP1' })
+        candles.createPriceLine({ price: idea.tp2,   color: '#6ee7b7cc', lineWidth: 1, lineStyle: LS.Dotted as LineStyle, axisLabelVisible: true, title: 'S-TP2' })
       })
     }
 

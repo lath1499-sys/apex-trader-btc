@@ -405,7 +405,8 @@ export function detectScalpSignals(
   const maxScore = Math.max(bull, bear)
   if (!side || maxScore < 4) return null
 
-  // ── 15M ATR for stop distance (wider stops, fewer noise hits) ─────────────
+  // ── SL: structure-based (swing high/low) + ATR floor, min 0.4% ──────────────
+  // ATR on 15M used as baseline
   const h15 = klines15m.map(k => k.h)
   const l15 = klines15m.map(k => k.l)
   const c15 = klines15m.map(k => k.c)
@@ -414,12 +415,27 @@ export function detectScalpSignals(
   )
   const atr15 = tr15.slice(-14).reduce((a, v) => a + v, 0) / Math.min(14, tr15.length)
 
-  const slDist = atr15 * 1.5
   const isLong = side === 'LONG'
+
+  // Structure: swing high/low over last 8 candles (natural support/resistance)
+  const recentSwingLow  = Math.min(...klines15m.slice(-8).map(k => k.l))
+  const recentSwingHigh = Math.max(...klines15m.slice(-8).map(k => k.h))
+  const structureDist   = isLong ? price - recentSwingLow : recentSwingHigh - price
+
+  // ATR-based: 2.5× ATR15M (was 1.5×, bumped to reduce noise hits)
+  const atrDist = atr15 * 2.5
+
+  // Minimum: 0.4% of price (never stops within noise)
+  const minDist = price * 0.004
+
+  // Final SL: widest of structure (+ 10% buffer) vs ATR vs minimum
+  const slDist = Math.max(minDist, atrDist, structureDist * 1.1)
+
   const sl  = isLong ? price - slDist        : price + slDist
-  const tp1 = isLong ? price + slDist * 1.5  : price - slDist * 1.5
-  const tp2 = isLong ? price + slDist * 2.5  : price - slDist * 2.5
-  const tp3 = isLong ? price + slDist * 4.0  : price - slDist * 4.0
+  // TPs scale with the wider SL for proper R:R
+  const tp1 = isLong ? price + slDist * 1.5  : price - slDist * 1.5   // 1.5:1
+  const tp2 = isLong ? price + slDist * 2.5  : price - slDist * 2.5   // 2.5:1
+  const tp3 = isLong ? price + slDist * 4.0  : price - slDist * 4.0   // 4:1
 
   const confidence: 'ALTA' | 'MEDIA' | 'BAJA' =
     maxScore >= 7 ? 'ALTA' : maxScore >= 5 ? 'MEDIA' : 'BAJA'

@@ -21,6 +21,7 @@ export function useSignalHistory() {
   const mkt              = useApexStore(s => s.mkt)
   const inds             = useApexStore(s => s.inds)
   const setSignalHistory = useApexStore(s => s.setSignalHistory)
+  const pushScalpHistory = useApexStore(s => s.pushScalpHistory)
 
   // Hydrate: try Supabase first, fall back to localStorage
   // Then subscribe to Realtime AND poll every 60s so cron signals always appear
@@ -32,7 +33,14 @@ export function useSignalHistory() {
       const current = useApexStore.getState().signalHistory
       const cloudIds = new Set(cloud.map(s => s.id))
       const localOnly = current.filter(s => !cloudIds.has(s.id))
-      setSignalHistory([...cloud, ...localOnly])
+      const merged = [...cloud, ...localOnly]
+      setSignalHistory(merged)
+      // Sync scalp signals into scalpHistory store so CandleChart + historial see them
+      // transformSignal already sets idea.tradeType — filter by it rather than isScalp
+      merged
+        .filter(r => r.idea?.tradeType === 'Scalp' && r.status !== 'active')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .forEach(r => pushScalpHistory(r as any))
     }
 
     // Initial load
@@ -54,10 +62,14 @@ export function useSignalHistory() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let channel: any = null
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-    let destroyed = false   // set on cleanup so reconnect doesn't fire after unmount
+    let destroyed    = false   // set on cleanup so reconnect doesn't fire after unmount
+    let subscribeId  = 0       // incremented on each subscribe(); guards stale CLOSED callbacks
 
     const subscribe = () => {
       if (destroyed) return
+      const myId = ++subscribeId   // capture this subscription's ID
+      // Remove old channel — this may trigger CLOSED on the old callback,
+      // but myId !== subscribeId will be false there so it's ignored.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if (channel) { (sb as any).removeChannel(channel); channel = null }
 
@@ -84,8 +96,11 @@ export function useSignalHistory() {
         )
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .subscribe((status: string, err?: any) => {
+          if (myId !== subscribeId) return   // stale callback from a removed channel — ignore
           if (status === 'SUBSCRIBED') {
             console.log('[APEX Realtime] apex_signals live')
+            // Sync signals on every successful (re)connect to catch any missed INSERTs
+            syncFromCloud().catch(() => {})
           } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
             console.warn(`[APEX Realtime] ${status} — reconectando en 5s…`)
             reconnectTimer = setTimeout(subscribe, 5_000)
