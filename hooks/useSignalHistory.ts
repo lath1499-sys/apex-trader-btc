@@ -12,6 +12,42 @@ import {
   ntfyApproachingSL, ntfyTrailingSL, ntfyStopMoved,
 } from '@/lib/ntfy'
 import { evaluateStopManagement } from '@/lib/stopManagement'
+import type { ScalpSignal, ScalpStatus } from '@/lib/scalpSignals'
+import type { SignalRecord } from '@/lib/types'
+
+/** Re-shape a closed SignalRecord (from Supabase) into a ScalpSignal for the history display */
+function signalRecordToScalp(r: SignalRecord): ScalpSignal {
+  const idea = r.idea
+  return {
+    id:           r.id,
+    side:         idea.side,
+    entry:        idea.price,          // SignalRecord nests under idea.price
+    sl:           idea.sl,
+    tp1:          idea.tp1,
+    tp2:          idea.tp2,
+    tp3:          idea.tp3,
+    confidence:   idea.confidence,
+    reasons:      idea.reasons.map(rs => rs.txt),
+    type:         'Scalp',
+    duration:     r.closeReason ?? '',
+    maxLeverage:  idea.maxLev,
+    killzone:     r.killzone ?? null,
+    bosChoch:     r.bosChoch ?? null,
+    cvdSignal:    r.cvdSignal ?? null,
+    vwapRelation: r.vwapRelation ?? '',
+    qualityLabel: idea.confidence,
+    score:        (idea as { score?: number }).score ?? 0,
+    ts:           new Date(r.createdAt),
+    status:       r.status as ScalpStatus,
+    createdAt:    new Date(r.createdAt).getTime(),
+    closedAt:     r.closedAt ? new Date(r.closedAt).getTime() : undefined,
+    closePrice:   r.exitPrice ?? undefined,
+    pnl:          r.pnl ?? undefined,
+    tp1Hit:       r.tp1Hit,
+    tp2Hit:       r.tp2Hit,
+    slWarningFired: r.slWarningFired,
+  }
+}
 
 const DEDUP_PCT = 0.005  // 0.5% price move required before saving same-side signal again
 
@@ -36,11 +72,10 @@ export function useSignalHistory() {
       const merged = [...cloud, ...localOnly]
       setSignalHistory(merged)
       // Sync scalp signals into scalpHistory store so CandleChart + historial see them
-      // transformSignal already sets idea.tradeType — filter by it rather than isScalp
+      // transformSignal nests fields under idea.* — reshape to flat ScalpSignal before pushing
       merged
         .filter(r => r.idea?.tradeType === 'Scalp' && r.status !== 'active')
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .forEach(r => pushScalpHistory(r as any))
+        .forEach(r => pushScalpHistory(signalRecordToScalp(r)))
     }
 
     // Initial load

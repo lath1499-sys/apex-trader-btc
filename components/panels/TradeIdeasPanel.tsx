@@ -1105,6 +1105,12 @@ function ScalpHistoryRow({ sig }: { sig: ScalpSignal }) {
     sl_hit: '❌ SL', tp1_hit: '🎯 TP1', tp2_hit: '🎯🎯 TP2', tp3_hit: '🏆 TP3',
     expired: '💤', closed_manual: '✋ Manual', active: '🟡 Activo',
   }
+  // Safe price formatter — prevents NaN when numeric fields arrive as undefined/string
+  const fmtP = (n: number | undefined | null) => {
+    const num = parseFloat(String(n ?? ''))
+    return isNaN(num) ? 'N/A' : `$${Math.round(num).toLocaleString()}`
+  }
+  const score = sig.score != null && !isNaN(sig.score) ? sig.score : '?'
   return (
     <div style={{ background: T.card, border: `1px solid ${sideC}33`, borderRadius: 8, padding: '10px 12px', fontSize: 9, display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1116,12 +1122,12 @@ function ScalpHistoryRow({ sig }: { sig: ScalpSignal }) {
         <span style={{ color: T.textSec }}>{STATUS[sig.status] ?? sig.status}</span>
       </div>
       <div style={{ display: 'flex', gap: 10, color: T.textSec }}>
-        <span>📍 ${Math.round(sig.entry).toLocaleString()}</span>
-        <span style={{ color: T.danger }}>SL ${Math.round(sig.sl).toLocaleString()}</span>
-        <span style={{ color: T.bull }}>TP1 ${Math.round(sig.tp1).toLocaleString()}</span>
-        {sig.closePrice && <span style={{ color: T.muted }}>Cierre ${Math.round(sig.closePrice).toLocaleString()}</span>}
+        <span>📍 {fmtP(sig.entry)}</span>
+        <span style={{ color: T.danger }}>SL {fmtP(sig.sl)}</span>
+        <span style={{ color: T.bull }}>TP1 {fmtP(sig.tp1)}</span>
+        {sig.closePrice != null && <span style={{ color: T.muted }}>Cierre {fmtP(sig.closePrice)}</span>}
       </div>
-      <div style={{ color: T.muted }}>{sig.qualityLabel} · {sig.killzone ?? 'Sin KZ'} · {sig.duration} · Score {sig.score}/9</div>
+      <div style={{ color: T.muted }}>{sig.qualityLabel ?? sig.confidence} · {sig.killzone ?? 'Sin KZ'} · {sig.duration ?? ''} · Score {score}/9</div>
     </div>
   )
 }
