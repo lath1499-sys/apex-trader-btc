@@ -46,19 +46,6 @@ export function evaluateAutoClose(
   // ── 1. Hard stops (TP/SL already handled by updateSignalStatusesByPrice) ──
   // Only handle smart-exit conditions here to avoid duplication
 
-  // ── 2. Time expiry ─────────────────────────────────────────────────────────
-  if (idea.tradeType === 'Scalp' && hoursAlive > 2)
-    return close('auto_close', currentPrice,
-      `Scalp expirado (${Math.round(hoursAlive * 60)}min activo)`)
-
-  if (idea.tradeType === 'DayTrade' && hoursAlive > 36)
-    return close('auto_close', currentPrice,
-      `DayTrade expirado (${Math.round(hoursAlive)}h activo) — cerrar antes del siguiente día`)
-
-  if (idea.tradeType === 'Swing' && hoursAlive > 168)
-    return close('auto_close', currentPrice,
-      `Swing expirado (${Math.round(hoursAlive / 24)}d activo) — revisión semanal`)
-
   // ── 3. Bias flipped strongly (4H) ─────────────────────────────────────────
   if (hoursAlive > 1) {
     const i4 = inds?.['4h']

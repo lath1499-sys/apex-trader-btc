@@ -159,6 +159,11 @@ export interface SignalRecord {
   cvdSignal?: string
   bosChoch?: string
   vwapRelation?: string
+  // Partial TP tracking — signal stays active after TP1/TP2
+  tp1Hit?: boolean
+  tp2Hit?: boolean
+  // One-time NTFY flag — prevents re-firing on every agent run
+  ntfySent?: boolean
   // Warning flags — prevent duplicate NTFY spam
   slWarningFired?:    boolean
   expiryWarningFired?: boolean

@@ -4,11 +4,6 @@ import type { Kline } from './types'
 const LS_KEY   = 'apex_signal_history'
 const MAX_RECS = 200
 
-const EXPIRY: Record<string, number> = {
-  Scalp:    2  * 60 * 60 * 1000,
-  DayTrade: 36 * 60 * 60 * 1000,  // 36h — matches autoClose.ts
-  Swing:    7  * 24 * 60 * 60 * 1000,
-}
 
 export function loadSignalHistory(): SignalRecord[] {
   try {
@@ -62,19 +57,6 @@ export function updateSignalStatusesByPrice(
     const isLong   = idea.side === 'LONG'
     const now      = new Date().toISOString()
 
-    // Expiry check
-    const age = Date.now() - new Date(rec.createdAt).getTime()
-    if (age > (EXPIRY[idea.tradeType] ?? EXPIRY.DayTrade)) {
-      changed = true
-      return {
-        ...rec,
-        status:      'expired' as SignalStatus,
-        closedAt:    now,
-        exitTs:      now,
-        closeReason: `${idea.tradeType} expirado tras ${Math.round(age / 3_600_000)}h`,
-      }
-    }
-
     const hit = (target: number) =>
       isLong ? currentPrice >= target : currentPrice <= target
     const slHit = isLong ? currentPrice <= idea.sl : currentPrice >= idea.sl
@@ -93,19 +75,17 @@ export function updateSignalStatusesByPrice(
         pnl: pnlPct(idea.price, idea.tp3, isLong),
         pnlR: pnlR(idea.price, idea.sl, idea.tp3, isLong) }
     }
-    if (hit(idea.tp2)) {
+    // TP2 partial — only if TP1 already hit; move SL to TP1
+    if (!rec.tp2Hit && rec.tp1Hit && hit(idea.tp2)) {
       changed = true
-      return { ...rec, status: 'tp2_hit' as SignalStatus,
-        exitPrice: idea.tp2, exitTs: now,
-        pnl: pnlPct(idea.price, idea.tp2, isLong),
-        pnlR: pnlR(idea.price, idea.sl, idea.tp2, isLong) }
+      return { ...rec, tp2Hit: true, status: 'active' as SignalStatus,
+        idea: { ...idea, sl: idea.tp1 } }
     }
-    if (hit(idea.tp1)) {
+    // TP1 partial — move SL to entry (breakeven)
+    if (!rec.tp1Hit && hit(idea.tp1)) {
       changed = true
-      return { ...rec, status: 'tp1_hit' as SignalStatus,
-        exitPrice: idea.tp1, exitTs: now,
-        pnl: pnlPct(idea.price, idea.tp1, isLong),
-        pnlR: pnlR(idea.price, idea.sl, idea.tp1, isLong) }
+      return { ...rec, tp1Hit: true, status: 'active' as SignalStatus,
+        idea: { ...idea, sl: idea.price } }
     }
     return rec
   })
@@ -121,53 +101,47 @@ export function updateSignalStatuses(
     if (rec.status !== 'active') return rec
     const { idea } = rec
     const signalMs = new Date(rec.createdAt).getTime()
-    const expiry   = EXPIRY[idea.tradeType] ?? EXPIRY.DayTrade
+    const isLong   = idea.side === 'LONG'
+    const now      = new Date().toISOString()
 
-    if (Date.now() - signalMs > expiry) {
-      const ageH = Math.round((Date.now() - signalMs) / 3_600_000)
-      const ts   = new Date().toISOString()
-      return {
-        ...rec,
-        status:      'expired' as SignalStatus,
-        closedAt:    ts,
-        exitTs:      ts,
-        closeReason: `${idea.tradeType} expirado tras ${ageH}h`,
-      }
-    }
-
-    const isLong = idea.side === 'LONG'
-    const now    = new Date().toISOString()
+    // Mutable working record — TP1/TP2 partial closes mutate it in-loop
+    let working = { ...rec }
 
     for (const k of klines) {
       if (k.t <= signalMs) continue
-      const slHit  = isLong ? k.l <= idea.sl  : k.h >= idea.sl
-      const tp1Hit = isLong ? k.h >= idea.tp1 : k.l <= idea.tp1
-      const tp2Hit = isLong ? k.h >= idea.tp2 : k.l <= idea.tp2
-      const tp3Hit = isLong ? k.h >= idea.tp3 : k.l <= idea.tp3
-      const kTs    = new Date(k.t).toISOString()
+      const wi    = working.idea
+      const kTs   = new Date(k.t).toISOString()
+      const slHit = isLong ? k.l <= wi.sl  : k.h >= wi.sl
+      const canTP1 = isLong ? k.h >= wi.tp1 : k.l <= wi.tp1
+      const canTP2 = isLong ? k.h >= wi.tp2 : k.l <= wi.tp2
+      const canTP3 = isLong ? k.h >= wi.tp3 : k.l <= wi.tp3
 
-      if (slHit && !tp1Hit) {
-        return { ...rec, status: 'sl_hit', exitPrice: idea.sl, exitTs: kTs, closedAt: kTs,
-          pnl: pnlPct(idea.price, idea.sl, isLong), pnlR: pnlR(idea.price, idea.sl, idea.sl, isLong) }
+      if (slHit && !canTP1) {
+        return { ...working, status: 'sl_hit', exitPrice: wi.sl, exitTs: kTs, closedAt: kTs,
+          pnl: pnlPct(idea.price, wi.sl, isLong), pnlR: pnlR(idea.price, wi.sl, wi.sl, isLong) }
       }
-      if (tp3Hit) {
-        return { ...rec, status: 'tp3_hit', exitPrice: idea.tp3, exitTs: kTs, closedAt: kTs,
-          pnl: pnlPct(idea.price, idea.tp3, isLong), pnlR: pnlR(idea.price, idea.sl, idea.tp3, isLong) }
+      if (canTP3) {
+        return { ...working, status: 'tp3_hit', exitPrice: wi.tp3, exitTs: kTs, closedAt: kTs,
+          pnl: pnlPct(idea.price, wi.tp3, isLong), pnlR: pnlR(idea.price, idea.sl, wi.tp3, isLong) }
       }
-      if (tp2Hit) {
-        return { ...rec, status: 'tp2_hit', exitPrice: idea.tp2, exitTs: kTs,
-          pnl: pnlPct(idea.price, idea.tp2, isLong), pnlR: pnlR(idea.price, idea.sl, idea.tp2, isLong) }
+      // TP2 partial — move SL to TP1
+      if (!working.tp2Hit && working.tp1Hit && canTP2) {
+        working = { ...working, tp2Hit: true, status: 'active' as SignalStatus,
+          idea: { ...wi, sl: wi.tp1 } }
+        continue
       }
-      if (tp1Hit) {
-        return { ...rec, status: 'tp1_hit', exitPrice: idea.tp1, exitTs: kTs,
-          pnl: pnlPct(idea.price, idea.tp1, isLong), pnlR: pnlR(idea.price, idea.sl, idea.tp1, isLong) }
+      // TP1 partial — move SL to entry (breakeven)
+      if (!working.tp1Hit && canTP1) {
+        working = { ...working, tp1Hit: true, status: 'active' as SignalStatus,
+          idea: { ...wi, sl: idea.price } }
+        continue
       }
       if (slHit) {
-        return { ...rec, status: 'sl_hit', exitPrice: idea.sl, exitTs: kTs, closedAt: kTs,
-          pnl: pnlPct(idea.price, idea.sl, isLong), pnlR: pnlR(idea.price, idea.sl, idea.sl, isLong) }
+        return { ...working, status: 'sl_hit', exitPrice: wi.sl, exitTs: kTs, closedAt: kTs,
+          pnl: pnlPct(idea.price, wi.sl, isLong), pnlR: pnlR(idea.price, wi.sl, wi.sl, isLong) }
       }
     }
-    return rec
+    return working
   })
 }
 

@@ -66,6 +66,8 @@ export interface ScalpSignal {
   closedAt?:    number
   closePrice?:  number
   pnl?:         number
+  tp1Hit?: boolean
+  tp2Hit?: boolean
   slWarningFired?:     boolean
   expiryWarningFired?: boolean
 }

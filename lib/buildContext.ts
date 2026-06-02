@@ -1,4 +1,5 @@
 import type { MarketData, IndicatorMap, OnChainData, BTCCycle, NewsItem, AutoAlert } from './types'
+import type { WhaleAlert } from './whaleDetector'
 import { getSession } from './cycle'
 
 export function fmt(n: number | null | undefined, d = 2): string {
@@ -23,6 +24,7 @@ export function buildContext(
   onchain: OnChainData | null,
   cycle: BTCCycle | null,
   news: NewsItem[],
+  whaleAlert?: WhaleAlert | null,
 ): string {
   const i4 = inds['4h'], i1 = inds['1h'], i1d = inds['1d']
   function fi(i: typeof i4): string {
@@ -48,6 +50,12 @@ export function buildContext(
     const macro = news.filter(n => n.tag === 'macro').length
     const top3 = news.slice(0, 3).map(n => n.title?.slice(0, 60)).join(' | ')
     lines.push(`News:Bull:${bull} Bear:${bear} Macro:${macro} | ${top3}`)
+  }
+  if (whaleAlert?.detected && whaleAlert.magnitude !== 'NONE') {
+    lines.push(
+      `Ballenas:${whaleAlert.magnitude} ${Math.round(whaleAlert.topTxBTC)}BTC ` +
+      `Flujo:${whaleAlert.exchangeFlowSignal} ${whaleAlert.btcImpact}`,
+    )
   }
   return lines.join('\n')
 }

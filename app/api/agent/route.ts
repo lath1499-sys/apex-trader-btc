@@ -25,6 +25,7 @@ import { loadAgentState, saveAgentState, detectOpinionChange } from '@/lib/agent
 import { fetchSocialSentiment }       from '@/lib/socialSentiment'
 import { generateAgentUpdate, generateDeepAnalysis } from '@/lib/agentVoice'
 import { detectElliottWaves }          from '@/lib/elliottWaves'
+import { fetchWhaleAlert }             from '@/lib/whaleDetector'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
@@ -86,6 +87,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       nextFOMC?: string; upcomingHighImpact?: number
       yieldCurveT10y2y?: number | null; yieldSignal?: string; sofr?: number | null; cutProbability?: number
     } | null
+    scalpSkipped?: string
   } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null, macro: null }
 
   try {
@@ -127,12 +129,13 @@ export async function GET(req: Request): Promise<NextResponse> {
     )
 
     // ── 1c. Global markets + FRED macro (parallel, all graceful fallbacks) ──────
-    const [globalMarkets, macroIndicators, globalLiquidity, upcomingEvents, socialSentiment] = await Promise.all([
+    const [globalMarkets, macroIndicators, globalLiquidity, upcomingEvents, socialSentiment, whaleAlert] = await Promise.all([
       fetchGlobalMarkets(),
       fetchMacroIndicators(),
       fetchGlobalLiquidity(),
       fetchUpcomingEvents(),
       fetchSocialSentiment(),
+      fetchWhaleAlert(),
     ])
 
     // Fed expectations (needs fedRate from macroIndicators)
@@ -232,7 +235,11 @@ export async function GET(req: Request): Promise<NextResponse> {
     let agentOpinionChange: string | null = null   // set inside generate-signal block if bias flips
     const prevStateForVoice = await loadAgentState(getDbClient())
 
+    const TERMINAL_STATUSES = new Set(['closed_manual', 'sl_hit', 'tp3_hit', 'expired', 'auto_close'])
     for (const sig of active) {
+      // Never overwrite a signal that was manually or fully closed
+      if (TERMINAL_STATUSES.has(sig.status)) continue
+
       const isLong = sig.idea.side === 'LONG'
       let updated: SignalRecord = sig
       let changed = false
@@ -258,41 +265,59 @@ export async function GET(req: Request): Promise<NextResponse> {
         if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`TP3 ALCANZADO - ${sig.idea.side} BTC`), `TP3 $${Math.round(sig.idea.tp3).toLocaleString()} | +${pnl.toFixed(2)}%`, 5, 'trophy')
         changed = true
       }
-      // TP2
-      else if (((isLong && price >= sig.idea.tp2) || (!isLong && price <= sig.idea.tp2)) && !(sig as { tp2Hit?: boolean }).tp2Hit) {
+      // TP2 — partial close: stay active, move SL to TP1
+      else if (((isLong && price >= sig.idea.tp2) || (!isLong && price <= sig.idea.tp2)) && !sig.tp2Hit) {
         const pnl = Math.abs(sig.idea.tp2 - sig.idea.price) / sig.idea.price * 100
-        updated = { ...sig, status: 'tp2_hit', pnl, closedAt: time, exitPrice: sig.idea.tp2, closeReason: 'TP2 alcanzado' } as SignalRecord
-        ;(updated as { tp2Hit?: boolean }).tp2Hit = true
-        if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`TP2 ALCANZADO - ${sig.idea.side} BTC`), `TP2 $${Math.round(sig.idea.tp2).toLocaleString()} | +${pnl.toFixed(2)}%`, 4, 'green_circle')
+        updated = {
+          ...sig,
+          tp2Hit: true,
+          status: 'active' as SignalRecord['status'],
+          idea: { ...sig.idea, sl: sig.idea.tp1 },  // move SL to TP1
+          pnl,
+        }
+        await saveSignalToCloud(updated)  // persist BEFORE NTFY to prevent re-fire
+        if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`🎯🎯 TP2 TOCADO - ${sig.idea.side} BTC`), `TP2 $${Math.round(sig.idea.tp2).toLocaleString()} | +${pnl.toFixed(2)}% | SL movido a TP1`, 4, 'green_circle')
         changed = true
       }
-      // TP1
-      else if (((isLong && price >= sig.idea.tp1) || (!isLong && price <= sig.idea.tp1)) && !(sig as { tp1Hit?: boolean }).tp1Hit) {
+      // TP1 — partial close: stay active, move SL to breakeven (entry)
+      else if (((isLong && price >= sig.idea.tp1) || (!isLong && price <= sig.idea.tp1)) && !sig.tp1Hit) {
         const pnl = isLong
           ? (sig.idea.tp1 - sig.idea.price) / sig.idea.price * 100
           : (sig.idea.price - sig.idea.tp1) / sig.idea.price * 100
-        updated = { ...sig, status: 'tp1_hit', pnl, closedAt: time, exitPrice: sig.idea.tp1, closeReason: 'TP1 alcanzado' } as SignalRecord
-        ;(updated as { tp1Hit?: boolean }).tp1Hit = true
-        if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`TP1 ALCANZADO - ${sig.idea.side} BTC`), `TP1 $${Math.round(sig.idea.tp1).toLocaleString()} | +${pnl.toFixed(2)}%`, 3, 'green_circle')
+        updated = {
+          ...sig,
+          tp1Hit: true,
+          status: 'active' as SignalRecord['status'],
+          idea: { ...sig.idea, sl: sig.idea.price },  // move SL to entry (breakeven)
+          pnl,
+        }
+        await saveSignalToCloud(updated)  // persist BEFORE NTFY to prevent re-fire
+        if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`🎯 TP1 TOCADO - ${sig.idea.side} BTC`), `TP1 $${Math.round(sig.idea.tp1).toLocaleString()} | +${pnl.toFixed(2)}% | SL en breakeven`, 3, 'green_circle')
         changed = true
       }
 
-      // Trailing stop / breakeven (only if still active)
+      // Trailing stop / breakeven (only if still active, and only fire NTFY once per action)
       if (updated.status === 'active') {
         const tf = sig.idea.tradeType === 'Scalp' ? klines['15m'] : klines['4h']
         const stopUpdate = evaluateStopManagement(updated, price, tf)
         if (stopUpdate) {
+          const isBreakeven   = stopUpdate.action === 'move_to_breakeven'
+          const isTrail2      = stopUpdate.action === 'trail_to_tp1'
+          const alreadyBE     = (sig as { breakevenSet?: boolean }).breakevenSet  ?? false
+          const alreadyTrail2 = (sig as { trailing2Set?: boolean }).trailing2Set  ?? false
+          // Only fire NTFY if this action hasn't been fired before
+          const shouldNotify  = (isBreakeven && !alreadyBE) || (isTrail2 && !alreadyTrail2) || (!isBreakeven && !isTrail2)
           updated = {
             ...updated,
             idea: { ...updated.idea, sl: stopUpdate.newSL },
           } as SignalRecord
-          ;(updated as { breakevenSet?: boolean }).breakevenSet  = stopUpdate.action === 'move_to_breakeven' ? true : (sig as { breakevenSet?: boolean }).breakevenSet
-          ;(updated as { trailing2Set?: boolean }).trailing2Set  = stopUpdate.action === 'trail_to_tp1'      ? true : (sig as { trailing2Set?: boolean }).trailing2Set
-          ;(updated as { trailingActive?: boolean }).trailingActive = stopUpdate.pnlProtected > 0            ? true : (sig as { trailingActive?: boolean }).trailingActive
-          if (ntfyTopic) await ntfy(
+          ;(updated as { breakevenSet?: boolean }).breakevenSet    = isBreakeven ? true : alreadyBE
+          ;(updated as { trailing2Set?: boolean }).trailing2Set    = isTrail2    ? true : alreadyTrail2
+          ;(updated as { trailingActive?: boolean }).trailingActive = stopUpdate.pnlProtected > 0
+          if (shouldNotify && ntfyTopic) await ntfy(
             ntfyTopic,
-            sanitizeHdr(`${stopUpdate.action === 'move_to_breakeven' ? 'BREAKEVEN ACTIVADO' : 'TRAILING SL'} - ${sig.idea.side} BTC`),
-            `${stopUpdate.reason}\nSL: $${Math.round(stopUpdate.oldSL).toLocaleString()} -> $${Math.round(stopUpdate.newSL).toLocaleString()}`,
+            sanitizeHdr(`${isBreakeven ? 'BREAKEVEN ACTIVADO' : 'TRAILING SL'} - ${sig.idea.side} BTC`),
+            `${stopUpdate.reason}\nSL: $${Math.round(stopUpdate.oldSL).toLocaleString()} → $${Math.round(stopUpdate.newSL).toLocaleString()}`,
             3, 'shield',
           )
           results.updates.push({ id: sig.id, action: stopUpdate.action, newSL: stopUpdate.newSL })
@@ -302,8 +327,8 @@ export async function GET(req: Request): Promise<NextResponse> {
 
       if (changed) {
         await saveSignalToCloud(updated)
-        // Record outcome in apex_decisions for closed signals (learning system)
-        const wasClosed = (['sl_hit', 'tp1_hit', 'tp2_hit', 'tp3_hit'] as string[]).includes(updated.status)
+        // Record outcome in apex_decisions for fully closed signals only (tp3 or sl)
+        const wasClosed = (['sl_hit', 'tp3_hit'] as string[]).includes(updated.status)
         const closeSb = getDbClient()
         if (closeSb && wasClosed && updated.pnl != null) {
           const outcome = updated.pnl > 0 ? 'win' : 'loss'
@@ -346,7 +371,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
 
     if (activeCount < 3) {
-      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined, fedExpectations ?? undefined, socialSentiment ?? undefined)
+      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined, fedExpectations ?? undefined, socialSentiment ?? undefined, whaleAlert ?? undefined)
 
       // ── Agent memory: detect & record opinion changes ────────────────────────
       const memorySb    = getDbClient()
@@ -437,6 +462,7 @@ export async function GET(req: Request): Promise<NextResponse> {
                               fedExpectations:  fedExpectations ?? null,
                               upcomingEvents:   upcomingEvents ?? [],
                               socialSentiment:  socialSentiment ?? null,
+                              whaleAlert:       whaleAlert ?? null,
                             }),
                           ].filter(Boolean).join('\n\n'),
               ts:         new Date(time),
@@ -500,51 +526,66 @@ export async function GET(req: Request): Promise<NextResponse> {
       )
 
       if (scalpSig && scalpSig.confidence !== 'BAJA') {
-        const rec: SignalRecord = {
-          id:        `scalp_${Date.now()}`,
-          createdAt: time,
-          status:    'active',
-          exitPrice: null,
-          exitTs:    null,
-          pnl:       null,
-          pnlR:      null,
-          closedAt:  null,
-          closeReason: null,
-          idea: {
-            side:       scalpSig.side,
-            tradeType:  'Scalp',
-            confidence: scalpSig.confidence,
-            price:      scalpSig.entry,
-            sl:         scalpSig.sl,
-            tp1:        scalpSig.tp1,
-            tp2:        scalpSig.tp2,
-            tp3:        scalpSig.tp3,
-            maxLev:     scalpSig.maxLeverage,
-            bull:       0, bear: 0, maxSc: scalpSig.score,
-            reasons:    scalpSig.reasons.map(r => ({ s: 'bull' as const, txt: r })),
-            analysis:   `Scalp ${scalpSig.side} | ${scalpSig.killzone ?? ''} | ${scalpSig.qualityLabel}`,
-            ts:         new Date(time),
-          },
+        // Dedup: skip if a similar scalp already exists (same side, entry within 0.5%, last 2h)
+        const twoHoursAgo = Date.now() - 2 * 3_600_000
+        const duplicate = allSignals.find(s =>
+          s.idea.tradeType === 'Scalp' &&
+          s.status === 'active' &&
+          s.idea.side === scalpSig.side &&
+          Math.abs(s.idea.price - scalpSig.entry) / scalpSig.entry < 0.005 &&
+          new Date(s.createdAt).getTime() > twoHoursAgo,
+        )
+
+        if (duplicate) {
+          results.scalpSkipped = 'duplicate'
+        } else {
+          const rec: SignalRecord = {
+            id:          String(Date.now()),   // numeric-only — bigint compatible
+            createdAt:   time,
+            status:      'active',
+            exitPrice:   null,
+            exitTs:      null,
+            pnl:         null,
+            pnlR:        null,
+            closedAt:    null,
+            closeReason: null,
+            ntfySent:    true,                 // mark before saving to prevent re-fire
+            idea: {
+              side:       scalpSig.side,
+              tradeType:  'Scalp',
+              confidence: scalpSig.confidence,
+              price:      scalpSig.entry,
+              sl:         scalpSig.sl,
+              tp1:        scalpSig.tp1,
+              tp2:        scalpSig.tp2,
+              tp3:        scalpSig.tp3,
+              maxLev:     scalpSig.maxLeverage,
+              bull:       0, bear: 0, maxSc: scalpSig.score,
+              reasons:    scalpSig.reasons.map(r => ({ s: 'bull' as const, txt: r })),
+              analysis:   `Scalp ${scalpSig.side} | ${scalpSig.killzone ?? ''} | ${scalpSig.qualityLabel}`,
+              ts:         new Date(time),
+            },
+          }
+          await saveSignalToCloud(rec)   // persist ntfySent=true BEFORE sending NTFY
+          if (ntfyTopic) {
+            await ntfy(
+              ntfyTopic,
+              sanitizeHdr(`APEX SCALP: ${scalpSig.side} BTC - ${scalpSig.confidence}`),
+              [
+                `⚡ SCALP ${scalpSig.side} | ${scalpSig.killzone ?? session.name}`,
+                `Entrada: $${Math.round(scalpSig.entry).toLocaleString()}`,
+                `SL:  $${Math.round(scalpSig.sl).toLocaleString()}`,
+                `TP1: $${Math.round(scalpSig.tp1).toLocaleString()}`,
+                `Duración estimada: ${scalpSig.duration}`,
+                ``,
+                scalpSig.reasons.slice(0, 3).join('\n'),
+              ].join('\n'),
+              4,
+              'zap,chart_with_upwards_trend',
+            )
+          }
+          results.signals.push({ type: 'Scalp', side: scalpSig.side, confidence: scalpSig.confidence })
         }
-        await saveSignalToCloud(rec)
-        if (ntfyTopic) {
-          await ntfy(
-            ntfyTopic,
-            sanitizeHdr(`APEX SCALP: ${scalpSig.side} BTC - ${scalpSig.confidence}`),
-            [
-              `⚡ SCALP ${scalpSig.side} | ${scalpSig.killzone ?? session.name}`,
-              `Entrada: $${Math.round(scalpSig.entry).toLocaleString()}`,
-              `SL:  $${Math.round(scalpSig.sl).toLocaleString()}`,
-              `TP1: $${Math.round(scalpSig.tp1).toLocaleString()}`,
-              `Duración estimada: ${scalpSig.duration}`,
-              ``,
-              scalpSig.reasons.slice(0, 3).join('\n'),
-            ].join('\n'),
-            4,
-            'zap,chart_with_upwards_trend',
-          )
-        }
-        results.signals.push({ type: 'Scalp', side: scalpSig.side, confidence: scalpSig.confidence })
       }
     }
 
@@ -563,7 +604,7 @@ export async function GET(req: Request): Promise<NextResponse> {
         macroIndicators,
         fedExpectations,
         [],                  // news not fetched server-side
-        null,                // whaleAlert — V2 Section 4
+        whaleAlert,
         null,                // realDelta  — future
         ewMap,
         fvgsMap,

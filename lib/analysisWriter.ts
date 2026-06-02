@@ -30,6 +30,7 @@ import type { MacroIndicators, FedExpectations } from './macroEconomics'
 import type { GlobalLiquidity }                  from './globalLiquidity'
 import type { EconomicEvent }                    from './macroCalendar'
 import type { SocialSentiment }                  from './socialSentiment'
+import type { WhaleAlert }                        from './whaleDetector'
 
 export function writeTradeAnalysis(opts: {
   idea:             TradeIdea
@@ -48,9 +49,11 @@ export function writeTradeAnalysis(opts: {
   fedExpectations?: FedExpectations | null
   upcomingEvents?:  EconomicEvent[]
   socialSentiment?: SocialSentiment | null
+  whaleAlert?:      WhaleAlert | null
 }): string {
   const { idea, inds, regime, ew, confluence, probScore, mc, mkt, cycle, news, optionsData,
-          macroIndicators, globalLiquidity, fedExpectations, upcomingEvents, socialSentiment } = opts
+          macroIndicators, globalLiquidity, fedExpectations, upcomingEvents, socialSentiment,
+          whaleAlert } = opts
   const sess  = getSession()
   const now   = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
   const i4    = inds['4h']
@@ -116,6 +119,10 @@ export function writeTradeAnalysis(opts: {
     socialSentiment?.source === 'lunarcrush' ? `📱 SOCIAL (LunarCrush)` : null,
     socialSentiment?.source === 'lunarcrush' ? `Galaxy Score: ${socialSentiment.galaxyScore}/100 | Alt Rank: #${socialSentiment.altRank} | Dominancia: ${socialSentiment.socialDominance.toFixed(1)}%` : null,
     socialSentiment?.source === 'lunarcrush' ? `Sentimiento: ${socialSentiment.bullishPercent.toFixed(0)}% alcista / ${socialSentiment.bearishPercent.toFixed(0)}% bajista — ${socialSentiment.signal}` : null,
+    whaleAlert?.detected && whaleAlert.magnitude !== 'NONE' ? `` : null,
+    whaleAlert?.detected && whaleAlert.magnitude !== 'NONE' ? `🐋 BALLENAS (on-chain)` : null,
+    whaleAlert?.detected && whaleAlert.magnitude !== 'NONE' ? `Magnitud: ${whaleAlert.magnitude} | Mayor tx: ${Math.round(whaleAlert.topTxBTC)} BTC | Total en vuelo: ${Math.round(whaleAlert.totalBTCInFlight)} BTC` : null,
+    whaleAlert?.detected && whaleAlert.magnitude !== 'NONE' ? `Flujo de exchange: ${whaleAlert.exchangeFlowSignal} — ${whaleAlert.btcImpact}` : null,
     macroIndicators ? `` : null,
     macroIndicators ? `🏛️ ENTORNO MACRO` : null,
     macroIndicators ? macroIndicators.summary : null,

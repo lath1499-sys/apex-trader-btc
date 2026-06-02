@@ -6,6 +6,7 @@ import { getMacroSignalBias }  from './macroSentiment'
 import type { MacroIndicators, FedExpectations } from './macroEconomics'
 import type { GlobalLiquidity } from './globalLiquidity'
 import type { SocialSentiment } from './socialSentiment'
+import type { WhaleAlert }      from './whaleDetector'
 import { detectCandlePatterns } from './candlePatterns'
 import { detectMarketRegime }   from './marketRegime'
 import { calcWinProbability }   from './probabilisticModel'
@@ -45,6 +46,7 @@ export function scoreTradeIdea(
   globalLiquidity?:  GlobalLiquidity,
   fedExpectations?:  FedExpectations,
   socialSentiment?:  SocialSentiment,
+  whaleAlert?:       WhaleAlert,
 ): TradeIdea | null {
   const i4 = inds['4h'], i1 = inds['1h'], i1d = inds['1d'], i15 = inds['15m']
   if (!i4 || !i1) return null
@@ -429,6 +431,26 @@ export function scoreTradeIdea(
     if (altRank <= 5 && isLong) {
       bull += 1
       reasons.push({ s: 'bull', txt: `📱 Alt Rank #${altRank} — BTC domina atención social, momentum alcista` })
+    }
+  }
+
+  // ── WHALE MOVEMENT ────────────────────────────────────────────────────────
+  if (whaleAlert?.detected && whaleAlert.magnitude !== 'NONE') {
+    const { exchangeFlowSignal, magnitude, topTxBTC } = whaleAlert
+    const weight = magnitude === 'CRITICAL' ? 3 : magnitude === 'HIGH' ? 2 : 1
+
+    if (exchangeFlowSignal === 'BULLISH') {
+      // Distribution = coins leaving exchanges = bullish
+      bull += weight
+      reasons.push({ s: 'bull', txt: `🐋 Ballenas: salida de exchange ${Math.round(topTxBTC)} BTC — presión alcista` })
+    } else if (exchangeFlowSignal === 'BEARISH') {
+      // Consolidation = coins entering exchanges = bearish
+      bear += weight
+      reasons.push({ s: 'bear', txt: `🐋 Ballenas: depósito a exchange ${Math.round(topTxBTC)} BTC — presión vendedora` })
+    } else if (magnitude === 'CRITICAL') {
+      // Very large tx, direction unclear → adds volatility risk
+      bear += 1
+      reasons.push({ s: 'bear', txt: `🐋 Ballena CRÍTICA ${Math.round(topTxBTC)} BTC en mempool — volatilidad alta` })
     }
   }
 

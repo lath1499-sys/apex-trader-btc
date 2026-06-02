@@ -68,6 +68,12 @@ export function transformSignal(s: Record<string, unknown>): SignalRecord {
     pnlR:        (s.pnl_r as number | null) ?? null,
     closedAt:    (s.closed_at as string | null) ?? null,
     closeReason: (s.close_reason as string | null) ?? null,
+    // Persisted flags — prevent duplicate NTFY on each agent run
+    tp1Hit:              Boolean(s.tp1_hit),
+    tp2Hit:              Boolean(s.tp2_hit),
+    slWarningFired:      Boolean(s.sl_warning_fired),
+    expiryWarningFired:  Boolean(s.expiry_warning_fired),
+    ntfySent:            Boolean(s.ntfy_sent),
     idea: {
       side:       String(s.side) as 'LONG' | 'SHORT',
       tradeType:  String(s.trade_type) as 'Scalp' | 'DayTrade' | 'Swing',
@@ -118,9 +124,15 @@ export async function saveSignalToCloud(signal: SignalRecord): Promise<void> {
     closed_at:    signal.closedAt ?? null,
     exit_price:   signal.exitPrice ?? null,
     close_reason: signal.closeReason ?? null,
-    reasons:      signal.idea.reasons ?? [],
-    created_at:   signal.createdAt,
-    updated_at:   new Date().toISOString(),
+    reasons:               signal.idea.reasons ?? [],
+    created_at:            signal.createdAt,
+    updated_at:            new Date().toISOString(),
+    // Persisted flags — must survive agent restarts to prevent NTFY spam
+    tp1_hit:               signal.tp1Hit              ?? false,
+    tp2_hit:               signal.tp2Hit              ?? false,
+    sl_warning_fired:      signal.slWarningFired       ?? false,
+    expiry_warning_fired:  signal.expiryWarningFired   ?? false,
+    ntfy_sent:             signal.ntfySent             ?? false,
   }, { onConflict: 'id' })
 
   if (error) console.error('[Supabase] saveSignal error:', error.message)

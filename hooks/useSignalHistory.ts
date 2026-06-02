@@ -9,7 +9,7 @@ import { evaluateAutoClose }             from '@/lib/autoClose'
 import { saveSignalToCloud, loadSignalsFromCloud, getSupabase, transformSignal } from '@/lib/supabase'
 import {
   ntfyAutoClose, ntfyTPHit, ntfySLHit,
-  ntfyApproachingSL, ntfyAboutToExpire, ntfyTrailingSL, ntfyStopMoved,
+  ntfyApproachingSL, ntfyTrailingSL, ntfyStopMoved,
 } from '@/lib/ntfy'
 import { evaluateStopManagement } from '@/lib/stopManagement'
 
@@ -171,38 +171,45 @@ export function useSignalHistory() {
     // ── 1. TP/SL hit detection ────────────────────────────────────────────────
     let updated = updateSignalStatusesByPrice(current, price)
 
-    // Fire NTFY for any status transitions (active → tp*_hit / sl_hit)
+    // Fire NTFY for status transitions and partial TP hits
     updated.forEach((rec, i) => {
-      const old = current[i]
-      if (old.status !== 'active' || rec.status === 'active') return
+      const old    = current[i]
       const idea   = rec.idea
       const isLong = idea.side === 'LONG'
       const sig    = { side: idea.side, entry: idea.price, sl: idea.sl, tradeType: idea.tradeType }
-      if (rec.status === 'sl_hit') {
-        ntfySLHit(sig, idea.sl, rec.pnl ?? 0)
-      } else if (rec.status === 'tp1_hit') {
-        ntfyTPHit(sig, 'tp1', idea.tp1, rec.pnl ?? 0)
-        ntfyTrailingSL(sig, isLong ? idea.price * 0.9998 : idea.price * 1.0002)
-      } else if (rec.status === 'tp2_hit') {
-        ntfyTPHit(sig, 'tp2', idea.tp2, rec.pnl ?? 0)
-      } else if (rec.status === 'tp3_hit') {
-        ntfyTPHit(sig, 'tp3', idea.tp3, rec.pnl ?? 0)
+
+      // Full closes (status changed from active)
+      if (old.status === 'active' && rec.status !== 'active') {
+        if (rec.status === 'sl_hit') {
+          ntfySLHit(sig, idea.sl, rec.pnl ?? 0)
+        } else if (rec.status === 'tp3_hit') {
+          ntfyTPHit(sig, 'tp3', idea.tp3, rec.pnl ?? 0)
+        } else if (rec.status === 'auto_close') {
+          // bias-flip or funding close — no specific TP NTFY
+        }
+      }
+
+      // Partial TP1 hit — stays active, SL moved to entry
+      if (!old.tp1Hit && rec.tp1Hit) {
+        ntfyTPHit(sig, 'tp1', idea.tp1, 0)
+        ntfyTrailingSL(sig, isLong ? idea.price : idea.price)
+      }
+
+      // Partial TP2 hit — stays active, SL moved to TP1
+      if (!old.tp2Hit && rec.tp2Hit) {
+        ntfyTPHit(sig, 'tp2', idea.tp2, 0)
       }
     })
 
-    // ── 2. SL warning + expiry warning on still-active records ───────────────
+    // ── 2. SL warning on still-active records ────────────────────────────────
     const SL_WARN_THRESHOLD = 0.005  // 0.5% from SL
-    const EXPIRY_MINS: Record<string, number> = { Scalp: 120, DayTrade: 36 * 60, Swing: 168 * 60 }
-    const nowMs  = Date.now()
-    const nowIso = new Date(nowMs).toISOString()
+    const nowIso = new Date().toISOString()
 
     updated = updated.map(rec => {
       if (rec.status !== 'active') return rec
       const idea   = rec.idea
       const isLong = idea.side === 'LONG'
       const sig    = { side: idea.side, entry: idea.price, sl: idea.sl, tradeType: idea.tradeType }
-      let changed  = false
-      let next     = { ...rec }
 
       // SL approaching warning (only once)
       if (!rec.slWarningFired) {
@@ -211,24 +218,11 @@ export function useSignalHistory() {
           : (idea.sl - price) / idea.price
         if (distToSL > 0 && distToSL < SL_WARN_THRESHOLD) {
           ntfyApproachingSL(sig, price, distToSL * 100)
-          next = { ...next, slWarningFired: true }
-          changed = true
+          return { ...rec, slWarningFired: true }
         }
       }
 
-      // Expiry warning — 30 min before auto-close (only once)
-      if (!rec.expiryWarningFired) {
-        const minsAlive = (nowMs - new Date(rec.createdAt).getTime()) / 60_000
-        const maxMins   = EXPIRY_MINS[idea.tradeType] ?? EXPIRY_MINS.DayTrade
-        const minsLeft  = maxMins - minsAlive
-        if (minsLeft > 0 && minsLeft <= 30) {
-          ntfyAboutToExpire(sig, Math.round(minsLeft))
-          next = { ...next, expiryWarningFired: true }
-          changed = true
-        }
-      }
-
-      return changed ? next : rec
+      return rec
     })
 
     // ── 3. Auto-close evaluation ──────────────────────────────────────────────

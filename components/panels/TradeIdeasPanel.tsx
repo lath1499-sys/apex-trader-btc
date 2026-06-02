@@ -4,6 +4,7 @@ import { useApexStore } from '@/store/apexStore'
 import { useTheme } from '@/hooks/useTheme'
 import { fmt } from '@/lib/buildContext'
 import { calcSignalStats, closeManualSignal, loadSignalHistory, saveSignalHistory } from '@/lib/signalHistory'
+import { saveSignalToCloud } from '@/lib/supabase'
 import { getLearnedWeights } from '@/lib/scoreWeights'
 import type { TradeIdea, SignalRecord, IndicatorMap, MarketData } from '@/lib/types'
 import type { FVGResult } from '@/lib/fvg'
@@ -114,6 +115,12 @@ function ScalpCard({ sig }: { sig: ScalpSignal }) {
             <span style={{ fontSize: 9, fontWeight: 400, color: T.muted, marginLeft: 8 }}>{sig.duration}</span>
             {sig.status !== 'active' && (
               <span style={{ fontSize: 9, fontWeight: 700, color: T.warn, marginLeft: 8 }}>{statusLabels[sig.status] ?? sig.status}</span>
+            )}
+            {sig.status === 'active' && sig.tp2Hit && (
+              <span style={{ fontSize: 9, fontWeight: 700, color: '#16a34a', marginLeft: 8 }}>🎯🎯 TP2 tocado · SL→TP1</span>
+            )}
+            {sig.status === 'active' && sig.tp1Hit && !sig.tp2Hit && (
+              <span style={{ fontSize: 9, fontWeight: 700, color: '#22c55e', marginLeft: 8 }}>🎯 TP1 tocado · SL→entrada</span>
             )}
           </div>
           <div style={{ fontSize: 9, color: T.textSec, marginTop: 2 }}>
@@ -294,6 +301,12 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
             <span style={{ fontSize: 8, color: T.muted, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 3, padding: '1px 5px' }}>{idea.tradeType.toUpperCase()}</span>
             <span style={{ fontSize: 8, fontWeight: 700, color: confCol }}>{idea.confidence}</span>
             <span style={{ fontSize: 8, fontWeight: 700, color: STATUS_COLOR[status] ?? T.muted }}>{STATUS_LABEL[status] ?? status}</span>
+            {status === 'active' && rec?.tp2Hit && (
+              <span style={{ fontSize: 8, fontWeight: 700, color: '#16a34a' }}>🎯🎯 TP2·SL→TP1</span>
+            )}
+            {status === 'active' && rec?.tp1Hit && !rec?.tp2Hit && (
+              <span style={{ fontSize: 8, fontWeight: 700, color: '#22c55e' }}>🎯 TP1·SL→entry</span>
+            )}
             {rec?.pnlR != null && <span style={{ fontSize: 8, color: rec.pnlR >= 0 ? T.bull : T.danger }}>{rec.pnlR >= 0 ? '+' : ''}{rec.pnlR.toFixed(2)}R</span>}
             {unrealized != null && (
               <span style={{ fontSize: 9, fontWeight: 800, color: unrealized >= 0 ? T.bull : T.danger }}>
@@ -1330,6 +1343,9 @@ export default function TradeIdeasPanel() {
     const updated = closeManualSignal(current, id, price, reason)
     saveSignalHistory(updated)
     setSignalHistory(updated)
+    // Persist to Supabase immediately so agent never re-activates this signal
+    const closed = updated.find(s => s.id === id)
+    if (closed) saveSignalToCloud(closed).catch(() => {})
   }
 
   return (
