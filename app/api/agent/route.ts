@@ -22,7 +22,9 @@ import { analyzeMacroSentiment }                         from '@/lib/macroSentim
 import { fetchGlobalMarkets }                            from '@/lib/marketCorrelation'
 import { ntfyBBSqueeze }                                 from '@/lib/ntfy'
 import { loadAgentState, saveAgentState, detectOpinionChange } from '@/lib/agentMemory'
-import { fetchSocialSentiment } from '@/lib/socialSentiment'
+import { fetchSocialSentiment }       from '@/lib/socialSentiment'
+import { generateAgentUpdate, generateDeepAnalysis } from '@/lib/agentVoice'
+import { detectElliottWaves }          from '@/lib/elliottWaves'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
@@ -216,6 +218,20 @@ export async function GET(req: Request): Promise<NextResponse> {
     const active         = allSignals.filter(s => s.status === 'active')
     const learnedWeights = await calcLearnedWeights(getDbClient())
 
+    // ── Agent voice helpers — computed once, used in 30min + 4H blocks ────────
+    const ew4hResult = klines['4h'].length >= 20 ? detectElliottWaves(klines['4h']) : null
+    const ew1dResult = klines['1d'].length >= 20 ? detectElliottWaves(klines['1d']) : null
+    const ewMap      = { '4h': ew4hResult, '1d': ew1dResult }
+    const fvgsMap    = { '4h': fvg4h, '15m': fvg15m }
+    const activeSigData = active.map(s => ({
+      side:      s.idea.side,
+      entry:     s.idea.price,
+      sl:        s.idea.sl,
+      tradeType: s.idea.tradeType,
+    }))
+    let agentOpinionChange: string | null = null   // set inside generate-signal block if bias flips
+    const prevStateForVoice = await loadAgentState(getDbClient())
+
     for (const sig of active) {
       const isLong = sig.idea.side === 'LONG'
       let updated: SignalRecord = sig
@@ -334,9 +350,9 @@ export async function GET(req: Request): Promise<NextResponse> {
 
       // ── Agent memory: detect & record opinion changes ────────────────────────
       const memorySb    = getDbClient()
-      const prevState   = await loadAgentState(memorySb)
       const newBias     = newSignal ? newSignal.side : 'NEUTRAL'
-      const opinionNote = detectOpinionChange(prevState, newBias, newSignal ?? null, inds, regime ?? null)
+      const opinionNote = detectOpinionChange(prevStateForVoice, newBias, newSignal ?? null, inds, regime ?? null)
+      if (opinionNote) agentOpinionChange = opinionNote
       // Save new state (fire-and-forget)
       saveAgentState(memorySb, {
         id:             'current',
@@ -535,38 +551,59 @@ export async function GET(req: Request): Promise<NextResponse> {
     // ── 6. Periodic market analysis NTFY ─────────────────────────────────────
 
     if ((mins === 0 || mins === 30) && session.quality !== 'avoid' && ntfyTopic) {
-      const regimeDesc  = regime?.description ?? 'N/A'
-      const i4          = inds['4h']
-      const upcoming    = getUpcomingEvent(Date.now(), 4 * 60 * 60_000) // next 4h
+      const upcoming = getUpcomingEvent(Date.now(), 4 * 60 * 60_000)
+      const opinionLines = agentOpinionChange ? [agentOpinionChange] : []
+      const update = generateAgentUpdate(
+        price,
+        prevStateForVoice?.lastPrice ?? price,
+        inds,
+        regime,
+        session,
+        macroSentiment,
+        macroIndicators,
+        fedExpectations,
+        [],                  // news not fetched server-side
+        null,                // whaleAlert — V2 Section 4
+        null,                // realDelta  — future
+        ewMap,
+        fvgsMap,
+        liquidity,
+        activeSigData,
+        opinionLines,
+        null,                // patternMatch — future
+        globalMarkets,
+      )
+      const upcomingNote = upcoming
+        ? `\n\n⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución`
+        : ''
       await ntfy(
         ntfyTopic,
-        sanitizeHdr(`APEX Analisis 30min - ${session.name}`),
-        [
-          `Precio: $${Math.round(price).toLocaleString()} | ${session.name}`,
-          `Regimen: ${regimeDesc}`,
-          i4 ? `4H: ${i4.bias} | RSI ${i4.rsi?.toFixed(0)} | MACD ${i4.macd.hist > 0 ? 'alcista' : 'bajista'}` : '',
-          `Señales activas: ${activeCount}`,
-          `Funding: ${mkt.funding != null ? mkt.funding.toFixed(4) + '%' : 'N/A'} | F&G: ${mkt.fg ?? 'N/A'}`,
-          upcoming ? `⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución` : '',
-        ].filter(Boolean).join('\n'),
-        1,
+        sanitizeHdr(`APEX ${session.name} — $${Math.round(price).toLocaleString()}`),
+        update + upcomingNote,
+        2,
         'bar_chart',
       )
     }
 
     if (mins === 0 && hours % 4 === 0 && ntfyTopic) {
-      const i4 = inds['4h']
+      const deepAnalysis = generateDeepAnalysis(
+        price,
+        inds,
+        regime,
+        macroIndicators,
+        fedExpectations,
+        globalLiquidity,
+        ewMap,
+        [],                  // patterns — pass empty; candlePatterns used in scoring, not stored here
+        activeSigData,
+        null,                // perfStats — future
+        learnedWeights,
+      )
       await ntfy(
         ntfyTopic,
-        sanitizeHdr(`APEX Analisis 4H - hora ${hours}:00 UTC`),
-        [
-          `Precio: $${Math.round(price).toLocaleString()}`,
-          `Regimen: ${regime?.description ?? 'N/A'}`,
-          i4 ? `4H bias: ${i4.bias} (${i4.score}/9) | RSI ${i4.rsi?.toFixed(0)}` : '',
-          `Sesion: ${session.name} (${session.quality.toUpperCase()})`,
-          `Señales activas: ${activeCount}`,
-        ].filter(Boolean).join('\n'),
-        2,
+        sanitizeHdr(`APEX Analisis 4H — $${Math.round(price).toLocaleString()}`),
+        deepAnalysis,
+        3,
         'bar_chart,clock4',
       )
     }
