@@ -71,11 +71,19 @@ export function useSignalHistory() {
       const localOnly = current.filter(s => !cloudIds.has(s.id))
       const merged = [...cloud, ...localOnly]
       setSignalHistory(merged)
-      // Sync scalp signals into scalpHistory store so CandleChart + historial see them
-      // transformSignal nests fields under idea.* — reshape to flat ScalpSignal before pushing
+      // Sync closed scalps into scalpHistory store so historial tab shows them
       merged
         .filter(r => r.idea?.tradeType === 'Scalp' && r.status !== 'active')
         .forEach(r => pushScalpHistory(signalRecordToScalp(r)))
+      // Fix D: restore active scalp from Supabase into scalpSignal UI state (survives page reload)
+      const activeScalpRec = merged.find(r => r.idea?.tradeType === 'Scalp' && r.status === 'active')
+      if (activeScalpRec) {
+        const currentScalp = useApexStore.getState().scalpSignal
+        // Only restore if there's no in-memory active signal already (avoid overwriting live detection)
+        if (!currentScalp || currentScalp.status !== 'active') {
+          useApexStore.getState().setScalpSignal(signalRecordToScalp(activeScalpRec))
+        }
+      }
     }
 
     // Initial load

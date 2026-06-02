@@ -5,6 +5,8 @@ import type { MarketData, OrderBook } from '@/lib/types'
 import type { Kline } from '@/lib/types'
 import { calcVWAP, calcCVD, detectBOSCHoCH, getICTKillzones, detectScalpSignals } from '@/lib/scalpSignals'
 import { ntfyScalpSignal, ntfyTPHit, ntfySLHit, ntfyApproachingSL, ntfyTrailingSL } from '@/lib/ntfy'
+import { saveSignalToCloud } from '@/lib/supabase'
+import type { SignalRecord } from '@/lib/types'
 
 interface BinanceResponse {
   market: Record<string, number | string | boolean | null>
@@ -57,8 +59,7 @@ export function useMarketData() {
     setBosChoch(bc)
     setKillzones(kz)
 
-    // Run scalp signal detection when scalp mode is active
-    if (!useApexStore.getState().scalpMode) return
+    // Always run scalp detection — independent of UI scalpMode toggle
     const st    = useApexStore.getState()
     const price = st.mkt.price
     if (!price) return
@@ -70,26 +71,22 @@ export function useMarketData() {
       vwapResult, cvd, bc, kz,
       fvg15m, st.liquidity, st.orderBook, st.mkt.funding,
     )
-    // Only fire NTFY when a new non-null scalp signal appears
     const prev = useApexStore.getState().scalpSignal
-    if (sig && (!prev || prev.entry !== sig.entry || prev.side !== sig.side)) {
-      ntfyScalpSignal({
-        side:         sig.side,
-        entry:        sig.entry,
-        sl:           sig.sl,
-        tp1:          sig.tp1,
-        killzone:     sig.killzone,
-        duration:     sig.duration,
-        cvdSignal:    sig.cvdSignal,
-        qualityLabel: sig.qualityLabel,
-      })
-    }
-    // Only replace the active signal with a genuinely new one (different entry/side).
-    // If detectScalpSignals returns null, keep the current active signal alive.
+    // Never overwrite an active signal with null — only replace with genuinely new signal
     if (sig) {
-      const prev = useApexStore.getState().scalpSignal
       const isNew = !prev || prev.entry !== sig.entry || prev.side !== sig.side
-      if (isNew) setScalpSignal(sig)
+      if (isNew) {
+        // Don't overwrite a Supabase-backed active signal (has numeric id, no 'scalp_' prefix)
+        const isSupaBacked = prev && !String(prev.id).startsWith('scalp_')
+        if (!isSupaBacked) {
+          ntfyScalpSignal({
+            side: sig.side, entry: sig.entry, sl: sig.sl, tp1: sig.tp1,
+            killzone: sig.killzone, duration: sig.duration,
+            cvdSignal: sig.cvdSignal, qualityLabel: sig.qualityLabel,
+          })
+          setScalpSignal(sig)
+        }
+      }
     }
     // null → do nothing; signal persists until SL/TP hit or manual close
   }, [setVwap, setCvdData, setBosChoch, setKillzones, setScalpSignal])
@@ -101,7 +98,7 @@ export function useMarketData() {
   useEffect(() => {
     const sig   = scalpSignalRef
     const price = mktForScalp.price
-    if (!sig || !price || !scalpMode) return
+    if (!sig || !price) return
 
     const isLong = sig.side === 'LONG'
     const sigObj = { side: sig.side, entry: sig.entry, sl: sig.sl, tradeType: 'Scalp' as const }
@@ -136,9 +133,27 @@ export function useMarketData() {
         pnl:        pnlPct(exitPrice),
       }
       pushScalpHistory(closed)
-      // Only null if the signal is still active — prevents double-close race condition
+      // Clear active signal (prevents double-close race)
       const cur = useApexStore.getState().scalpSignal
       if (!cur || cur.status === 'active') setScalpSignal(null)
+      // Persist close to Supabase — find the matching active Scalp in signalHistory by side
+      // The agent's Supabase record must be closed so next run doesn't see it as active
+      const allSigs = useApexStore.getState().signalHistory ?? []
+      const supaRec = allSigs.find(r =>
+        r.idea.tradeType === 'Scalp' && r.status === 'active' && r.idea.side === sig.side,
+      )
+      if (supaRec) {
+        const updatedRec: SignalRecord = {
+          ...supaRec,
+          status:      closeStatus,
+          exitPrice:   exitPrice,
+          exitTs:      new Date().toISOString(),
+          pnl:         pnlPct(exitPrice),
+          closedAt:    new Date().toISOString(),
+          closeReason: closeStatus,
+        }
+        saveSignalToCloud(updatedRec).catch(() => {})
+      }
     }
 
     if (slHit) {
@@ -155,7 +170,7 @@ export function useMarketData() {
       ntfyTrailingSL(sigObj, sig.entry)
       setScalpSignal({ ...sig, status: 'tp1_hit' })
     }
-  }, [mktForScalp.price, scalpSignalRef, scalpMode, setScalpSignal, pushScalpHistory])
+  }, [mktForScalp.price, scalpSignalRef, setScalpSignal, pushScalpHistory])
 
   // ── Fast 10s refresh (scalp mode only) ────────────────────────────────────
   useEffect(() => {
