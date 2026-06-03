@@ -3,8 +3,8 @@ import { useEffect, useRef, useCallback } from 'react'
 import { useApexStore } from '@/store/apexStore'
 import type { MarketData, OrderBook } from '@/lib/types'
 import type { Kline } from '@/lib/types'
-import { calcVWAP, calcCVD, detectBOSCHoCH, getICTKillzones, detectScalpSignals } from '@/lib/scalpSignals'
-import { ntfyScalpSignal, ntfyTPHit, ntfySLHit, ntfyApproachingSL, ntfyTrailingSL } from '@/lib/ntfy'
+import { calcVWAP, calcCVD, detectBOSCHoCH, getICTKillzones } from '@/lib/scalpSignals'
+import { ntfyTPHit, ntfySLHit, ntfyApproachingSL, ntfyTrailingSL } from '@/lib/ntfy'
 import { saveSignalToCloud } from '@/lib/supabase'
 import type { SignalRecord } from '@/lib/types'
 
@@ -47,7 +47,9 @@ export function useMarketData() {
     { refreshInterval: 45_000, revalidateOnFocus: false, dedupingInterval: 10_000 }
   )
 
-  // Helper: recompute VWAP, CVD, BOS/CHoCH, Killzones and run scalp signal detection
+  // Helper: recompute VWAP, CVD, BOS/CHoCH, Killzones for display only
+  // Signal GENERATION is 100% server-side (app/api/agent/route.ts via Vercel Cron)
+  // Browser is READ-ONLY: displays signals loaded from Supabase, monitors SL/TP on existing signals
   const recalcScalpIndicators = useCallback((k1m: Kline[]) => {
     if (k1m.length < 5) return
     const vwapResult  = calcVWAP(k1m)
@@ -58,43 +60,8 @@ export function useMarketData() {
     setCvdData(cvd)
     setBosChoch(bc)
     setKillzones(kz)
-
-    // Always run scalp detection — independent of UI scalpMode toggle
-    const st    = useApexStore.getState()
-    const price = st.mkt.price
-    if (!price) return
-    const k15m   = st.rawK['15m'] ?? []
-    const k1h    = st.rawK['1h']  ?? []
-    const fvg15m = st.fvgs['15m']
-    const sig   = detectScalpSignals(
-      price, k15m, k1h,
-      vwapResult, cvd, bc, kz,
-      fvg15m, st.liquidity, st.orderBook, st.mkt.funding,
-    )
-    const prev = useApexStore.getState().scalpSignal
-    // Never overwrite an active signal with null — only replace with genuinely new signal
-    if (sig) {
-      const isSupaBacked = prev && !String(prev.id).startsWith('scalp_')
-      if (isSupaBacked) {
-        // Supabase-backed signal — never overwrite or re-notify from client side
-        return
-      }
-      // For client-generated signals: only notify/replace if side changed OR entry moved >1%
-      // (prevents spam from tiny price fluctuations re-triggering detectScalpSignals)
-      const isTrulyNew = !prev
-        || prev.side !== sig.side
-        || Math.abs(prev.entry - sig.entry) / prev.entry > 0.01
-      if (isTrulyNew) {
-        ntfyScalpSignal({
-          side: sig.side, entry: sig.entry, sl: sig.sl, tp1: sig.tp1,
-          killzone: sig.killzone, duration: sig.duration,
-          cvdSignal: sig.cvdSignal, qualityLabel: sig.qualityLabel,
-        })
-        setScalpSignal(sig)
-      }
-    }
-    // null → do nothing; signal persists until SL/TP hit or manual close
-  }, [setVwap, setCvdData, setBosChoch, setKillzones, setScalpSignal])
+    // No signal generation here — server agent handles all detection and saves to Supabase
+  }, [setVwap, setCvdData, setBosChoch, setKillzones])
 
   // ── Scalp SL/TP price monitoring ─────────────────────────────────────────
   const mktForScalp    = useApexStore(s => s.mkt)
