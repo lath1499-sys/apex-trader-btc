@@ -170,6 +170,12 @@ export async function fetchMarketData(): Promise<FetchedMarket> {
   }
   if (ob) result.orderBook = ob as OBData
 
+  // Price fallback: Binance → Bybit → Kraken
+  // Vercel IPs are often blocked by Binance — Bybit/Kraken serve as reliable fallbacks
+  if (result.price === null) {
+    result.price = result.bybitPrice ?? result.krakenPrice
+  }
+
   // Klines: Binance → Bybit → Kraken (each fallback only if previous returns null)
   const klinesEntries = await Promise.all(
     TFS.map(async (tf) => {
