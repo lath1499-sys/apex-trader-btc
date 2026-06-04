@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react'
 import { useApexStore } from '@/store/apexStore'
 import {
   loadSignalHistory, saveSignalHistory,
-  makeSignalRecord, updateSignalStatuses,
+  updateSignalStatuses,
   updateSignalStatusesByPrice,
 } from '@/lib/signalHistory'
-import { evaluateAutoClose }             from '@/lib/autoClose'
+// evaluateAutoClose removed — auto-close is disabled, server agent is sole signal closer.
 import { saveSignalToCloud, loadSignalsFromCloud, getSupabase, transformSignal } from '@/lib/supabase'
 // NTFY intentionally removed — server agent (app/api/agent/route.ts) sends all push notifications.
 import { evaluateStopManagement } from '@/lib/stopManagement'
@@ -46,10 +46,8 @@ function signalRecordToScalp(r: SignalRecord): ScalpSignal {
   }
 }
 
-const DEDUP_PCT = 0.005  // 0.5% price move required before saving same-side signal again
 
 export function useSignalHistory() {
-  const tradeHistory     = useApexStore(s => s.tradeHistory)
   const rawK             = useApexStore(s => s.rawK)
   const mkt              = useApexStore(s => s.mkt)
   const inds             = useApexStore(s => s.inds)
@@ -161,44 +159,8 @@ export function useSignalHistory() {
     }
   }, [setSignalHistory])
 
-  // Sync new trade ideas → signal records
-  // Multiple concurrent signals allowed — up to 5 active simultaneously
-  // Dedup: same-side signal requires 0.5% price move
-  useEffect(() => {
-    if (!tradeHistory.length) return
-    // Prefer store state (includes Supabase-loaded signals) over localStorage
-    // localStorage only has client-generated signals; cron signals only exist in Supabase
-    const storeHistory = useApexStore.getState().signalHistory
-    const current = storeHistory.length > 0 ? storeHistory : loadSignalHistory()
-
-    // For dedup: track the most-recent active entry per side
-    const lastActiveBySide: Record<string, number> = {}
-    for (const r of current) {
-      if (r.status === 'active' || r.status === 'pending_confirmation') {
-        if (!lastActiveBySide[r.idea.side]) {
-          lastActiveBySide[r.idea.side] = r.idea.price
-        }
-      }
-    }
-
-    const activeCount = current.filter(r => r.status === 'active').length
-
-    const newRecs = tradeHistory.filter(idea => {
-      // Cap at 5 concurrent active signals
-      if (activeCount >= 5) return false
-      const lastEntry = lastActiveBySide[idea.side]
-      if (!lastEntry) return true
-      // Require 0.5% price move to add another same-side signal
-      return Math.abs(idea.price - lastEntry) / lastEntry >= DEDUP_PCT
-    }).map(idea => makeSignalRecord(idea))  // all signals start as 'active'
-
-    if (!newRecs.length) return
-    const merged = [...newRecs, ...current].slice(0, 200)
-    saveSignalHistory(merged)
-    setSignalHistory(merged)
-    // Cloud sync: save new records asynchronously (fire-and-forget)
-    newRecs.forEach(r => saveSignalToCloud(r).catch(() => {}))
-  }, [tradeHistory, setSignalHistory])
+  // tradeHistory signal generation removed — server agent is sole signal source.
+  // pushTradeIdea has no callers; this effect was dead code generating ghost signals.
 
   // Real-time price update: TP/SL detection + warnings + auto-close
   useEffect(() => {
@@ -236,30 +198,7 @@ export function useSignalHistory() {
       return rec
     })
 
-    // ── 3. Auto-close evaluation ──────────────────────────────────────────────
-    const autoCloseEnabled = (() => {
-      try { return localStorage.getItem('apex_auto_close') !== 'false' } catch { return true }
-    })()
-
-    if (autoCloseEnabled) {
-      updated = updated.map(rec => {
-        if (rec.status !== 'active') return rec
-        const result = evaluateAutoClose(rec, price, inds, mkt)
-        if (!result) return rec
-        return {
-          ...rec,
-          status:      'sl_hit' as const,
-          exitPrice:   result.closePrice,
-          exitTs:      nowIso,
-          closedAt:    nowIso,
-          closeReason: result.reason,
-          pnl:         result.pnl,
-          pnlR:        result.pnlR,
-        } as typeof rec
-      })
-    }
-
-    // ── 4. Trailing stop / breakeven management ────────────────────────────────
+    // ── 3. Trailing stop / breakeven management ────────────────────────────────
     const k4h = rawK['4h'] ?? []
     updated = updated.map(rec => {
       if (rec.status !== 'active') return rec
@@ -284,8 +223,12 @@ export function useSignalHistory() {
     if (!anyChanged) return
     saveSignalHistory(updated)
     setSignalHistory(updated)
-    // Sync changed records to Supabase (stop updates, status changes, warnings)
-    updated.filter((r, i) => r !== current[i]).forEach(r => saveSignalToCloud(r).catch(() => {}))
+    // Sync ONLY non-terminal changes to Supabase (SL moves, warning flags).
+    // Server agent is sole authority for closing signals — client must NOT write
+    // sl_hit / tp*_hit / breakeven back to Supabase or it races with the server.
+    updated
+      .filter((r, i) => r !== current[i] && (r.status === 'active' || r.status === 'pending_confirmation'))
+      .forEach(r => saveSignalToCloud(r).catch(() => {}))
   }, [mkt.price, mkt, inds, rawK, setSignalHistory])
 
   // Candle-based update for accurate OHLC TP/SL fills (runs on kline refresh)
