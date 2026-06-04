@@ -26,6 +26,8 @@ import { fetchSocialSentiment }       from '@/lib/socialSentiment'
 import { generateAgentUpdate, generateDeepAnalysis } from '@/lib/agentVoice'
 import { detectElliottWaves }          from '@/lib/elliottWaves'
 import { fetchWhaleAlert }             from '@/lib/whaleDetector'
+import { checkCircuitBreaker }         from '@/lib/circuitBreaker'
+import { loadCapitalConfig, DEFAULT_CONFIG } from '@/lib/capitalManagement'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
@@ -422,6 +424,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     const allSignals     = await loadSignalsFromCloud() ?? []
     const active         = allSignals.filter(s => s.status === 'active')
     const learnedWeights = await calcLearnedWeights(getDbClient())
+    const capitalConfig  = await loadCapitalConfig(getDbClient() as any).catch(() => DEFAULT_CONFIG)
 
     // ── Agent voice helpers — computed once, used in 30min + 4H blocks ────────
     const ew4hResult = klines['4h'].length >= 20 ? detectElliottWaves(klines['4h']) : null
@@ -572,6 +575,13 @@ export async function GET(req: Request): Promise<NextResponse> {
         results.errors.push(`[APEX Correlation] Long bloqueado: ${globalMarkets!.btcCorrelation}`)
       }
 
+      // ── Circuit breaker: block new signals if loss limits breached ──────────
+      const cb = checkCircuitBreaker(allSignals, capitalConfig)
+      if (cb.blocked) {
+        results.errors.push(`[Circuit Breaker] ${cb.reason}`)
+        console.log(`[Circuit Breaker] BLOCKED — ${cb.reason}`)
+      }
+
       // ── Log decision to apex_decisions (learn from everything, win or skip) ──
       const sb = getDbClient()
       if (sb) {
@@ -593,14 +603,14 @@ export async function GET(req: Request): Promise<NextResponse> {
           stoch_4h:      inds['4h']?.stoch?.k ?? null,
           fg:            mkt.fg ?? null,
           funding:       mkt.funding ?? null,
-          skip_reason:   blockedByCorrelation ? 'correlation_risk_off' : newSignal ? null : 'score_or_filter',
+          skip_reason:   blockedByCorrelation ? 'correlation_risk_off' : cb.blocked ? 'circuit_breaker' : newSignal ? null : 'score_or_filter',
           signal_id:     null,   // updated after saveSignalToCloud
         }).then(({ error }: { error: { message: string } | null }) => {
           if (error) console.error('[APEX Decisions] insert error:', error.message)
         })
       }
 
-      if (newSignal && !newSignal.consolidation && !blockedByCorrelation) {
+      if (newSignal && !newSignal.consolidation && !blockedByCorrelation && !cb.blocked) {
         // Dedup: don't add same-side signal if one already active
         const sameActive = active.some(s => s.idea.side === newSignal.side && s.status === 'active')
         if (!sameActive && shouldGenerateSignal(newSignal.tradeType, newSignal.confidence)) {
