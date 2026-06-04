@@ -11,14 +11,16 @@ import type { RegimeAnalysis }          from './marketRegime'
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface AgentState {
-  id:             string       // always 'current' (singleton row)
-  lastBias:       string       // 'LONG' | 'SHORT' | 'NEUTRAL'
-  lastTradeType:  string | null
-  lastConfidence: string | null
-  lastPrice:      number
-  lastScore:      number
-  changeReason:   string | null
-  updatedAt:      string
+  id:                   string       // always 'current' (singleton row)
+  lastBias:             string       // 'LONG' | 'SHORT' | 'NEUTRAL'
+  lastTradeType:        string | null
+  lastConfidence:       string | null
+  lastPrice:            number
+  lastScore:            number
+  changeReason:         string | null
+  updatedAt:            string
+  lastAnalysisAt:       string | null  // ISO — last 30min market update
+  lastDeepAnalysisAt:   string | null  // ISO — last 4H deep analysis
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -38,14 +40,16 @@ export async function loadAgentState(sb: SbClient): Promise<AgentState | null> {
       .maybeSingle()
     if (error || !data) return null
     return {
-      id:             data.id,
-      lastBias:       data.last_bias       ?? 'NEUTRAL',
-      lastTradeType:  data.last_trade_type ?? null,
-      lastConfidence: data.last_confidence ?? null,
-      lastPrice:      data.last_price      ?? 0,
-      lastScore:      data.last_score      ?? 0,
-      changeReason:   data.change_reason   ?? null,
-      updatedAt:      data.updated_at      ?? new Date().toISOString(),
+      id:                   data.id,
+      lastBias:             data.last_bias             ?? 'NEUTRAL',
+      lastTradeType:        data.last_trade_type       ?? null,
+      lastConfidence:       data.last_confidence       ?? null,
+      lastPrice:            data.last_price            ?? 0,
+      lastScore:            data.last_score            ?? 0,
+      changeReason:         data.change_reason         ?? null,
+      updatedAt:            data.updated_at            ?? new Date().toISOString(),
+      lastAnalysisAt:       data.last_analysis_at      ?? null,
+      lastDeepAnalysisAt:   data.last_deep_analysis_at ?? null,
     }
   } catch { return null }
 }
@@ -54,14 +58,16 @@ export async function saveAgentState(sb: SbClient, state: AgentState): Promise<v
   if (!sb) return
   try {
     await sb.from('apex_agent_state').upsert({
-      id:              state.id,
-      last_bias:       state.lastBias,
-      last_trade_type: state.lastTradeType,
-      last_confidence: state.lastConfidence,
-      last_price:      state.lastPrice,
-      last_score:      state.lastScore,
-      change_reason:   state.changeReason,
-      updated_at:      new Date().toISOString(),
+      id:                    state.id,
+      last_bias:             state.lastBias,
+      last_trade_type:       state.lastTradeType,
+      last_confidence:       state.lastConfidence,
+      last_price:            state.lastPrice,
+      last_score:            state.lastScore,
+      change_reason:         state.changeReason,
+      updated_at:            new Date().toISOString(),
+      last_analysis_at:      state.lastAnalysisAt      ?? null,
+      last_deep_analysis_at: state.lastDeepAnalysisAt  ?? null,
     })
   } catch { /* non-critical */ }
 }

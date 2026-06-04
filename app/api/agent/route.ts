@@ -586,14 +586,16 @@ export async function GET(req: Request): Promise<NextResponse> {
       if (opinionNote) agentOpinionChange = opinionNote
       // Save new state (fire-and-forget)
       saveAgentState(memorySb, {
-        id:             'current',
-        lastBias:       newBias,
-        lastTradeType:  newSignal?.tradeType ?? null,
-        lastConfidence: newSignal?.confidence ?? null,
-        lastPrice:      mkt.price ?? 0,
-        lastScore:      newSignal?.maxSc ?? 0,
-        changeReason:   opinionNote,
-        updatedAt:      new Date().toISOString(),
+        id:                   'current',
+        lastBias:             newBias,
+        lastTradeType:        newSignal?.tradeType  ?? null,
+        lastConfidence:       newSignal?.confidence ?? null,
+        lastPrice:            mkt.price             ?? 0,
+        lastScore:            newSignal?.maxSc      ?? 0,
+        changeReason:         opinionNote,
+        updatedAt:            new Date().toISOString(),
+        lastAnalysisAt:       prevStateForVoice?.lastAnalysisAt     ?? null,
+        lastDeepAnalysisAt:   prevStateForVoice?.lastDeepAnalysisAt ?? null,
       }).catch(() => {})
 
       // ── Block longs in global risk-off environment ───────────────────────────
@@ -777,12 +779,21 @@ export async function GET(req: Request): Promise<NextResponse> {
       }
     }
 
-    // ── 6. Periodic market analysis NTFY ─────────────────────────────────────
+    // ── 6. Periodic market analysis NTFY — time-since-last (not exact minute) ──
+    // GitHub Actions runs at irregular times — exact :00/:30 checks NEVER fire.
+    // Instead: track last send time in apex_agent_state and use elapsed time.
 
-    if ((mins === 0 || mins === 30) && session.quality !== 'avoid' && ntfyTopic) {
-      const upcoming = getUpcomingEvent(Date.now(), 4 * 60 * 60_000)
+    const now            = Date.now()
+    const lastAnalysis   = prevStateForVoice?.lastAnalysisAt   ? new Date(prevStateForVoice.lastAnalysisAt).getTime()   : 0
+    const lastDeep       = prevStateForVoice?.lastDeepAnalysisAt ? new Date(prevStateForVoice.lastDeepAnalysisAt).getTime() : 0
+    const minsSinceUpdate = (now - lastAnalysis)   / 60_000
+    const hrsSinceDeep    = (now - lastDeep)       / 3_600_000
+
+    // 30-min market update — fire if 25+ minutes since last send AND session not 'avoid'
+    if (minsSinceUpdate >= 25 && session.quality !== 'avoid' && ntfyTopic) {
+      const upcoming     = getUpcomingEvent(Date.now(), 4 * 60 * 60_000)
       const opinionLines = agentOpinionChange ? [agentOpinionChange] : []
-      const update = generateAgentUpdate(
+      const update       = generateAgentUpdate(
         price,
         prevStateForVoice?.lastPrice ?? price,
         inds,
@@ -812,9 +823,23 @@ export async function GET(req: Request): Promise<NextResponse> {
         2,
         'bar_chart',
       )
+      // Persist send time so next run respects the 25-min gap
+      await saveAgentState(getDbClient(), {
+        id:                   'current',
+        lastBias:             prevStateForVoice?.lastBias       ?? 'NEUTRAL',
+        lastTradeType:        prevStateForVoice?.lastTradeType  ?? null,
+        lastConfidence:       prevStateForVoice?.lastConfidence ?? null,
+        lastPrice:            prevStateForVoice?.lastPrice      ?? price,
+        lastScore:            prevStateForVoice?.lastScore      ?? 0,
+        changeReason:         prevStateForVoice?.changeReason   ?? null,
+        updatedAt:            new Date().toISOString(),
+        lastAnalysisAt:       new Date().toISOString(),
+        lastDeepAnalysisAt:   prevStateForVoice?.lastDeepAnalysisAt ?? null,
+      }).catch(() => {})
     }
 
-    if (mins === 0 && hours % 4 === 0 && ntfyTopic) {
+    // 4H deep analysis — fire if 4+ hours since last deep send
+    if (hrsSinceDeep >= 4 && ntfyTopic) {
       const deepAnalysis = generateDeepAnalysis(
         price,
         inds,
@@ -835,12 +860,24 @@ export async function GET(req: Request): Promise<NextResponse> {
         3,
         'bar_chart,clock4',
       )
+      await saveAgentState(getDbClient(), {
+        id:                   'current',
+        lastBias:             prevStateForVoice?.lastBias       ?? 'NEUTRAL',
+        lastTradeType:        prevStateForVoice?.lastTradeType  ?? null,
+        lastConfidence:       prevStateForVoice?.lastConfidence ?? null,
+        lastPrice:            prevStateForVoice?.lastPrice      ?? price,
+        lastScore:            prevStateForVoice?.lastScore      ?? 0,
+        changeReason:         prevStateForVoice?.changeReason   ?? null,
+        updatedAt:            new Date().toISOString(),
+        lastAnalysisAt:       prevStateForVoice?.lastAnalysisAt ?? null,
+        lastDeepAnalysisAt:   new Date().toISOString(),
+      }).catch(() => {})
     }
 
     // ── 7. BB Squeeze alert — max once per 4 hours ────────────────────────────
     // Fires when BB Width 4H drops below 0.8% (extreme compression — breakout imminent)
-    // Spam guard: only when mins === 0 && hours % 4 === 0 (coincides with 4H analysis block)
-    if (regime && regime.bbWidthPct < 0.8 && mins === 0 && hours % 4 === 0 && ntfyTopic) {
+    // Spam guard: piggyback on 4H deep analysis cadence
+    if (regime && regime.bbWidthPct < 0.8 && hrsSinceDeep >= 4 && ntfyTopic) {
       await ntfyBBSqueeze(price, regime.bbWidthPct, ntfyTopic)
     }
 
