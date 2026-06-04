@@ -220,6 +220,40 @@ export default function PriceAlertPanel() {
         </div>
       </div>
 
+      {/* ── Capital Management ─────────────────────────────────────────────── */}
+      <div style={card}>
+        <div style={{ fontSize: 9, color: T.muted, letterSpacing: '.14em', marginBottom: 12 }}>💰 GESTIÓN DE CAPITAL (KELLY)</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+          {([
+            { key: 'totalCapital',    label: 'Capital Total ($)',    min: 100,  step: 100 },
+            { key: 'maxRiskPerTrade', label: 'Riesgo Máx/Op (%)',   min: 0.1,  step: 0.1 },
+            { key: 'maxOpenTrades',   label: 'Ops Abiertas Máx',    min: 1,    step: 1   },
+            { key: 'maxDailyLoss',    label: 'Pérd Diaria Máx (%)', min: 0.5,  step: 0.5 },
+            { key: 'maxWeeklyLoss',   label: 'Pérd Semanal Máx (%)',min: 1,    step: 1   },
+            { key: 'leverageLimit',   label: 'Leverage Máximo (x)', min: 1,    step: 1   },
+          ] as Array<{ key: keyof typeof capitalConfig; label: string; min: number; step: number }>).map(({ key, label, min, step }) => (
+            <div key={key}>
+              <div style={{ fontSize: 8, color: T.muted, marginBottom: 3 }}>{label}</div>
+              <input
+                type="number" min={min} step={step}
+                value={capitalConfig[key]}
+                onChange={e => updateCapital(key, e.target.value)}
+                style={{ width: '100%', background: T.bg, border: `1px solid ${T.border}`, color: T.text, fontFamily: 'inherit', fontSize: 11, padding: '6px 8px', borderRadius: 5, outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+          ))}
+        </div>
+        <button onClick={saveCapital} disabled={capitalSaving} style={{
+          width: '100%', background: T.accent + '22', border: `1px solid ${T.accent}`,
+          color: T.accent, padding: '8px 0', borderRadius: 5, cursor: capitalSaving ? 'not-allowed' : 'pointer',
+          fontFamily: 'inherit', fontSize: 9, fontWeight: 700, opacity: capitalSaving ? 0.5 : 1,
+        }}>{capitalSaving ? 'GUARDANDO...' : '💾 GUARDAR CONFIGURACIÓN'}</button>
+        <div style={{ fontSize: 8, color: T.muted, marginTop: 6, textAlign: 'center' }}>
+          Kelly ½ · Riesgo por op: ${((capitalConfig.totalCapital * capitalConfig.maxRiskPerTrade) / 100).toFixed(0)}
+          {' · '}Max open: ${((capitalConfig.totalCapital * capitalConfig.maxRiskPerTrade * capitalConfig.maxOpenTrades) / 100).toFixed(0)} total expuesto
+        </div>
+      </div>
+
       {alerts.length === 0 ? (
         <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 7, padding: 30, textAlign: 'center', color: T.textSec, fontSize: 11 }}>Sin alertas. Añade una arriba.</div>
       ) : (
