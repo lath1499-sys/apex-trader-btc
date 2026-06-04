@@ -448,31 +448,59 @@ export async function GET(req: Request): Promise<NextResponse> {
       let   updated: SignalRecord = sig
       let   changed  = false
 
-      // ── SL hit ────────────────────────────────────────────────────────────────
-      if ((isLong && price <= sig.idea.sl) || (!isLong && price >= sig.idea.sl)) {
-        const wasBreakeven = (sig as { breakevenSet?: boolean }).breakevenSet === true
-          || Math.abs((sig.idea.sl - sig.idea.price) / sig.idea.price * 100) < 0.15
-        updated = await handleSignalEvent(sig, wasBreakeven ? 'breakeven_sl' : 'sl', sig.idea.sl, ntfyTopic, {
-          reason: wasBreakeven ? 'SL en breakeven tocado' : 'SL tocado',
-        })
-        changed = true
+      // ── Retroactive kline scan: catch TPs hit while agent was asleep ──────────
+      // If agent had a gap (GitHub Actions unreliable), price could have touched TP1
+      // and recovered to SL without the agent seeing it. Scan 1H candles first.
+      const signalMs   = new Date(sig.createdAt).getTime()
+      const k1hHistory = (klines['1h'] ?? []).filter(k => k.t > signalMs)
+      if (!sig.tp1Hit && !changed) {
+        const tp1InHistory = k1hHistory.some(k => isLong ? k.h >= sig.idea.tp1 : k.l <= sig.idea.tp1)
+        if (tp1InHistory) {
+          updated = await handleSignalEvent(sig, 'tp1', sig.idea.tp1, ntfyTopic, { reason: 'TP1 alcanzado (histórico — agente inactivo)' })
+          ;(updated as { breakevenSet?: boolean }).breakevenSet = true
+          await saveSignalToCloud(updated)
+          changed = true
+          results.updates.push({ id: sig.id, action: 'tp1_retroactive', newSL: sig.idea.price })
+        }
       }
+      if (!sig.tp2Hit && !changed) {
+        const tp2InHistory = k1hHistory.some(k => isLong ? k.h >= sig.idea.tp2 : k.l <= sig.idea.tp2)
+        if (tp2InHistory && sig.tp1Hit) {
+          updated = await handleSignalEvent(updated, 'tp2', sig.idea.tp2, ntfyTopic, { reason: 'TP2 alcanzado (histórico — agente inactivo)' })
+          await saveSignalToCloud(updated)
+          changed = true
+          results.updates.push({ id: sig.id, action: 'tp2_retroactive', newSL: sig.idea.tp1 })
+        }
+      }
+
       // ── TP3 ───────────────────────────────────────────────────────────────────
-      else if ((isLong && price >= sig.idea.tp3) || (!isLong && price <= sig.idea.tp3)) {
-        updated = await handleSignalEvent(sig, 'tp3', sig.idea.tp3, ntfyTopic, { reason: 'TP3 alcanzado' })
+      // ALWAYS check TPs before SL — a signal that hit TP and retraced is a WIN
+      if (!changed && (isLong ? price >= sig.idea.tp3 : price <= sig.idea.tp3)) {
+        updated = await handleSignalEvent(updated, 'tp3', sig.idea.tp3, ntfyTopic, { reason: 'TP3 alcanzado' })
         changed = true
       }
       // ── TP2 ───────────────────────────────────────────────────────────────────
-      else if (((isLong && price >= sig.idea.tp2) || (!isLong && price <= sig.idea.tp2)) && !sig.tp2Hit) {
-        updated = await handleSignalEvent(sig, 'tp2', sig.idea.tp2, ntfyTopic, { reason: 'TP2 alcanzado' })
+      else if (!changed && !sig.tp2Hit && (isLong ? price >= sig.idea.tp2 : price <= sig.idea.tp2)) {
+        updated = await handleSignalEvent(updated, 'tp2', sig.idea.tp2, ntfyTopic, { reason: 'TP2 alcanzado' })
         await saveSignalToCloud(updated)   // persist BEFORE next check to prevent re-fire
         changed = true
       }
       // ── TP1 ───────────────────────────────────────────────────────────────────
-      else if (((isLong && price >= sig.idea.tp1) || (!isLong && price <= sig.idea.tp1)) && !sig.tp1Hit) {
-        updated = await handleSignalEvent(sig, 'tp1', sig.idea.tp1, ntfyTopic, { reason: 'TP1 alcanzado' })
+      else if (!changed && !sig.tp1Hit && (isLong ? price >= sig.idea.tp1 : price <= sig.idea.tp1)) {
+        updated = await handleSignalEvent(updated, 'tp1', sig.idea.tp1, ntfyTopic, { reason: 'TP1 alcanzado' })
         ;(updated as { breakevenSet?: boolean }).breakevenSet = true
         await saveSignalToCloud(updated)   // persist BEFORE next check to prevent re-fire
+        changed = true
+      }
+      // ── SL hit — checked LAST so a TP always wins over SL on same tick ────────
+      else if (!changed && (isLong ? price <= updated.idea.sl : price >= updated.idea.sl)) {
+        const wasBreakeven = (updated as { breakevenSet?: boolean }).breakevenSet === true
+          || Math.abs((updated.idea.sl - updated.idea.price) / updated.idea.price * 100) < 0.15
+        updated = await handleSignalEvent(updated, wasBreakeven ? 'breakeven_sl' : 'sl', updated.idea.sl, ntfyTopic, {
+          reason: wasBreakeven
+            ? `SL en breakeven tocado a $${Math.round(updated.idea.sl).toLocaleString()}`
+            : `SL tocado a $${Math.round(updated.idea.sl).toLocaleString()}`,
+        })
         changed = true
       }
 
