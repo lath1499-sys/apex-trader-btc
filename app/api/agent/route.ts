@@ -14,7 +14,7 @@ import { getCurrentTradingSession, shouldGenerateSignal } from '@/lib/tradingHou
 import { getActiveBlockingEvent, getUpcomingEvent, minutesUntilEvent, fetchUpcomingEvents } from '@/lib/macroCalendar'
 import { fetchMacroIndicators, fetchFedExpectations }  from '@/lib/macroEconomics'
 import { fetchGlobalLiquidity }                        from '@/lib/globalLiquidity'
-import { saveSignalToCloud, loadSignalsFromCloud, getSupabaseServer, getSupabase } from '@/lib/supabase'
+import { saveSignalToCloud, loadSignalsFromCloud, getSupabaseServer, getSupabase, transformSignal } from '@/lib/supabase'
 import { calcLearnedWeights }                             from '@/lib/selfLearning'
 import { fetchMarketData }                               from '@/lib/marketFetch'
 import { writeTradeAnalysis }                            from '@/lib/analysisWriter'
@@ -297,6 +297,8 @@ export async function GET(req: Request): Promise<NextResponse> {
     scalpSkipped?: string
     update30minSent?: boolean
     update30minSkipped?: string
+    signalsLoaded?: number
+    signalsActive?: number
   } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null, macro: null }
 
   try {
@@ -426,8 +428,20 @@ export async function GET(req: Request): Promise<NextResponse> {
     const hours  = nowUtc.getUTCHours()
 
     // ── 3. Load existing signals + compute learned weights ────────────────────
-    const allSignals     = await loadSignalsFromCloud() ?? []
-    const active         = allSignals.filter(s => s.status === 'active')
+    // Use getDbClient() (service key, bypasses RLS) instead of loadSignalsFromCloud()
+    // which uses a module-level singleton that may fall back to the anon key on Vercel.
+    const signalsSb = getDbClient()
+    const { data: rawSignals, error: signalsErr } = await signalsSb
+      .from('apex_signals')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(500)
+    if (signalsErr) results.errors.push(`[Signals] ${signalsErr.message}`)
+    const allSignals: SignalRecord[] = (rawSignals ?? []).map((s: Record<string, unknown>) => transformSignal(s))
+    const active     = allSignals.filter(s => s.status === 'active')
+    results.signalsLoaded = allSignals.length
+    results.signalsActive = active.length
+    console.log(`[APEX] Signals loaded: ${allSignals.length} total, ${active.length} active`)
     const learnedWeights = await calcLearnedWeights(getDbClient())
     const capitalConfig  = await loadCapitalConfig(getDbClient() as any).catch(() => DEFAULT_CONFIG)
 
