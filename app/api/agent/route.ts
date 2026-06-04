@@ -28,6 +28,8 @@ import { detectElliottWaves }          from '@/lib/elliottWaves'
 import { fetchWhaleAlert }             from '@/lib/whaleDetector'
 import { checkCircuitBreaker }         from '@/lib/circuitBreaker'
 import { loadCapitalConfig, DEFAULT_CONFIG } from '@/lib/capitalManagement'
+import { fetchOptionsData }             from '@/lib/deribitFetch'
+import { runWalkForward }               from '@/lib/walkForwardBacktest'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
@@ -278,6 +280,7 @@ export async function GET(req: Request): Promise<NextResponse> {
   }
 
   const ntfyTopic = process.env.NTFY_TOPIC ?? ''
+  if (!ntfyTopic) console.warn('[APEX NTFY] NTFY_TOPIC env var not set — push notifications disabled')
   const time      = new Date().toISOString()
   const results: {
     time: string; session: string; regime: string
@@ -292,6 +295,8 @@ export async function GET(req: Request): Promise<NextResponse> {
       yieldCurveT10y2y?: number | null; yieldSignal?: string; sofr?: number | null; cutProbability?: number
     } | null
     scalpSkipped?: string
+    update30minSent?: boolean
+    update30minSkipped?: string
   } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null, macro: null }
 
   try {
@@ -425,6 +430,22 @@ export async function GET(req: Request): Promise<NextResponse> {
     const active         = allSignals.filter(s => s.status === 'active')
     const learnedWeights = await calcLearnedWeights(getDbClient())
     const capitalConfig  = await loadCapitalConfig(getDbClient() as any).catch(() => DEFAULT_CONFIG)
+
+    // ── 3b. Options data (Deribit DVOL + Max Pain) — 15-min cache ────────────
+    const optionsData = await fetchOptionsData().catch(() => null)
+
+    // ── 3c. Walk-Forward validation on real closed signals ───────────────────
+    const wfResult = runWalkForward(allSignals)
+
+    // ── 3d. Performance stats from closed signals ────────────────────────────
+    const resolved   = allSignals.filter(s => s.pnl != null)
+    const perfWins   = resolved.filter(s => (s.pnl ?? 0) > 0.1)
+    const perfLosses = resolved.filter(s => (s.pnl ?? 0) < -0.1 && s.status !== 'breakeven')
+    const perfStats  = resolved.length >= 5 ? {
+      total:    resolved.length,
+      winRate:  Math.round(perfWins.length / Math.max(perfWins.length + perfLosses.length, 1) * 100),
+      totalPnl: parseFloat(resolved.reduce((acc, r) => acc + (r.pnl ?? 0), 0).toFixed(2)),
+    } : null
 
     // ── Agent voice helpers — computed once, used in 30min + 4H blocks ────────
     const ew4hResult = klines['4h'].length >= 20 ? detectElliottWaves(klines['4h']) : null
@@ -584,19 +605,22 @@ export async function GET(req: Request): Promise<NextResponse> {
       const newBias     = newSignal ? newSignal.side : 'NEUTRAL'
       const opinionNote = detectOpinionChange(prevStateForVoice, newBias, newSignal ?? null, inds, regime ?? null)
       if (opinionNote) agentOpinionChange = opinionNote
-      // Save new state (fire-and-forget)
-      saveAgentState(memorySb, {
-        id:                   'current',
-        lastBias:             newBias,
-        lastTradeType:        newSignal?.tradeType  ?? null,
-        lastConfidence:       newSignal?.confidence ?? null,
-        lastPrice:            mkt.price             ?? 0,
-        lastScore:            newSignal?.maxSc      ?? 0,
-        changeReason:         opinionNote,
-        updatedAt:            new Date().toISOString(),
-        lastAnalysisAt:       prevStateForVoice?.lastAnalysisAt     ?? null,
-        lastDeepAnalysisAt:   prevStateForVoice?.lastDeepAnalysisAt ?? null,
-      }).catch(() => {})
+      // Save new state (fire-and-forget — deliberately excludes last_analysis_at /
+      // last_deep_analysis_at so it cannot race-overwrite the 30-min / 4H targeted updates)
+      if (memorySb) {
+        memorySb.from('apex_agent_state').upsert({
+          id:              'current',
+          last_bias:       newBias,
+          last_trade_type: newSignal?.tradeType  ?? null,
+          last_confidence: newSignal?.confidence ?? null,
+          last_price:      mkt.price             ?? 0,
+          last_score:      newSignal?.maxSc      ?? 0,
+          change_reason:   opinionNote,
+          updated_at:      new Date().toISOString(),
+          // NOTE: last_analysis_at / last_deep_analysis_at intentionally omitted —
+          // those columns are owned exclusively by the 30-min and 4H targeted updates.
+        }).catch(() => {})
+      }
 
       // ── Block longs in global risk-off environment ───────────────────────────
       const blockedByCorrelation =
@@ -672,6 +696,8 @@ export async function GET(req: Request): Promise<NextResponse> {
               analysis:   [
                             opinionNote,
                             writeTradeAnalysis({ idea: newSignal, inds, mkt, regime: regime ?? null,
+                              ew:               ewMap as Record<string, { currentWave?: string; direction?: string; confidence?: string; nextTarget?: number; invalidation?: number }>,
+                              optionsData:      optionsData ?? null,
                               macroIndicators:  macroIndicators ?? null,
                               globalLiquidity:  globalLiquidity ?? null,
                               fedExpectations:  fedExpectations ?? null,
@@ -789,8 +815,8 @@ export async function GET(req: Request): Promise<NextResponse> {
     const minsSinceUpdate = (now - lastAnalysis)   / 60_000
     const hrsSinceDeep    = (now - lastDeep)       / 3_600_000
 
-    // 30-min market update — fire if 25+ minutes since last send AND session not 'avoid'
-    if (minsSinceUpdate >= 25 && session.quality !== 'avoid' && ntfyTopic) {
+    // 30-min market update — fire if 25+ minutes since last send
+    if (minsSinceUpdate >= 25 && ntfyTopic) {
       const upcoming     = getUpcomingEvent(Date.now(), 4 * 60 * 60_000)
       const opinionLines = agentOpinionChange ? [agentOpinionChange] : []
       const update       = generateAgentUpdate(
@@ -812,6 +838,8 @@ export async function GET(req: Request): Promise<NextResponse> {
         opinionLines,
         null,                // patternMatch — future
         globalMarkets,
+        optionsData,         // IV Rank + Max Pain + PCR
+        wfResult.isReliable ? wfResult.grade : null,   // Walk-Forward grade
       )
       const upcomingNote = upcoming
         ? `\n\n⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución`
@@ -823,19 +851,19 @@ export async function GET(req: Request): Promise<NextResponse> {
         2,
         'bar_chart',
       )
-      // Persist send time so next run respects the 25-min gap
-      await saveAgentState(getDbClient(), {
-        id:                   'current',
-        lastBias:             prevStateForVoice?.lastBias       ?? 'NEUTRAL',
-        lastTradeType:        prevStateForVoice?.lastTradeType  ?? null,
-        lastConfidence:       prevStateForVoice?.lastConfidence ?? null,
-        lastPrice:            prevStateForVoice?.lastPrice      ?? price,
-        lastScore:            prevStateForVoice?.lastScore      ?? 0,
-        changeReason:         prevStateForVoice?.changeReason   ?? null,
-        updatedAt:            new Date().toISOString(),
-        lastAnalysisAt:       new Date().toISOString(),
-        lastDeepAnalysisAt:   prevStateForVoice?.lastDeepAnalysisAt ?? null,
-      }).catch(() => {})
+      results.update30minSent = true
+      // Persist send time — targeted .update() (not upsert) so it can't be
+      // overwritten by the fire-and-forget upsert that runs earlier in this request.
+      const memorySb30 = getDbClient()
+      if (memorySb30) {
+        await memorySb30
+          .from('apex_agent_state')
+          .update({ last_analysis_at: new Date().toISOString() })
+          .eq('id', 'current')
+          .catch(() => {})
+      }
+    } else if (!results.update30minSent) {
+      results.update30minSkipped = `minsSince: ${minsSinceUpdate.toFixed(1)}, ntfyTopic: ${ntfyTopic ? 'set' : 'MISSING'}, session: ${session.quality}`
     }
 
     // 4H deep analysis — fire if 4+ hours since last deep send
@@ -848,10 +876,12 @@ export async function GET(req: Request): Promise<NextResponse> {
         fedExpectations,
         globalLiquidity,
         ewMap,
-        [],                  // patterns — pass empty; candlePatterns used in scoring, not stored here
+        [],                  // patterns — candlePatterns used in scoring, not stored here
         activeSigData,
-        null,                // perfStats — future
+        perfStats,           // computed from real closed signals
         learnedWeights,
+        optionsData,         // IV Rank + Max Pain + PCR
+        wfResult.isReliable ? wfResult : null,  // Walk-Forward results
       )
       await ntfy(
         ntfyTopic,
@@ -860,18 +890,15 @@ export async function GET(req: Request): Promise<NextResponse> {
         3,
         'bar_chart,clock4',
       )
-      await saveAgentState(getDbClient(), {
-        id:                   'current',
-        lastBias:             prevStateForVoice?.lastBias       ?? 'NEUTRAL',
-        lastTradeType:        prevStateForVoice?.lastTradeType  ?? null,
-        lastConfidence:       prevStateForVoice?.lastConfidence ?? null,
-        lastPrice:            prevStateForVoice?.lastPrice      ?? price,
-        lastScore:            prevStateForVoice?.lastScore      ?? 0,
-        changeReason:         prevStateForVoice?.changeReason   ?? null,
-        updatedAt:            new Date().toISOString(),
-        lastAnalysisAt:       prevStateForVoice?.lastAnalysisAt ?? null,
-        lastDeepAnalysisAt:   new Date().toISOString(),
-      }).catch(() => {})
+      // Targeted .update() — only touch last_deep_analysis_at to avoid race with fire-and-forget save
+      const memorySb4h = getDbClient()
+      if (memorySb4h) {
+        await memorySb4h
+          .from('apex_agent_state')
+          .update({ last_deep_analysis_at: new Date().toISOString() })
+          .eq('id', 'current')
+          .catch(() => {})
+      }
     }
 
     // ── 7. BB Squeeze alert — max once per 4 hours ────────────────────────────
