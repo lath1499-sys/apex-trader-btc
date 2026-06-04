@@ -743,23 +743,7 @@ export async function GET(req: Request): Promise<NextResponse> {
             },
           }
           await saveSignalToCloud(rec)   // persist ntfySent=true BEFORE sending NTFY
-          if (ntfyTopic) {
-            await ntfy(
-              ntfyTopic,
-              sanitizeHdr(`APEX SCALP: ${scalpSig.side} BTC - ${scalpSig.confidence}`),
-              [
-                `⚡ SCALP ${scalpSig.side} | ${scalpSig.killzone ?? session.name}`,
-                `Entrada: $${Math.round(scalpSig.entry).toLocaleString()}`,
-                `SL:  $${Math.round(scalpSig.sl).toLocaleString()}`,
-                `TP1: $${Math.round(scalpSig.tp1).toLocaleString()}`,
-                `Duración estimada: ${scalpSig.duration}`,
-                ``,
-                scalpSig.reasons.slice(0, 3).join('\n'),
-              ].join('\n'),
-              4,
-              'zap,chart_with_upwards_trend',
-            )
-          }
+          await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
           results.signals.push({ type: 'Scalp', side: scalpSig.side, confidence: scalpSig.confidence })
         }
       }
