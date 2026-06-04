@@ -60,7 +60,7 @@ export function useIndicators() {
 
     const klines4h = rawK['4h']
     if (klines4h) setDivergences(detectDivergences(klines4h))
-    if (mkt.price) setCycle(getBTCCycle(mkt.price))
+    if (mkt.price) setCycle(getBTCCycle(mkt.price, rawK['1d'] ?? []))
     setAlerts(getAutoAlerts(mkt, newInds))
 
     // Elliott Waves: run for 1D, 4H, 1H

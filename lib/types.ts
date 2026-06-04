@@ -99,7 +99,23 @@ export interface AutoAlert {
 }
 
 export interface BTCCycle {
-  phase: string; col: string; pct: number; days: number; toNext: number; mvrv: number
+  phase:           string
+  phaseLabel:      string
+  col:             string
+  pct:             number
+  days:            number   // days since last halving
+  toNext:          number   // days to next halving
+  mvrv:            number
+  // New price-action fields
+  daysSinceATH:    number
+  drawdownFromATH: number   // negative %, e.g. -45.2
+  cycleATH:        number
+  cycleATHDate:    string
+  ma200:           number
+  aboveMA200:      boolean
+  mvrvEstimate:    number
+  description:     string
+  tradingBias:     string
 }
 
 export interface Session { n: string; s: number; e: number; c: string }
