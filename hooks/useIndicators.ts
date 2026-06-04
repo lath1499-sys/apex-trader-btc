@@ -9,7 +9,7 @@ import { detectElliottWaves } from '@/lib/elliottWaves'
 import { detectFVGs } from '@/lib/fvg'
 import { detectLiquidity } from '@/lib/liquidity'
 import type { IndicatorMap, IndicatorResult } from '@/lib/types'
-import { ntfyNewSignal } from '@/lib/ntfy'
+// ntfyNewSignal removed — server agent sends all push notifications.
 
 const TFS = ['1d', '4h', '1h', '15m'] as const
 
@@ -141,23 +141,7 @@ export function useIndicators() {
       pushTradeIdea(idea)
       lastPush.current = { side: idea.side, price: idea.price, ts: now }
 
-      // NTFY push (fire-and-forget — works even when browser tab is in background)
-      if (idea.confidence !== 'BAJA') {
-        ntfyNewSignal({
-          side:       idea.side,
-          confidence: idea.confidence,
-          tradeType:  idea.tradeType,
-          entry:      idea.price,
-          sl:         idea.sl,
-          tp1:        idea.tp1,
-          tp2:        idea.tp2,
-          tp3:        idea.tp3,
-          reasons:    idea.reasons,
-          score:      idea.bull + idea.bear,
-          maxLev:     idea.maxLev,
-        })
-      }
-
+      // NTFY is sent server-side only. Browser notification only (no NTFY from client).
       if (idea.confidence === 'ALTA' && notifPerm === 'granted') {
         try {
           new Notification(`🚨 APEX: ${idea.side} BTC`, {

@@ -4,7 +4,7 @@ import { useApexStore } from '@/store/apexStore'
 import { useTheme } from '@/hooks/useTheme'
 import { fmt } from '@/lib/buildContext'
 import { calcSignalStats, closeManualSignal, loadSignalHistory, saveSignalHistory } from '@/lib/signalHistory'
-import { saveSignalToCloud } from '@/lib/supabase'
+import { saveSignalToCloud, getSupabase } from '@/lib/supabase'
 import { getLearnedWeights } from '@/lib/scoreWeights'
 import type { TradeIdea, SignalRecord, IndicatorMap, MarketData } from '@/lib/types'
 import type { FVGResult } from '@/lib/fvg'
@@ -16,6 +16,8 @@ import type { ScalpSignal }      from '@/lib/scalpSignals'
 import { usePerformanceStats }  from '@/hooks/useSignalHistory'
 import { analyzeMacroSentiment } from '@/lib/macroSentiment'
 import type { MacroSentiment }   from '@/lib/macroSentiment'
+import { calcPositionSize, loadCapitalConfig, DEFAULT_CONFIG } from '@/lib/capitalManagement'
+import type { CapitalConfig, PositionSize } from '@/lib/capitalManagement'
 
 const STATUS_COLOR: Record<string, string> = {
   active: '#a78bfa', pending_confirmation: '#fbbf24',
@@ -220,6 +222,12 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
   const [closeReason, setCloseReason] = useState(CLOSE_REASONS[0])
   const [alertPhone] = useState(() => { try { return localStorage.getItem('apex_alert_phone') ?? '' } catch { return '' } })
   const [alertEmail] = useState(() => { try { return localStorage.getItem('apex_alert_email') ?? '' } catch { return '' } })
+  const [capitalConfig, setCapitalConfig] = useState<CapitalConfig>(DEFAULT_CONFIG)
+  useEffect(() => {
+    const sb = getSupabase()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    loadCapitalConfig(sb as any).then(setCapitalConfig)
+  }, [])
   const sideCol = idea.side === 'LONG' ? T.bull : T.danger
   const confCol = idea.confidence === 'ALTA' ? T.bull : idea.confidence === 'MEDIA' ? T.warn : T.danger
   const bullPct = (idea.bull + idea.bear) > 0 ? Math.round(idea.bull / (idea.bull + idea.bear) * 100) : 50
@@ -284,6 +292,20 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
     null,
     signalHistory,
   ), [idea, mkt.fg, mkt.funding, signalHistory])
+
+  const positionSize: PositionSize | null = React.useMemo(() => {
+    if (!idea.price || !idea.sl) return null
+    try {
+      return calcPositionSize(
+        { entry: idea.price, sl: idea.sl, maxLeverage: idea.maxLev },
+        capitalConfig,
+        probScore.winProbability,
+        probScore.winProbability,   // use prob score as win rate proxy if no history
+        1.5,
+        1.0,
+      )
+    } catch { return null }
+  }, [idea.price, idea.sl, idea.maxLev, capitalConfig, probScore.winProbability])
 
   function handleConfirmClose() {
     const price = parseFloat(closePrice) || mkt.price || idea.price
@@ -394,6 +416,28 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
               </div>
             )}
           </div>
+
+          {/* ── Capital Management ──────────────────────────────────────── */}
+          {positionSize && (
+            <div style={{ background: '#1a2634', border: `1px solid #2563eb44`, borderRadius: 6, padding: '8px 12px' }}>
+              <div style={{ fontSize: 7, color: '#60a5fa', letterSpacing: '.1em', marginBottom: 6 }}>💰 GESTIÓN DE CAPITAL</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 5, marginBottom: 6 }}>
+                {([
+                  ['Riesgo', `${positionSize.kellyFraction}% = $${positionSize.riskAmount.toFixed(0)}`],
+                  ['Posición', `$${positionSize.positionSize.toFixed(0)} @ ${positionSize.leverage}x`],
+                  ['Pérd.Máx', `$${positionSize.maxLoss.toFixed(0)}`],
+                ] as [string, string][]).map(([l, v]) => (
+                  <div key={l} style={{ background: '#0f1923', border: '1px solid #2563eb33', borderRadius: 5, padding: '5px 6px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 7, color: '#60a5fa88', marginBottom: 2 }}>{l}</div>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: '#93c5fd' }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 8, color: positionSize.kellyFraction <= 0 ? T.danger : T.textSec }}>
+                {positionSize.recommendation}
+              </div>
+            </div>
+          )}
 
           {/* Live stats row for active signals */}
           {isActive && unrealized != null && (
@@ -912,12 +956,17 @@ function PerformanceTab() {
           <div style={{ fontSize: 9, color: T.accent, fontWeight: 700, marginBottom: 8, letterSpacing: '.08em' }}>
             ☁️ ESTADÍSTICAS REALES (SUPABASE)
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, marginBottom: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, marginBottom: 6 }}>
             <PerfCell label="TOTAL DB" val={String(sbStats.total)} />
             <PerfCell label="WIN RATE" val={`${sbStats.winRate}%`}
               col={sbStats.winRate >= 55 ? T.bull : sbStats.winRate < 40 ? T.danger : T.warn} />
             <PerfCell label="P&L TOTAL" val={`${sbStats.totalPnl >= 0 ? '+' : ''}${sbStats.totalPnl.toFixed(1)}%`}
               col={sbStats.totalPnl >= 0 ? T.bull : T.danger} />
+          </div>
+          <div style={{ display: 'flex', gap: 10, fontSize: 8, color: T.textSec, marginBottom: 10, padding: '4px 0', borderBottom: `1px solid ${T.border}22` }}>
+            <span>✅ Wins: <strong style={{ color: T.bull }}>{sbStats.wins}</strong></span>
+            <span>❌ Losses: <strong style={{ color: T.danger }}>{sbStats.losses}</strong></span>
+            <span>🛡️ B/E: <strong style={{ color: T.warn }}>{sbStats.breakevens ?? 0}</strong></span>
           </div>
           <div style={{ fontSize: 7, color: T.muted, letterSpacing: '.1em', marginBottom: 6 }}>POR TIPO</div>
           {sbStats.byType.filter(t => t.total > 0).map(t => (

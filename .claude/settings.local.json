@@ -39,7 +39,33 @@
       "Bash(git commit *)",
       "Bash(taskkill /PID 14876 /F)",
       "Bash(git restore *)",
-      "Bash(grep -v \"//\\\\|^\\\\s*//\")"
+      "Bash(grep -v \"//\\\\|^\\\\s*//\")",
+      "Bash(Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue)",
+      "Bash(node -e \"fetch\\('https://apex-trader-btc.vercel.app/api/binance?type=price'\\).then\\(r=>r.json\\(\\)\\).then\\(d=>console.log\\('Price:', d.price\\)\\).catch\\(e=>console.error\\('Error:', e.message\\)\\)\")",
+      "Bash(findstr \":3000\")",
+      "Bash(node -e ' *)",
+      "Bash(node -e \"fetch\\('https://apex-trader-btc.vercel.app/api/agent',{headers:{'Authorization':'Bearer apex-cron-secret-change-this'}}\\).then\\(r=>r.json\\(\\)\\).then\\(d=>console.log\\(JSON.stringify\\(d,null,2\\)\\)\\)\")",
+      "Bash(node -e \"fetch\\('http://localhost:3000/api/agent',{headers:{'Authorization':'Bearer apex-cron-secret-change-this'}}\\).then\\(r=>r.json\\(\\)\\).then\\(d=>console.log\\('regime:',d.regime,'session:',d.session,'signals:',JSON.stringify\\(d.signals\\),'macro:',JSON.stringify\\(d.macro\\)\\)\\)\")",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "PowerShell(echo '{}' | powershell -Command \"if \\(-not \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue\\)\\) { Write-Output 'would start server' } else { Write-Output 'already running on 3000' }\")",
+      "Bash(Test-Path \"C:\\\\Users\\\\lath1\\\\OneDrive\\\\Desktop\\\\apex-trader-btc\\\\restart-apex.bat\")",
+      "Bash(curl -s http://localhost:3000/api/health)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if (-not (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)) { Start-Process npm -ArgumentList 'run','dev' -WorkingDirectory 'C:\\Users\\lath1\\OneDrive\\Desktop\\apex-trader-btc' -WindowStyle Hidden; Start-Sleep -Seconds 4 }",
+            "shell": "powershell",
+            "statusMessage": "Ensuring dev server is running...",
+            "async": true
+          }
+        ]
+      }
     ]
   }
 }

@@ -7,10 +7,7 @@ import {
 } from '@/lib/signalHistory'
 import { evaluateAutoClose }             from '@/lib/autoClose'
 import { saveSignalToCloud, loadSignalsFromCloud, getSupabase, transformSignal } from '@/lib/supabase'
-import {
-  ntfyAutoClose, ntfyTPHit, ntfySLHit,
-  ntfyApproachingSL, ntfyTrailingSL, ntfyStopMoved,
-} from '@/lib/ntfy'
+// NTFY intentionally removed — server agent (app/api/agent/route.ts) sends all push notifications.
 import { evaluateStopManagement } from '@/lib/stopManagement'
 import type { ScalpSignal, ScalpStatus } from '@/lib/scalpSignals'
 import type { SignalRecord } from '@/lib/types'
@@ -214,35 +211,8 @@ export function useSignalHistory() {
     // ── 1. TP/SL hit detection ────────────────────────────────────────────────
     let updated = updateSignalStatusesByPrice(current, price)
 
-    // Fire NTFY for status transitions and partial TP hits
-    updated.forEach((rec, i) => {
-      const old    = current[i]
-      const idea   = rec.idea
-      const isLong = idea.side === 'LONG'
-      const sig    = { side: idea.side, entry: idea.price, sl: idea.sl, tradeType: idea.tradeType }
-
-      // Full closes (status changed from active)
-      if (old.status === 'active' && rec.status !== 'active') {
-        if (rec.status === 'sl_hit') {
-          ntfySLHit(sig, idea.sl, rec.pnl ?? 0)
-        } else if (rec.status === 'tp3_hit') {
-          ntfyTPHit(sig, 'tp3', idea.tp3, rec.pnl ?? 0)
-        } else if (rec.status === 'auto_close') {
-          // bias-flip or funding close — no specific TP NTFY
-        }
-      }
-
-      // Partial TP1 hit — stays active, SL moved to entry
-      if (!old.tp1Hit && rec.tp1Hit) {
-        ntfyTPHit(sig, 'tp1', idea.tp1, 0)
-        ntfyTrailingSL(sig, isLong ? idea.price : idea.price)
-      }
-
-      // Partial TP2 hit — stays active, SL moved to TP1
-      if (!old.tp2Hit && rec.tp2Hit) {
-        ntfyTPHit(sig, 'tp2', idea.tp2, 0)
-      }
-    })
+    // Note: NTFY is sent server-side only (app/api/agent/route.ts).
+    // Client-side status changes update local UI only.
 
     // ── 2. SL warning on still-active records ────────────────────────────────
     const SL_WARN_THRESHOLD = 0.005  // 0.5% from SL
@@ -252,15 +222,13 @@ export function useSignalHistory() {
       if (rec.status !== 'active') return rec
       const idea   = rec.idea
       const isLong = idea.side === 'LONG'
-      const sig    = { side: idea.side, entry: idea.price, sl: idea.sl, tradeType: idea.tradeType }
 
-      // SL approaching warning (only once)
+      // SL approaching warning — flag only (no client NTFY; server sends push)
       if (!rec.slWarningFired) {
         const distToSL = isLong
           ? (price - idea.sl) / idea.price
           : (idea.sl - price) / idea.price
         if (distToSL > 0 && distToSL < SL_WARN_THRESHOLD) {
-          ntfyApproachingSL(sig, price, distToSL * 100)
           return { ...rec, slWarningFired: true }
         }
       }
@@ -278,11 +246,6 @@ export function useSignalHistory() {
         if (rec.status !== 'active') return rec
         const result = evaluateAutoClose(rec, price, inds, mkt)
         if (!result) return rec
-        ntfyAutoClose(
-          { side: rec.idea.side, entry: rec.idea.price, closePrice: result.closePrice },
-          result.reason,
-          result.pnl,
-        )
         return {
           ...rec,
           status:      result.closeType === 'expired' ? 'expired' : 'auto_close',
@@ -303,7 +266,6 @@ export function useSignalHistory() {
       const tf = rec.idea.tradeType === 'Scalp' ? (rawK['15m'] ?? k4h) : k4h
       const stopUpdate = evaluateStopManagement(rec, price, tf)
       if (!stopUpdate) return rec
-      ntfyStopMoved({ side: rec.idea.side, idea: rec.idea }, stopUpdate)
       return {
         ...rec,
         idea:          { ...rec.idea, sl: stopUpdate.newSL },
@@ -344,12 +306,13 @@ export function useSignalHistory() {
 // ── Performance stats from Supabase (real closed signals) ────────────────────
 
 export interface PerformanceStats {
-  total:    number
-  wins:     number
-  losses:   number
-  winRate:  number
-  totalPnl: number
-  avgPnl:   number
+  total:      number
+  wins:       number
+  losses:     number
+  breakevens: number
+  winRate:    number   // wins / (wins + losses), excludes breakevens
+  totalPnl:   number
+  avgPnl:     number
   byType:   Array<{ type: string; total: number; winRate: number; avgPnl: number }>
   byConf:   Array<{ conf: string; total: number; winRate: number }>
 }
@@ -369,9 +332,11 @@ export async function loadPerformanceStats(sb: SbClient): Promise<PerformanceSta
   if (error || !data || !data.length) return null
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const wins   = (data as any[]).filter(s => s.pnl > 0)
+  const wins       = (data as any[]).filter(s => s.pnl > 0.1)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const losses = (data as any[]).filter(s => s.pnl <= 0)
+  const losses     = (data as any[]).filter(s => s.pnl < -0.1 && s.status !== 'breakeven')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const breakevens = (data as any[]).filter(s => s.status === 'breakeven' || Math.abs(s.pnl ?? 0) <= 0.1)
 
   const byType = ['Scalp', 'DayTrade', 'Swing'].map(type => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -399,15 +364,17 @@ export async function loadPerformanceStats(sb: SbClient): Promise<PerformanceSta
     }
   })
 
+  const decisive = wins.length + losses.length   // excludes breakevens from WR calc
   return {
-    total:    data.length,
-    wins:     wins.length,
-    losses:   losses.length,
-    winRate:  Math.round(wins.length / data.length * 100),
+    total:      data.length,
+    wins:       wins.length,
+    losses:     losses.length,
+    breakevens: breakevens.length,
+    winRate:    decisive > 0 ? Math.round(wins.length / decisive * 100) : 0,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    totalPnl: (data as any[]).reduce((a: number, s: any) => a + s.pnl, 0),
+    totalPnl:   (data as any[]).reduce((a: number, s: any) => a + s.pnl, 0),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    avgPnl:   (data as any[]).reduce((a: number, s: any) => a + s.pnl, 0) / data.length,
+    avgPnl:     (data as any[]).reduce((a: number, s: any) => a + s.pnl, 0) / data.length,
     byType,
     byConf,
   }

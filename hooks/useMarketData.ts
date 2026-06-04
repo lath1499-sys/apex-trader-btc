@@ -4,7 +4,7 @@ import { useApexStore } from '@/store/apexStore'
 import type { MarketData, OrderBook } from '@/lib/types'
 import type { Kline } from '@/lib/types'
 import { calcVWAP, calcCVD, detectBOSCHoCH, getICTKillzones } from '@/lib/scalpSignals'
-import { ntfyTPHit, ntfySLHit, ntfyApproachingSL, ntfyTrailingSL } from '@/lib/ntfy'
+// NTFY intentionally removed — server agent sends all push notifications.
 import { saveSignalToCloud } from '@/lib/supabase'
 import type { SignalRecord } from '@/lib/types'
 
@@ -73,21 +73,19 @@ export function useMarketData() {
     if (!sig || !price) return
 
     const isLong = sig.side === 'LONG'
-    const sigObj = { side: sig.side, entry: sig.entry, sl: sig.sl, tradeType: 'Scalp' as const }
 
-    // SL warning — tighter threshold for scalps (0.3%)
+    // SL warning — flag only (no client NTFY; server sends push every 5 min)
     if (!sig.slWarningFired) {
       const distToSL = isLong
         ? (price - sig.sl) / sig.entry
         : (sig.sl - price) / sig.entry
       if (distToSL > 0 && distToSL < 0.003) {
-        ntfyApproachingSL(sigObj, price, distToSL * 100)
         setScalpSignal({ ...sig, slWarningFired: true })
         return
       }
     }
 
-    // TP/SL hits
+    // TP/SL hits — update local UI state and persist close to Supabase (no NTFY from browser)
     const slHit  = isLong ? price <= sig.sl  : price >= sig.sl
     const tp1Hit = isLong ? price >= sig.tp1 : price <= sig.tp1
     const tp2Hit = isLong ? price >= sig.tp2 : price <= sig.tp2
@@ -105,11 +103,10 @@ export function useMarketData() {
         pnl:        pnlPct(exitPrice),
       }
       pushScalpHistory(closed)
-      // Clear active signal (prevents double-close race)
+      // Clear active signal
       const cur = useApexStore.getState().scalpSignal
       if (!cur || cur.status === 'active') setScalpSignal(null)
-      // Persist close to Supabase — find the matching active Scalp in signalHistory by side
-      // The agent's Supabase record must be closed so next run doesn't see it as active
+      // Persist close to Supabase so server agent doesn't re-open on next run
       const allSigs = useApexStore.getState().signalHistory ?? []
       const supaRec = allSigs.find(r =>
         r.idea.tradeType === 'Scalp' && r.status === 'active' && r.idea.side === sig.side,
@@ -129,17 +126,12 @@ export function useMarketData() {
     }
 
     if (slHit) {
-      ntfySLHit(sigObj, sig.sl, pnlPct(sig.sl))
       closeScalp('sl_hit', sig.sl)
     } else if (tp3Hit) {
-      ntfyTPHit(sigObj, 'tp3', sig.tp3, pnlPct(sig.tp3))
       closeScalp('tp3_hit', sig.tp3)
     } else if (tp2Hit && sig.status !== 'tp2_hit') {
-      ntfyTPHit(sigObj, 'tp2', sig.tp2, pnlPct(sig.tp2))
       setScalpSignal({ ...sig, status: 'tp2_hit' })
     } else if (tp1Hit && sig.status === 'active') {
-      ntfyTPHit(sigObj, 'tp1', sig.tp1, pnlPct(sig.tp1))
-      ntfyTrailingSL(sigObj, sig.entry)
       setScalpSignal({ ...sig, status: 'tp1_hit' })
     }
   }, [mktForScalp.price, scalpSignalRef, setScalpSignal, pushScalpHistory])

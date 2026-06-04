@@ -4,6 +4,9 @@ import { useApexStore } from '@/store/apexStore'
 import { useTheme } from '@/hooks/useTheme'
 import { fmt } from '@/lib/buildContext'
 import { ntfyTest, getNtfySettings, saveNtfySettings, type NtfySettings } from '@/lib/ntfy'
+import { loadCapitalConfig, saveCapitalConfig, DEFAULT_CONFIG } from '@/lib/capitalManagement'
+import type { CapitalConfig } from '@/lib/capitalManagement'
+import { getSupabase } from '@/lib/supabase'
 
 type Alert = { id: number; price: number; dir: 'above' | 'below'; label: string; fired: boolean }
 
@@ -23,6 +26,29 @@ export default function PriceAlertPanel() {
   const [settings, setSettings] = useState<NtfySettings>(() => getNtfySettings())
   const [testing,  setTesting]  = useState(false)
   const [testResult, setTestResult] = useState<string | null>(null)
+
+  // ── Capital config ──────────────────────────────────────────────────────────
+  const [capitalConfig, setCapitalConfig] = useState<CapitalConfig>(DEFAULT_CONFIG)
+  const [capitalSaving, setCapitalSaving] = useState(false)
+  useEffect(() => {
+    const sb = getSupabase()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    loadCapitalConfig(sb as any).then(setCapitalConfig)
+  }, [])
+
+  function updateCapital(key: keyof CapitalConfig, raw: string) {
+    const val = parseFloat(raw)
+    if (isNaN(val) || val < 0) return
+    setCapitalConfig(prev => ({ ...prev, [key]: val }))
+  }
+
+  async function saveCapital() {
+    setCapitalSaving(true)
+    const sb = getSupabase()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await saveCapitalConfig(sb as any, capitalConfig)
+    setCapitalSaving(false)
+  }
 
   function saveTopic(t: string) {
     setTopic(t)

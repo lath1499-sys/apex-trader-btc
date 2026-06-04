@@ -235,7 +235,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     let agentOpinionChange: string | null = null   // set inside generate-signal block if bias flips
     const prevStateForVoice = await loadAgentState(getDbClient())
 
-    const TERMINAL_STATUSES = new Set(['closed_manual', 'sl_hit', 'tp3_hit', 'expired', 'auto_close'])
+    const TERMINAL_STATUSES = new Set(['closed_manual', 'sl_hit', 'breakeven', 'tp3_hit', 'expired', 'auto_close'])
     for (const sig of active) {
       // Never overwrite a signal that was manually or fully closed
       if (TERMINAL_STATUSES.has(sig.status)) continue
@@ -244,18 +244,51 @@ export async function GET(req: Request): Promise<NextResponse> {
       let updated: SignalRecord = sig
       let changed = false
 
-      // SL hit
+      // SL hit (or breakeven SL hit after TP1)
       if ((isLong && price <= sig.idea.sl) || (!isLong && price >= sig.idea.sl)) {
-        const pnl = isLong
+        const rawPnl = isLong
           ? (sig.idea.sl - sig.idea.price) / sig.idea.price * 100
           : (sig.idea.price - sig.idea.sl) / sig.idea.price * 100
-        updated = { ...sig, status: 'sl_hit', pnl, closedAt: time, exitPrice: sig.idea.sl, closeReason: 'SL tocado', exitTs: time }
-        if (ntfyTopic) await ntfy(
-          ntfyTopic,
-          sanitizeHdr(`STOP LOSS TOCADO - ${sig.idea.side} BTC`),
-          `SL alcanzado en $${Math.round(sig.idea.sl).toLocaleString()}\nP&L: ${pnl.toFixed(2)}%`,
-          4, 'rotating_light',
-        )
+        const wasBreakeven = (sig as { breakevenSet?: boolean }).breakevenSet === true
+          || Math.abs(rawPnl) < 0.15   // SL within 0.15% of entry = breakeven
+        const closeStatus  = wasBreakeven ? 'breakeven' : 'sl_hit'
+        const closeReason  = wasBreakeven
+          ? 'SL en breakeven tocado — trade sin pérdida'
+          : 'SL tocado — stop loss ejecutado'
+        updated = {
+          ...sig,
+          status:     closeStatus as SignalRecord['status'],
+          pnl:        parseFloat(rawPnl.toFixed(2)),
+          closedAt:   time,
+          exitPrice:  sig.idea.sl,
+          closeReason,
+          exitTs:     time,
+        }
+        if (ntfyTopic) {
+          if (wasBreakeven) {
+            await ntfy(
+              ntfyTopic,
+              sanitizeHdr(`BREAKEVEN - ${sig.idea.side} BTC cerrado sin pérdida`),
+              [
+                `${sig.idea.side} BTC cerrado en breakeven`,
+                ``,
+                `Entrada: $${Math.round(sig.idea.price).toLocaleString()}`,
+                `SL breakeven: $${Math.round(sig.idea.sl).toLocaleString()}`,
+                `P&L: ${rawPnl >= 0 ? '+' : ''}${rawPnl.toFixed(2)}% (sin pérdida)`,
+                ``,
+                `TP1 fue alcanzado — capital protegido ✅`,
+              ].join('\n'),
+              3, 'shield',
+            )
+          } else {
+            await ntfy(
+              ntfyTopic,
+              sanitizeHdr(`STOP LOSS TOCADO - ${sig.idea.side} BTC`),
+              `SL alcanzado en $${Math.round(sig.idea.sl).toLocaleString()}\nP&L: ${rawPnl.toFixed(2)}%`,
+              4, 'rotating_light',
+            )
+          }
+        }
         changed = true
       }
       // TP3
@@ -328,10 +361,12 @@ export async function GET(req: Request): Promise<NextResponse> {
       if (changed) {
         await saveSignalToCloud(updated)
         // Record outcome in apex_decisions for fully closed signals only (tp3 or sl)
-        const wasClosed = (['sl_hit', 'tp3_hit'] as string[]).includes(updated.status)
+        const wasClosed = (['sl_hit', 'breakeven', 'tp3_hit'] as string[]).includes(updated.status)
         const closeSb = getDbClient()
         if (closeSb && wasClosed && updated.pnl != null) {
-          const outcome = updated.pnl > 0 ? 'win' : 'loss'
+          const outcome = updated.status === 'breakeven'
+            ? 'breakeven'
+            : updated.pnl > 0.1 ? 'win' : 'loss'
           await closeSb.from('apex_decisions')
             .update({ outcome, pnl: updated.pnl })
             .eq('signal_id', sig.id)
