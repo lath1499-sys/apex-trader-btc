@@ -1384,10 +1384,20 @@ export default function TradeIdeasPanel() {
   }, [history])
 
   function handleClose(id: string, price: number, reason: string) {
-    const current = loadSignalHistory()
+    // Read from STORE (not localStorage) — store has all Supabase-loaded signals
+    const current = useApexStore.getState().signalHistory
     const updated = closeManualSignal(current, id, price, reason)
     saveSignalHistory(updated)
-    setSignalHistory(updated)
+    // Merge — never replace (keeps any signals not involved in this close)
+    setSignalHistory(prev => {
+      const merged = [...prev]
+      updated.forEach(s => {
+        const idx = merged.findIndex(x => x.id === s.id)
+        if (idx >= 0) merged[idx] = s
+        else merged.unshift(s)
+      })
+      return merged
+    })
     // Persist to Supabase immediately so agent never re-activates this signal
     const closed = updated.find(s => s.id === id)
     if (closed) saveSignalToCloud(closed).catch(() => {})

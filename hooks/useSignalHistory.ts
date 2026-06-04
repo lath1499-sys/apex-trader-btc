@@ -60,11 +60,15 @@ export function useSignalHistory() {
     const syncFromCloud = async () => {
       const cloud = await loadSignalsFromCloud()
       if (!cloud?.length) return
-      // Merge: keep any local-only signals not yet in cloud, update rest
+      // Merge: NEVER remove existing signals — only update or add.
+      // Replacing the whole array caused signals to disappear on every 60s poll.
       const current = useApexStore.getState().signalHistory
-      const cloudIds = new Set(cloud.map(s => s.id))
-      const localOnly = current.filter(s => !cloudIds.has(s.id))
-      const merged = [...cloud, ...localOnly]
+      const merged = [...current]
+      cloud.forEach(s => {
+        const idx = merged.findIndex(x => x.id === s.id)
+        if (idx >= 0) merged[idx] = s   // update status / fields in place
+        else merged.unshift(s)           // new signal from Supabase — prepend
+      })
       setSignalHistory(merged)
       // Sync closed scalps into scalpHistory store so historial tab shows them
       merged
@@ -222,7 +226,16 @@ export function useSignalHistory() {
     const anyChanged = updated.some((r, i) => r !== current[i])
     if (!anyChanged) return
     saveSignalHistory(updated)
-    setSignalHistory(updated)
+    // Merge into latest store state — never shrink the array (race-safe functional update)
+    setSignalHistory(prev => {
+      const merged = [...prev]
+      updated.forEach(s => {
+        const idx = merged.findIndex(x => x.id === s.id)
+        if (idx >= 0) merged[idx] = s
+        else merged.unshift(s)
+      })
+      return merged
+    })
     // Sync ONLY non-terminal changes to Supabase (SL moves, warning flags).
     // Server agent is sole authority for closing signals — client must NOT write
     // sl_hit / tp*_hit / breakeven back to Supabase or it races with the server.
@@ -242,7 +255,16 @@ export function useSignalHistory() {
     const changed = updated.some((r, i) => r.status !== current[i].status)
     if (!changed) return
     saveSignalHistory(updated)
-    setSignalHistory(updated)
+    // Merge — never replace (candle-based TP/SL detection must not shrink the array)
+    setSignalHistory(prev => {
+      const merged = [...prev]
+      updated.forEach(s => {
+        const idx = merged.findIndex(x => x.id === s.id)
+        if (idx >= 0) merged[idx] = s
+        else merged.unshift(s)
+      })
+      return merged
+    })
   }, [rawK, setSignalHistory])
 }
 

@@ -61,7 +61,7 @@ interface ApexState {
 
   // Signal history with P&L tracking
   signalHistory: SignalRecord[]
-  setSignalHistory: (recs: SignalRecord[]) => void
+  setSignalHistory: (recs: SignalRecord[] | ((prev: SignalRecord[]) => SignalRecord[])) => void
 
   // Chat history (read-only display, no longer editable via UI)
   chatMessages: ChatMessage[]
@@ -136,7 +136,9 @@ export const useApexStore = create<ApexState>((set) => ({
   setBiasMeta: (biasMeta) => set({ biasMeta }),
 
   signalHistory: [],
-  setSignalHistory: (signalHistory) => set({ signalHistory }),
+  setSignalHistory: (arg) => set(state => ({
+    signalHistory: typeof arg === 'function' ? arg(state.signalHistory) : arg,
+  })),
 
   chatMessages: [],
   addChatMessage: (msg) => set((s) => ({ chatMessages: [...s.chatMessages, msg] })),
