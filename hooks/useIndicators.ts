@@ -1,10 +1,9 @@
 import { useEffect, useRef } from 'react'
 import { useApexStore } from '@/store/apexStore'
 import { runInds, detectDivergences } from '@/lib/indicators'
-import { getBTCCycle, getSession } from '@/lib/cycle'
+import { getBTCCycle } from '@/lib/cycle'
 import { getAutoAlerts } from '@/lib/buildContext'
-import { scoreTradeIdea } from '@/lib/tradeScoring'
-import { getLearnedWeights } from '@/lib/scoreWeights'
+// scoreTradeIdea removed — server agent (app/api/agent/route.ts) is sole signal source.
 import { detectElliottWaves } from '@/lib/elliottWaves'
 import { detectFVGs } from '@/lib/fvg'
 import { detectLiquidity } from '@/lib/liquidity'
@@ -13,32 +12,17 @@ import type { IndicatorMap, IndicatorResult } from '@/lib/types'
 
 const TFS = ['1d', '4h', '1h', '15m'] as const
 
-// A new signal is emitted when:
-//   1. Direction (side) changes — always immediate
-//   2. Same direction: ≥3 min elapsed AND price moved ≥1%
-const MIN_MS   = 3 * 60 * 1000   // min 3 min between same-direction signals
-const MIN_MOVE = 0.01             // min 1% price move for same-direction re-emit
-
-type LastPush = { side: string; price: number; ts: number }
-
 export function useIndicators() {
   const rawK         = useApexStore(s => s.rawK)
   const mkt          = useApexStore(s => s.mkt)
-  const orderBook    = useApexStore(s => s.orderBook)
-  const notifPerm    = useApexStore(s => s.notifPerm)
   const setInds      = useApexStore(s => s.setInds)
   const setCycle     = useApexStore(s => s.setCycle)
   const setAlerts    = useApexStore(s => s.setAlerts)
-  const setTradeIdea    = useApexStore(s => s.setTradeIdea)
-  const pushTradeIdea   = useApexStore(s => s.pushTradeIdea)
   const setDivergences  = useApexStore(s => s.setDivergences)
   const setElliottWaves = useApexStore(s => s.setElliottWaves)
   const setFvgs         = useApexStore(s => s.setFvgs)
   const setLiquidity    = useApexStore(s => s.setLiquidity)
   const setBiasMeta     = useApexStore(s => s.setBiasMeta)
-  const signalHistory   = useApexStore(s => s.signalHistory)
-
-  const lastPush   = useRef<LastPush | null>(null)
   type BiasEntry = { bias: IndicatorResult['bias']; score: number; changedAt: number | null; prevBias: string | null }
   const stableRef  = useRef<Partial<Record<string, BiasEntry>>>({})
 
@@ -96,59 +80,7 @@ export function useIndicators() {
     // Liquidity: run on 4H klines
     if (klines4h) setLiquidity(detectLiquidity(klines4h))
 
-    const weights = getLearnedWeights(signalHistory)
-    const idea = scoreTradeIdea(mkt, newInds, orderBook, rawK, weights, signalHistory)
-    const hasActiveSignal = signalHistory.some(r => r.status === 'active')
-    if (!idea) {
-      // Don't clear display if an active signal is being tracked
-      if (!hasActiveSignal) setTradeIdea(null)
-      // Don't reset lastPush — keep history stable, just mark no active idea
-      return
-    }
-
-    // Don't overwrite display if a different active signal is already being managed
-    if (!hasActiveSignal) setTradeIdea(idea)
-
-    // Consolidation signals are display-only — never push to history
-    if (idea.consolidation) return
-
-    const now    = Date.now()
-    const last   = lastPush.current
-
-    // ── Signal lock: one active signal at a time ─────────────────────────────
-    const activeRec = signalHistory.find(r => r.status === 'active')
-    if (activeRec) {
-      if (activeRec.idea.side === idea.side) {
-        // Same direction: let existing signal live, just update live display
-        setTradeIdea(idea)
-        return
-      }
-      // Opposite direction: push as pending_confirmation via pushTradeIdea
-      // then patch it in signalHistory immediately after
-    }
-
-    const sideChanged = !last || idea.side !== last.side
-    const timeOk      = !last || (now - last.ts) >= MIN_MS
-    const priceOk     = !last || Math.abs(idea.price - last.price) / last.price >= MIN_MOVE
-
-    // Asia session: only push ALTA confidence signals
-    if (getSession().n === 'ASIA' && idea.confidence !== 'ALTA') {
-      setTradeIdea(idea)  // still display, just don't push
-      return
-    }
-
-    if (sideChanged || (timeOk && priceOk)) {
-      pushTradeIdea(idea)
-      lastPush.current = { side: idea.side, price: idea.price, ts: now }
-
-      // NTFY is sent server-side only. Browser notification only (no NTFY from client).
-      if (idea.confidence === 'ALTA' && notifPerm === 'granted') {
-        try {
-          new Notification(`🚨 APEX: ${idea.side} BTC`, {
-            body: `$${Math.round(idea.price)} | ${idea.tradeType} | Confianza ALTA`,
-          })
-        } catch { /* notification may be blocked */ }
-      }
-    }
-  }, [rawK, mkt, orderBook, notifPerm, signalHistory, setInds, setCycle, setAlerts, setTradeIdea, pushTradeIdea, setDivergences, setElliottWaves, setFvgs, setLiquidity, setBiasMeta])
+    // Signal generation removed — server agent is sole source of signals.
+    // Signals come from Supabase via useSignalHistory (synced every 45s).
+  }, [rawK, mkt, setInds, setCycle, setAlerts, setDivergences, setElliottWaves, setFvgs, setLiquidity, setBiasMeta])
 }

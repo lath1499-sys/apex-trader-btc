@@ -248,7 +248,7 @@ export function useSignalHistory() {
         if (!result) return rec
         return {
           ...rec,
-          status:      result.closeType === 'expired' ? 'expired' : 'auto_close',
+          status:      'sl_hit' as const,
           exitPrice:   result.closePrice,
           exitTs:      nowIso,
           closedAt:    nowIso,

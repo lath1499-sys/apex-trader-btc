@@ -59,6 +59,208 @@ async function ntfy(topic: string, title: string, body: string, priority = 3, ta
   }
 }
 
+// ── Central signal event handler — sends NTFY for EVERY event ────────────────
+
+type SignalEvent = 'new' | 'tp1' | 'tp2' | 'tp3' | 'sl' | 'breakeven' | 'breakeven_sl' | 'trailing' | 'manual_close'
+
+function getSignalDuration(createdAt: string): string {
+  const ms   = Date.now() - new Date(createdAt).getTime()
+  const mins = Math.floor(ms / 60000)
+  if (mins < 60) return `${mins}min`
+  const hrs = Math.floor(mins / 60)
+  return `${hrs}h ${mins % 60}min`
+}
+
+async function handleSignalEvent(
+  sig: SignalRecord,
+  event: SignalEvent,
+  eventPrice: number,
+  ntfyTopic: string,
+  extra?: { reason?: string; newSL?: number },
+): Promise<SignalRecord> {
+  const idea    = sig.idea
+  const isLong  = idea.side === 'LONG'
+  const entry   = idea.price
+  const rawPnl  = isLong
+    ? (eventPrice - entry) / entry * 100
+    : (entry - eventPrice) / entry * 100
+
+  const TERMINAL: SignalEvent[] = ['tp3', 'sl', 'breakeven', 'breakeven_sl', 'manual_close']
+  const isClosed = TERMINAL.includes(event)
+
+  const newStatus: SignalRecord['status'] = (
+    event === 'tp3'          ? 'tp3_hit'      :
+    event === 'tp2'          ? 'tp2_hit'      :
+    event === 'tp1'          ? 'tp1_hit'      :
+    event === 'sl'           ? 'sl_hit'       :
+    event === 'breakeven'    ? 'active'       :  // trailing BE — stays active
+    event === 'breakeven_sl' ? 'breakeven'    :
+    event === 'manual_close' ? 'closed_manual':
+    'active'
+  )
+
+  const updated: SignalRecord = {
+    ...sig,
+    status:  newStatus,
+    ...(isClosed ? {
+      pnl:        parseFloat(rawPnl.toFixed(2)),
+      closedAt:   new Date().toISOString(),
+      exitPrice:  eventPrice,
+      exitTs:     new Date().toISOString(),
+      closeReason: extra?.reason ?? event,
+    } : {}),
+    ...(event === 'trailing' ? {
+      idea: { ...idea, sl: extra?.newSL ?? eventPrice },
+    } : {}),
+    ...(event === 'breakeven' ? {
+      idea: { ...idea, sl: entry },
+    } : {}),
+    ...(event === 'tp1' ? {
+      tp1Hit: true,
+      idea:   { ...idea, sl: entry },  // move SL to entry
+    } : {}),
+    ...(event === 'tp2' ? {
+      tp2Hit: true,
+      idea:   { ...idea, sl: idea.tp1 },  // move SL to TP1
+    } : {}),
+  }
+
+  if (!ntfyTopic) return updated
+
+  const side = idea.side
+  const P    = (n: number) => `$${Math.round(n).toLocaleString()}`
+  const pnlStr = `${rawPnl >= 0 ? '+' : ''}${rawPnl.toFixed(2)}%`
+  const dur  = getSignalDuration(sig.createdAt)
+
+  const titles: Record<SignalEvent, string> = {
+    new:          sanitizeHdr(`APEX ${side} BTC -- ${idea.confidence}`),
+    tp1:          sanitizeHdr(`TP1 ALCANZADO -- ${side} BTC ${pnlStr}`),
+    tp2:          sanitizeHdr(`TP2 ALCANZADO -- ${side} BTC ${pnlStr}`),
+    tp3:          sanitizeHdr(`TP3 OBJETIVO MAXIMO -- ${side} BTC ${pnlStr}`),
+    sl:           sanitizeHdr(`STOP LOSS -- ${side} BTC ${pnlStr}`),
+    breakeven:    sanitizeHdr(`BREAKEVEN ACTIVADO -- ${side} BTC capital protegido`),
+    breakeven_sl: sanitizeHdr(`SL BREAKEVEN TOCADO -- ${side} BTC sin perdida`),
+    trailing:     sanitizeHdr(`TRAILING SL -- ${side} BTC`),
+    manual_close: sanitizeHdr(`CERRADO MANUAL -- ${side} BTC ${pnlStr}`),
+  }
+
+  const bodies: Record<SignalEvent, string> = {
+    new: [
+      `${side === 'LONG' ? '▲ LONG' : '▼ SHORT'} BTC/USDT | ${idea.tradeType} | ${idea.confidence}`,
+      ``,
+      `Entrada: ${P(entry)}`,
+      `SL:  ${P(idea.sl)}`,
+      `TP1: ${P(idea.tp1)}`,
+      `TP2: ${P(idea.tp2)}`,
+      `TP3: ${P(idea.tp3)}`,
+      ``,
+      ...idea.reasons.slice(0, 3).map(r => r.txt),
+      `Score: ${idea.bull + idea.bear}/12 | Leverage: ${idea.maxLev}x`,
+    ].join('\n'),
+
+    tp1: [
+      `✅ TP1 ALCANZADO`,
+      `${side} BTC desde ${P(entry)}`,
+      ``,
+      `TP1: ${P(idea.tp1)} ✓`,
+      `P&L parcial: ${pnlStr}`,
+      ``,
+      `SL movido a breakeven (${P(entry)}).`,
+      `Esperando TP2: ${P(idea.tp2)}`,
+    ].join('\n'),
+
+    tp2: [
+      `✅✅ TP2 ALCANZADO`,
+      `${side} BTC desde ${P(entry)}`,
+      ``,
+      `TP2: ${P(idea.tp2)} ✓`,
+      `P&L parcial: ${pnlStr}`,
+      ``,
+      `SL en TP1 (${P(idea.tp1)}). Esperando TP3: ${P(idea.tp3)}`,
+    ].join('\n'),
+
+    tp3: [
+      `🏆 OBJETIVO MAXIMO ALCANZADO`,
+      `${side} BTC -- Trade completado`,
+      ``,
+      `Entrada: ${P(entry)}`,
+      `TP3: ${P(idea.tp3)} ✓`,
+      `P&L final: ${pnlStr}`,
+      `Duracion: ${dur}`,
+    ].join('\n'),
+
+    sl: [
+      `❌ STOP LOSS TOCADO`,
+      `${side} BTC cerrado`,
+      ``,
+      `Entrada: ${P(entry)}`,
+      `SL: ${P(idea.sl)}`,
+      `P&L: ${pnlStr}`,
+      `Duracion: ${dur}`,
+    ].join('\n'),
+
+    breakeven: [
+      `🛡️ SL MOVIDO A BREAKEVEN`,
+      `${side} BTC -- capital protegido`,
+      ``,
+      `TP1 alcanzado -- SL en ${P(entry)}`,
+      `Trade sin perdida garantizado.`,
+      `Esperando TP2: ${P(idea.tp2)}`,
+    ].join('\n'),
+
+    breakeven_sl: [
+      `🛡️ SL BREAKEVEN TOCADO`,
+      `${side} BTC cerrado sin perdida`,
+      ``,
+      `Entrada: ${P(entry)}`,
+      `Cierre: ${P(eventPrice)}`,
+      `P&L: ${pnlStr} (breakeven)`,
+      ``,
+      `TP1 fue alcanzado. Capital devuelto integro.`,
+    ].join('\n'),
+
+    trailing: [
+      `📐 TRAILING SL ACTUALIZADO`,
+      `${side} BTC en curso`,
+      ``,
+      `Nuevo SL: ${P(extra?.newSL ?? eventPrice)}`,
+      `P&L flotante: ${pnlStr}`,
+      `Razon: ${extra?.reason ?? 'Trailing automatico'}`,
+    ].join('\n'),
+
+    manual_close: [
+      `🔒 SEÑAL CERRADA MANUALMENTE`,
+      `${side} BTC`,
+      ``,
+      `Entrada: ${P(entry)}`,
+      `Cierre: ${P(eventPrice)}`,
+      `P&L: ${pnlStr}`,
+      `Razon: ${extra?.reason ?? 'Decision manual'}`,
+      `Duracion: ${dur}`,
+    ].join('\n'),
+  }
+
+  const priorities: Record<SignalEvent, 1|2|3|4|5> = {
+    new: 5, tp1: 4, tp2: 4, tp3: 5, sl: 5,
+    breakeven: 3, breakeven_sl: 4, trailing: 2, manual_close: 4,
+  }
+
+  const tags: Record<SignalEvent, string> = {
+    new:          side === 'LONG' ? 'green_circle,chart_with_upwards_trend' : 'red_circle,chart_with_downwards_trend',
+    tp1:          'white_check_mark',
+    tp2:          'white_check_mark,white_check_mark',
+    tp3:          'trophy',
+    sl:           'rotating_light',
+    breakeven:    'shield',
+    breakeven_sl: 'shield',
+    trailing:     'straight_ruler',
+    manual_close: 'lock',
+  }
+
+  await ntfy(ntfyTopic, titles[event], bodies[event], priorities[event], tags[event])
+  return updated
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function toKlines(arr: { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined): Kline[] {
@@ -235,101 +437,43 @@ export async function GET(req: Request): Promise<NextResponse> {
     let agentOpinionChange: string | null = null   // set inside generate-signal block if bias flips
     const prevStateForVoice = await loadAgentState(getDbClient())
 
-    const TERMINAL_STATUSES = new Set(['closed_manual', 'sl_hit', 'breakeven', 'tp3_hit', 'expired', 'auto_close'])
+    const TERMINAL_STATUSES = new Set(['closed_manual', 'sl_hit', 'breakeven', 'tp3_hit'])
     for (const sig of active) {
-      // Never overwrite a signal that was manually or fully closed
       if (TERMINAL_STATUSES.has(sig.status)) continue
 
-      const isLong = sig.idea.side === 'LONG'
-      let updated: SignalRecord = sig
-      let changed = false
+      const isLong   = sig.idea.side === 'LONG'
+      let   updated: SignalRecord = sig
+      let   changed  = false
 
-      // SL hit (or breakeven SL hit after TP1)
+      // ── SL hit ────────────────────────────────────────────────────────────────
       if ((isLong && price <= sig.idea.sl) || (!isLong && price >= sig.idea.sl)) {
-        const rawPnl = isLong
-          ? (sig.idea.sl - sig.idea.price) / sig.idea.price * 100
-          : (sig.idea.price - sig.idea.sl) / sig.idea.price * 100
         const wasBreakeven = (sig as { breakevenSet?: boolean }).breakevenSet === true
-          || Math.abs(rawPnl) < 0.15   // SL within 0.15% of entry = breakeven
-        const closeStatus  = wasBreakeven ? 'breakeven' : 'sl_hit'
-        const closeReason  = wasBreakeven
-          ? 'SL en breakeven tocado — trade sin pérdida'
-          : 'SL tocado — stop loss ejecutado'
-        updated = {
-          ...sig,
-          status:     closeStatus as SignalRecord['status'],
-          pnl:        parseFloat(rawPnl.toFixed(2)),
-          closedAt:   time,
-          exitPrice:  sig.idea.sl,
-          closeReason,
-          exitTs:     time,
-        }
-        if (ntfyTopic) {
-          if (wasBreakeven) {
-            await ntfy(
-              ntfyTopic,
-              sanitizeHdr(`BREAKEVEN - ${sig.idea.side} BTC cerrado sin pérdida`),
-              [
-                `${sig.idea.side} BTC cerrado en breakeven`,
-                ``,
-                `Entrada: $${Math.round(sig.idea.price).toLocaleString()}`,
-                `SL breakeven: $${Math.round(sig.idea.sl).toLocaleString()}`,
-                `P&L: ${rawPnl >= 0 ? '+' : ''}${rawPnl.toFixed(2)}% (sin pérdida)`,
-                ``,
-                `TP1 fue alcanzado — capital protegido ✅`,
-              ].join('\n'),
-              3, 'shield',
-            )
-          } else {
-            await ntfy(
-              ntfyTopic,
-              sanitizeHdr(`STOP LOSS TOCADO - ${sig.idea.side} BTC`),
-              `SL alcanzado en $${Math.round(sig.idea.sl).toLocaleString()}\nP&L: ${rawPnl.toFixed(2)}%`,
-              4, 'rotating_light',
-            )
-          }
-        }
+          || Math.abs((sig.idea.sl - sig.idea.price) / sig.idea.price * 100) < 0.15
+        updated = await handleSignalEvent(sig, wasBreakeven ? 'breakeven_sl' : 'sl', sig.idea.sl, ntfyTopic, {
+          reason: wasBreakeven ? 'SL en breakeven tocado' : 'SL tocado',
+        })
         changed = true
       }
-      // TP3
+      // ── TP3 ───────────────────────────────────────────────────────────────────
       else if ((isLong && price >= sig.idea.tp3) || (!isLong && price <= sig.idea.tp3)) {
-        const pnl = Math.abs(sig.idea.tp3 - sig.idea.price) / sig.idea.price * 100
-        updated = { ...sig, status: 'tp3_hit', pnl, closedAt: time, exitPrice: sig.idea.tp3, exitTs: time }
-        if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`TP3 ALCANZADO - ${sig.idea.side} BTC`), `TP3 $${Math.round(sig.idea.tp3).toLocaleString()} | +${pnl.toFixed(2)}%`, 5, 'trophy')
+        updated = await handleSignalEvent(sig, 'tp3', sig.idea.tp3, ntfyTopic, { reason: 'TP3 alcanzado' })
         changed = true
       }
-      // TP2 — partial close: stay active, move SL to TP1
+      // ── TP2 ───────────────────────────────────────────────────────────────────
       else if (((isLong && price >= sig.idea.tp2) || (!isLong && price <= sig.idea.tp2)) && !sig.tp2Hit) {
-        const pnl = Math.abs(sig.idea.tp2 - sig.idea.price) / sig.idea.price * 100
-        updated = {
-          ...sig,
-          tp2Hit: true,
-          status: 'active' as SignalRecord['status'],
-          idea: { ...sig.idea, sl: sig.idea.tp1 },  // move SL to TP1
-          pnl,
-        }
-        await saveSignalToCloud(updated)  // persist BEFORE NTFY to prevent re-fire
-        if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`🎯🎯 TP2 TOCADO - ${sig.idea.side} BTC`), `TP2 $${Math.round(sig.idea.tp2).toLocaleString()} | +${pnl.toFixed(2)}% | SL movido a TP1`, 4, 'green_circle')
+        updated = await handleSignalEvent(sig, 'tp2', sig.idea.tp2, ntfyTopic, { reason: 'TP2 alcanzado' })
+        await saveSignalToCloud(updated)   // persist BEFORE next check to prevent re-fire
         changed = true
       }
-      // TP1 — partial close: stay active, move SL to breakeven (entry)
+      // ── TP1 ───────────────────────────────────────────────────────────────────
       else if (((isLong && price >= sig.idea.tp1) || (!isLong && price <= sig.idea.tp1)) && !sig.tp1Hit) {
-        const pnl = isLong
-          ? (sig.idea.tp1 - sig.idea.price) / sig.idea.price * 100
-          : (sig.idea.price - sig.idea.tp1) / sig.idea.price * 100
-        updated = {
-          ...sig,
-          tp1Hit: true,
-          status: 'active' as SignalRecord['status'],
-          idea: { ...sig.idea, sl: sig.idea.price },  // move SL to entry (breakeven)
-          pnl,
-        }
-        await saveSignalToCloud(updated)  // persist BEFORE NTFY to prevent re-fire
-        if (ntfyTopic) await ntfy(ntfyTopic, sanitizeHdr(`🎯 TP1 TOCADO - ${sig.idea.side} BTC`), `TP1 $${Math.round(sig.idea.tp1).toLocaleString()} | +${pnl.toFixed(2)}% | SL en breakeven`, 3, 'green_circle')
+        updated = await handleSignalEvent(sig, 'tp1', sig.idea.tp1, ntfyTopic, { reason: 'TP1 alcanzado' })
+        ;(updated as { breakevenSet?: boolean }).breakevenSet = true
+        await saveSignalToCloud(updated)   // persist BEFORE next check to prevent re-fire
         changed = true
       }
 
-      // Trailing stop / breakeven (only if still active, and only fire NTFY once per action)
+      // ── Trailing stop (only if still active, only fire NTFY once per action) ──
       if (updated.status === 'active') {
         const tf = sig.idea.tradeType === 'Scalp' ? klines['15m'] : klines['4h']
         const stopUpdate = evaluateStopManagement(updated, price, tf)
@@ -338,21 +482,18 @@ export async function GET(req: Request): Promise<NextResponse> {
           const isTrail2      = stopUpdate.action === 'trail_to_tp1'
           const alreadyBE     = (sig as { breakevenSet?: boolean }).breakevenSet  ?? false
           const alreadyTrail2 = (sig as { trailing2Set?: boolean }).trailing2Set  ?? false
-          // Only fire NTFY if this action hasn't been fired before
           const shouldNotify  = (isBreakeven && !alreadyBE) || (isTrail2 && !alreadyTrail2) || (!isBreakeven && !isTrail2)
-          updated = {
-            ...updated,
-            idea: { ...updated.idea, sl: stopUpdate.newSL },
-          } as SignalRecord
+          const trailEvent: SignalEvent = isBreakeven ? 'breakeven' : 'trailing'
+          if (shouldNotify) {
+            updated = await handleSignalEvent(updated, trailEvent, stopUpdate.newSL, ntfyTopic, {
+              reason: stopUpdate.reason, newSL: stopUpdate.newSL,
+            })
+          } else {
+            updated = { ...updated, idea: { ...updated.idea, sl: stopUpdate.newSL } } as SignalRecord
+          }
           ;(updated as { breakevenSet?: boolean }).breakevenSet    = isBreakeven ? true : alreadyBE
           ;(updated as { trailing2Set?: boolean }).trailing2Set    = isTrail2    ? true : alreadyTrail2
           ;(updated as { trailingActive?: boolean }).trailingActive = stopUpdate.pnlProtected > 0
-          if (shouldNotify && ntfyTopic) await ntfy(
-            ntfyTopic,
-            sanitizeHdr(`${isBreakeven ? 'BREAKEVEN ACTIVADO' : 'TRAILING SL'} - ${sig.idea.side} BTC`),
-            `${stopUpdate.reason}\nSL: $${Math.round(stopUpdate.oldSL).toLocaleString()} → $${Math.round(stopUpdate.newSL).toLocaleString()}`,
-            3, 'shield',
-          )
           results.updates.push({ id: sig.id, action: stopUpdate.action, newSL: stopUpdate.newSL })
           changed = true
         }
@@ -360,7 +501,6 @@ export async function GET(req: Request): Promise<NextResponse> {
 
       if (changed) {
         await saveSignalToCloud(updated)
-        // Record outcome in apex_decisions for fully closed signals only (tp3 or sl)
         const wasClosed = (['sl_hit', 'breakeven', 'tp3_hit'] as string[]).includes(updated.status)
         const closeSb = getDbClient()
         if (closeSb && wasClosed && updated.pnl != null) {
@@ -503,6 +643,8 @@ export async function GET(req: Request): Promise<NextResponse> {
               ts:         new Date(time),
             },
           }
+          // Save + send NTFY via central handler (always sends for new signals)
+          await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
           await saveSignalToCloud(rec)
           // Link decision record to the generated signal
           if (sb) {
@@ -515,25 +657,6 @@ export async function GET(req: Request): Promise<NextResponse> {
               .then(({ error }: { error: { message: string } | null }) => {
                 if (error) console.error('[APEX Decisions] link error:', error.message)
               })
-          }
-          if (ntfyTopic && newSignal.confidence !== 'BAJA') {
-            const reasons = newSignal.reasons.slice(0, 3).map(r => r.txt).join('\n')
-            await ntfy(
-              ntfyTopic,
-              sanitizeHdr(`APEX SIGNAL: ${newSignal.side} BTC - ${newSignal.confidence}`),
-              [
-                `${newSignal.side === 'LONG' ? '▲ LONG' : '▼ SHORT'} BTC/USDT | ${newSignal.tradeType}`,
-                `Entrada: $${Math.round(newSignal.price).toLocaleString()}`,
-                `SL:  $${Math.round(newSignal.sl).toLocaleString()}`,
-                `TP1: $${Math.round(newSignal.tp1).toLocaleString()}`,
-                `TP2: $${Math.round(newSignal.tp2).toLocaleString()}`,
-                ``,
-                reasons,
-                `Leverage: ${newSignal.maxLev}x | Score: ${newSignal.maxSc}`,
-              ].join('\n'),
-              newSignal.confidence === 'ALTA' ? 5 : 3,
-              newSignal.side === 'LONG' ? 'green_circle,chart_with_upwards_trend' : 'red_circle,chart_with_downwards_trend',
-            )
           }
           results.signals.push({ type: newSignal.tradeType, side: newSignal.side, confidence: newSignal.confidence })
         }

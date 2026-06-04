@@ -14,7 +14,7 @@ const W_MAX = 1.35      // ceiling multiplier (great combination)
  */
 export function getLearnedWeights(history: SignalRecord[]): WeightMap {
   const resolved = history
-    .filter(r => r.status !== 'active' && r.status !== 'expired')
+    .filter(r => r.status !== 'active' && r.status !== 'pending_confirmation')
     .slice(0, 40)
 
   const acc: Record<string, { wins: number; total: number }> = {}

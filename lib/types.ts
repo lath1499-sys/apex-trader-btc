@@ -140,7 +140,7 @@ export interface Strategy {
 export type SignalStatus =
   | 'active' | 'pending_confirmation'
   | 'tp1_hit' | 'tp2_hit' | 'tp3_hit'
-  | 'sl_hit' | 'breakeven' | 'expired' | 'closed_manual' | 'auto_close'
+  | 'sl_hit' | 'breakeven' | 'closed_manual'
 
 export interface SignalRecord {
   id: string

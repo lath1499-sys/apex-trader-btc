@@ -191,7 +191,7 @@ export default function CandleChart() {
     // Signal history markers (last 20 closed, no expired)
     if (showSignals && signalHistory.length) {
       const closed = signalHistory
-        .filter(r => r.status !== 'active' && r.status !== 'pending_confirmation' && r.status !== 'expired')
+        .filter(r => r.status !== 'active' && r.status !== 'pending_confirmation')
         .slice(0, 20)
       const markers: SeriesMarker<Time>[] = []
       const closest = (ms: number) => klines.reduce((b, k) => Math.abs(k.t - ms) < Math.abs(b.t - ms) ? k : b)

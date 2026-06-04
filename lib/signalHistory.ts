@@ -175,7 +175,7 @@ export interface SignalStats {
 }
 
 export function calcSignalStats(records: SignalRecord[]): SignalStats {
-  const resolved  = records.filter(r => r.status !== 'active' && r.status !== 'expired')
+  const resolved  = records.filter(r => r.status !== 'active' && r.status !== 'pending_confirmation')
   const wins      = resolved.filter(r => r.status !== 'sl_hit')
   const totalPnlR = resolved.reduce((s, r) => s + (r.pnlR ?? 0), 0)
   return {

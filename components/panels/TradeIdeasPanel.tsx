@@ -22,12 +22,12 @@ import type { CapitalConfig, PositionSize } from '@/lib/capitalManagement'
 const STATUS_COLOR: Record<string, string> = {
   active: '#a78bfa', pending_confirmation: '#fbbf24',
   tp1_hit: '#22c55e', tp2_hit: '#16a34a', tp3_hit: '#15803d',
-  sl_hit: '#ef4444', expired: '#6b7280', closed_manual: '#f97316', auto_close: '#818cf8',
+  sl_hit: '#ef4444', breakeven: '#6b7280', closed_manual: '#f97316',
 }
 const STATUS_LABEL: Record<string, string> = {
   active: 'ACTIVO', pending_confirmation: '⚠️ CONTRARIA',
   tp1_hit: 'TP1 ✓', tp2_hit: 'TP2 ✓', tp3_hit: 'TP3 ✓',
-  sl_hit: 'SL ✗', expired: 'EXP', closed_manual: 'CERRADO', auto_close: '🤖 AUTO',
+  sl_hit: 'SL ✗', breakeven: 'B/E', closed_manual: 'CERRADO',
 }
 
 const CLOSE_REASONS = [
@@ -530,10 +530,10 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
             </div>
           )}
 
-          {/* Auto-close reason banner */}
-          {status === 'auto_close' && rec?.closeReason && (
-            <div style={{ background: '#818cf822', border: '1px solid #818cf8', borderRadius: 6, padding: '8px 12px', fontSize: 10, color: '#818cf8' }}>
-              🤖 Cerrado automáticamente: {rec.closeReason}
+          {/* Manual close reason banner */}
+          {status === 'closed_manual' && rec?.closeReason && (
+            <div style={{ background: '#f9741622', border: '1px solid #f97416', borderRadius: 6, padding: '8px 12px', fontSize: 10, color: '#f97416' }}>
+              ✋ Cerrado manualmente: {rec.closeReason}
               {rec.pnl != null && (
                 <span style={{ marginLeft: 8, fontWeight: 700, color: rec.pnl >= 0 ? '#22c55e' : '#ef4444' }}>
                   {rec.pnl >= 0 ? '+' : ''}{rec.pnl.toFixed(2)}%
@@ -902,7 +902,7 @@ function PerformanceTab() {
             const isLong = s.side === 'LONG'
             const pnl    = s.pnl ?? null
             const STATUS: Record<string, string> = {
-              sl_hit: '❌', tp1_hit: '🎯', tp2_hit: '🎯🎯', tp3_hit: '🏆', closed_manual: '✋', expired: '💤',
+              sl_hit: '❌', tp1_hit: '🎯', tp2_hit: '🎯🎯', tp3_hit: '🏆', closed_manual: '✋', breakeven: '🛡️',
             }
             return (
               <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: `1px solid ${T.border}44`, fontSize: 9 }}>
@@ -1142,7 +1142,7 @@ function LimitOrdersCard({ idea, inds, fvgs, mkt, T }: {
 
 // ── Historial sub-tab (uses sigH, persisted records) ─────────────────────────
 
-type HFilter = 'todos' | 'active' | 'won' | 'lost' | 'expired'
+type HFilter = 'todos' | 'active' | 'won' | 'lost' | 'closed'
 type HMode   = 'normal' | 'scalp'
 
 function ScalpHistoryRow({ sig }: { sig: ScalpSignal }) {
@@ -1152,7 +1152,7 @@ function ScalpHistoryRow({ sig }: { sig: ScalpSignal }) {
   const pnl    = sig.pnl ?? null
   const STATUS: Record<string, string> = {
     sl_hit: '❌ SL', tp1_hit: '🎯 TP1', tp2_hit: '🎯🎯 TP2', tp3_hit: '🏆 TP3',
-    expired: '💤', closed_manual: '✋ Manual', active: '🟡 Activo',
+    breakeven: '🛡️ B/E', closed_manual: '✋ Manual', active: '🟡 Activo',
   }
   // Safe price formatter — prevents NaN when numeric fields arrive as undefined/string
   const fmtP = (n: number | undefined | null) => {
@@ -1195,14 +1195,14 @@ function HistorialTabView({ sigH, hFilter, setHFilter, onClose }: {
   const activeCount  = sigH.filter(r => r.status === 'active' || r.status === 'pending_confirmation').length
   const wonCount     = sigH.filter(r => r.status.startsWith('tp')).length
   const lostCount    = sigH.filter(r => r.status === 'sl_hit').length
-  const expiredCount = sigH.filter(r => r.status === 'expired' || r.status === 'auto_close' || r.status === 'closed_manual').length
+  const closedCount  = sigH.filter(r => r.status === 'breakeven' || r.status === 'closed_manual').length
 
   const filtered = sigH
     .filter(r => {
       if (hFilter === 'active')  return r.status === 'active' || r.status === 'pending_confirmation'
       if (hFilter === 'won')     return r.status.startsWith('tp')
       if (hFilter === 'lost')    return r.status === 'sl_hit'
-      if (hFilter === 'expired') return r.status === 'expired' || r.status === 'auto_close' || r.status === 'closed_manual'
+      if (hFilter === 'closed')  return r.status === 'breakeven' || r.status === 'closed_manual'
       return true
     })
     .slice()
@@ -1219,7 +1219,7 @@ function HistorialTabView({ sigH, hFilter, setHFilter, onClose }: {
     { key: 'active',  label: `🟡 Abiertos (${activeCount})` },
     { key: 'won',     label: `✅ Ganados (${wonCount})` },
     { key: 'lost',    label: `❌ Perdidos (${lostCount})` },
-    { key: 'expired', label: `💤 Cerrados (${expiredCount})` },
+    { key: 'closed',  label: `🛡️ Cerrados (${closedCount})` },
   ]
 
   const hasNormal = sigH.length > 0
@@ -1330,16 +1330,6 @@ export default function TradeIdeasPanel() {
   const vwap           = useApexStore(s => s.vwap)
   const lastAutoAlert  = useRef<string | null>(null)
   const activeKZ       = killzones.find(kz => kz.active)
-  const [autoCloseOn, setAutoCloseOn] = useState(() => {
-    try { return localStorage.getItem('apex_auto_close') !== 'false' } catch { return true }
-  })
-
-  function toggleAutoClose() {
-    const next = !autoCloseOn
-    setAutoCloseOn(next)
-    try { localStorage.setItem('apex_auto_close', next ? 'true' : 'false') } catch {}
-  }
-
   // All active signal records (multiple concurrent signals supported)
   const activeRecs  = sigH.filter(r => r.status === 'active' || r.status === 'pending_confirmation')
   // Fallback single-idea display for ConfluencePanel and LimitOrdersCard
@@ -1425,14 +1415,6 @@ export default function TradeIdeasPanel() {
             color: scalpMode === val ? (val ? '#fbbf24' : T.accent) : T.textSec,
           }}>{label}</button>
         ))}
-        <button onClick={toggleAutoClose} title="Auto-cierre automático de señales" style={{
-          display: 'flex', alignItems: 'center', gap: 4,
-          padding: '5px 10px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-          fontSize: 9, fontWeight: 700, whiteSpace: 'nowrap',
-          background: autoCloseOn ? '#818cf822' : 'transparent',
-          border: `1px solid ${autoCloseOn ? '#818cf8' : T.border}`,
-          color: autoCloseOn ? '#818cf8' : T.muted,
-        }}>🤖 {autoCloseOn ? 'ON' : 'OFF'}</button>
       </div>
 
       {tab === 'Actual' && (
