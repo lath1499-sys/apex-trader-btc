@@ -436,18 +436,20 @@ export async function GET(req: Request): Promise<NextResponse> {
     const signalsSb  = getDbClient()
     const signalsSb2 = getSupabase()   // anon key fallback — same DNS path as browser client
     let rawSignals: Record<string, unknown>[] | null = null
-    for (const sb of [signalsSb, signalsSb2]) {
+    for (const [label, sb] of [['service', signalsSb], ['anon', signalsSb2]] as const) {
       if (!sb) continue
-      const { data } = await Promise.resolve(
+      const result = await Promise.resolve(
         sb
           .from('apex_signals')
           .select('*')
           .order('created_at', { ascending: false })
           .limit(500)
-      ).catch(() => ({ data: null }))
-      if (data && (data as unknown[]).length >= 0) { rawSignals = data as Record<string, unknown>[]; break }
+      ).catch((e: Error) => ({ data: null, error: { message: `[${label}] ${e.message}: ${(e as NodeJS.ErrnoException).cause ?? ''}` } }))
+      const { data, error: sbErr } = result as { data: unknown[] | null; error: { message: string } | null }
+      if (data && Array.isArray(data)) { rawSignals = data as Record<string, unknown>[]; break }
+      if (sbErr) results.errors.push(`[Signals/${label}] ${sbErr.message}`)
     }
-    if (!rawSignals) results.errors.push('[Signals] Both service-key and anon-key queries failed')
+    if (!rawSignals) results.errors.push('[Signals] Both clients failed — check Supabase project status/URL')
     const allSignals: SignalRecord[] = Array.isArray(rawSignals) ? rawSignals.map((s) => transformSignal(s)) : []
     const active     = allSignals.filter(s => s.status === 'active')
     results.signalsLoaded = allSignals.length
