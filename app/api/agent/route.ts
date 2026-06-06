@@ -694,14 +694,22 @@ export async function GET(req: Request): Promise<NextResponse> {
       }
 
       if (newSignal && !newSignal.consolidation && !blockedByCorrelation && !cb.blocked) {
-        // Dedup: don't add same-side signal if one already active
+        // Dedup: don't add same-side signal if one already active OR already notified in last 2h
         const sameActive = active.some(s => s.idea.side === newSignal.side && s.status === 'active')
-        if (!sameActive && shouldGenerateSignal(newSignal.tradeType, newSignal.confidence)) {
+        const alreadyNotified = allSignals.some(s =>
+          s.status === 'active' &&
+          s.ntfySent === true &&
+          s.idea.side === newSignal.side &&
+          Math.abs(s.idea.price - newSignal.price) / newSignal.price < 0.003 &&
+          new Date(s.createdAt).getTime() > Date.now() - 2 * 3_600_000,
+        )
+        if (!sameActive && !alreadyNotified && shouldGenerateSignal(newSignal.tradeType, newSignal.confidence)) {
           const recId = Date.now().toString()
           const rec: SignalRecord = {
             id:        recId,
             createdAt: time,
             status:    'active',
+            ntfySent:  true,   // mark true BEFORE save — prevents re-fire if read before NTFY completes
             exitPrice: null,
             exitTs:    null,
             pnl:       null,
@@ -738,9 +746,27 @@ export async function GET(req: Request): Promise<NextResponse> {
               ts:         new Date(time),
             },
           }
-          // Save + send NTFY via central handler (always sends for new signals)
-          await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
-          await saveSignalToCloud(rec)
+          // Save FIRST via direct service-key client — NTFY only fires if save succeeds
+          const recSaveSb = getDbClient()
+          const { error: recSaveErr } = await Promise.resolve(
+            recSaveSb.from('apex_signals').upsert({
+              id: rec.id, side: rec.idea.side, trade_type: rec.idea.tradeType,
+              entry: rec.idea.price, sl: rec.idea.sl, tp1: rec.idea.tp1,
+              tp2: rec.idea.tp2, tp3: rec.idea.tp3, confidence: rec.idea.confidence,
+              status: rec.status, reasons: rec.idea.reasons, created_at: rec.createdAt,
+              updated_at: new Date().toISOString(), ntfy_sent: true,
+              pnl: null, pnl_r: null, closed_at: null, exit_price: null, close_reason: null,
+              tp1_hit: false, tp2_hit: false, sl_warning_fired: false,
+              expiry_warning_fired: false, max_lev: rec.idea.maxLev ?? 5,
+            }, { onConflict: 'id' })
+          ).catch((e: Error) => ({ error: e }))
+          if (recSaveErr) {
+            results.errors.push(`[SignalSave] ${(recSaveErr as {message?:string}).message ?? recSaveErr}`)
+          } else {
+            // DB save confirmed — now send NTFY
+            await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
+            results.signals.push({ type: newSignal.tradeType, side: newSignal.side, confidence: newSignal.confidence })
+          }
           // Link decision record to the generated signal
           if (sb) {
             await sb.from('apex_decisions')
@@ -753,7 +779,6 @@ export async function GET(req: Request): Promise<NextResponse> {
                 if (error) console.error('[APEX Decisions] link error:', error.message)
               })
           }
-          results.signals.push({ type: newSignal.tradeType, side: newSignal.side, confidence: newSignal.confidence })
         }
       }
     }
@@ -789,10 +814,11 @@ export async function GET(req: Request): Promise<NextResponse> {
           new Date(s.createdAt).getTime() > twoHoursAgo,
         )
 
-        // Secondary dedup: any scalp already notified in the last 1h (catches save-failure re-fires)
+        // Secondary dedup: same-side scalp already notified in last 1h (side-aware — allows LONG after SHORT)
         const oneHourAgo = Date.now() - 60 * 60_000
         const recentlyNotified = allSignals.find(s =>
           s.idea.tradeType === 'Scalp' &&
+          s.idea.side === scalpSig.side &&
           s.ntfySent === true &&
           new Date(s.createdAt).getTime() > oneHourAgo,
         )
