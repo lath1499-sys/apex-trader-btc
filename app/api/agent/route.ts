@@ -431,16 +431,22 @@ export async function GET(req: Request): Promise<NextResponse> {
     const hours  = nowUtc.getUTCHours()
 
     // ── 3. Load existing signals + compute learned weights ────────────────────
-    // Use getDbClient() (service key, bypasses RLS) instead of loadSignalsFromCloud()
-    // which uses a module-level singleton that may fall back to the anon key on Vercel.
+    // Use getDbClient() (service key, bypasses RLS). Retry once on network failure.
     const signalsSb = getDbClient()
-    const { data: rawSignals, error: signalsErr } = await signalsSb
-      .from('apex_signals')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(500)
-    if (signalsErr) results.errors.push(`[Signals] ${signalsErr.message}`)
-    const allSignals: SignalRecord[] = (rawSignals ?? []).map((s: Record<string, unknown>) => transformSignal(s))
+    let rawSignals: Record<string, unknown>[] | null = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { data, error: signalsErr } = await Promise.resolve(
+        signalsSb
+          .from('apex_signals')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(500)
+      ).catch((e: Error) => ({ data: null, error: e }))
+      if (data) { rawSignals = data as Record<string, unknown>[]; break }
+      if (attempt === 1) results.errors.push(`[Signals] ${signalsErr?.message ?? 'fetch failed'}`)
+      await new Promise(r => setTimeout(r, 1500))  // wait 1.5s before retry
+    }
+    const allSignals: SignalRecord[] = Array.isArray(rawSignals) ? rawSignals.map((s) => transformSignal(s)) : []
     const active     = allSignals.filter(s => s.status === 'active')
     results.signalsLoaded = allSignals.length
     results.signalsActive = active.length
@@ -875,11 +881,12 @@ export async function GET(req: Request): Promise<NextResponse> {
       // overwritten by the fire-and-forget upsert that runs earlier in this request.
       const memorySb30 = getDbClient()
       if (memorySb30) {
-        await memorySb30
-          .from('apex_agent_state')
-          .update({ last_analysis_at: new Date().toISOString() })
-          .eq('id', 'current')
-          .catch(() => {})
+        await Promise.resolve(
+          memorySb30
+            .from('apex_agent_state')
+            .update({ last_analysis_at: new Date().toISOString() })
+            .eq('id', 'current')
+        ).catch(() => {})
       }
     } else if (!results.update30minSent) {
       results.update30minSkipped = `minsSince: ${minsSinceUpdate.toFixed(1)}, ntfyTopic: ${ntfyTopic ? 'set' : 'MISSING'}, session: ${session.quality}`
@@ -912,11 +919,12 @@ export async function GET(req: Request): Promise<NextResponse> {
       // Targeted .update() — only touch last_deep_analysis_at to avoid race with fire-and-forget save
       const memorySb4h = getDbClient()
       if (memorySb4h) {
-        await memorySb4h
-          .from('apex_agent_state')
-          .update({ last_deep_analysis_at: new Date().toISOString() })
-          .eq('id', 'current')
-          .catch(() => {})
+        await Promise.resolve(
+          memorySb4h
+            .from('apex_agent_state')
+            .update({ last_deep_analysis_at: new Date().toISOString() })
+            .eq('id', 'current')
+        ).catch(() => {})
       }
     }
 
