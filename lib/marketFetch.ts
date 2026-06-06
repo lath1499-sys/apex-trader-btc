@@ -53,13 +53,17 @@ export interface FetchedMarket {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-async function safeFetch(url: string): Promise<unknown> {
+async function safeFetch(url: string, timeoutMs = 8_000): Promise<unknown> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
   try {
-    const res = await fetch(url, { next: { revalidate: 0 } })
+    const res = await fetch(url, { next: { revalidate: 0 }, signal: ctrl.signal })
     if (!res.ok) return null
     return res.json()
   } catch {
     return null
+  } finally {
+    clearTimeout(timer)
   }
 }
 

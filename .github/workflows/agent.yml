@@ -3,14 +3,41 @@ name: APEX Agent
 on:
   schedule:
     - cron: '*/5 * * * *'   # every 5 minutes — SL/TP detected within 5 min max
-  workflow_dispatch:          # allow manual trigger
+  workflow_dispatch:          # manual trigger
+  push:
+    branches: [master]        # also runs on every push
 
 jobs:
-  run-agent:
+  trigger-agent:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger APEX Agent
         run: |
-          curl -s -X GET \
+          response=$(curl -s -w "\n%{http_code}" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            https://apex-trader-btc.vercel.app/api/agent
+            --max-time 65 \
+            https://apex-trader-btc.vercel.app/api/agent)
+          http_code=$(echo "$response" | tail -1)
+          body=$(echo "$response" | head -1)
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+          if [ "$http_code" != "200" ]; then
+            echo "Agent call failed with status $http_code"
+            exit 1
+          fi
+
+  keep-alive:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Keep workflow alive
+        run: |
+          git config user.email "apex-bot@apex-trader.com"
+          git config user.name "APEX Bot"
+          echo "Last agent run: $(date -u)" > .agent-heartbeat
+          git add .agent-heartbeat
+          git diff --staged --quiet || git commit -m "chore: agent heartbeat $(date -u +%Y-%m-%dT%H:%M)"
+          git push || true

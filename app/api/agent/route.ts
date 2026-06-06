@@ -33,7 +33,7 @@ import { runWalkForward }               from '@/lib/walkForwardBacktest'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
-export const maxDuration = 30
+export const maxDuration = 60   // Vercel Hobby max; agent needs ~20-40s for all API calls
 
 // ── Supabase client — service key preferred, anon key as fallback ─────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -339,19 +339,22 @@ export async function GET(req: Request): Promise<NextResponse> {
       {},
     )
 
-    // ── 1c. Global markets + FRED macro (parallel, all graceful fallbacks) ──────
-    const [globalMarkets, macroIndicators, globalLiquidity, upcomingEvents, socialSentiment, whaleAlert] = await Promise.all([
-      fetchGlobalMarkets(),
-      fetchMacroIndicators(),
-      fetchGlobalLiquidity(),
-      fetchUpcomingEvents(),
-      fetchSocialSentiment(),
-      fetchWhaleAlert(),
+    // ── 1c. All external API calls in one parallel batch ─────────────────────────
+    // fetchFedExpectations needs fedRate, so we run macroIndicators first in a
+    // sub-parallel group, then merge — still all non-blocking relative to each other.
+    const [globalMarkets, macroIndicators, globalLiquidity, upcomingEvents, socialSentiment, whaleAlert, optionsData] = await Promise.all([
+      fetchGlobalMarkets().catch(() => null),
+      fetchMacroIndicators().catch(() => null),
+      fetchGlobalLiquidity().catch(() => null),
+      fetchUpcomingEvents().catch(() => []),
+      fetchSocialSentiment().catch(() => null),
+      fetchWhaleAlert().catch(() => null),
+      fetchOptionsData().catch(() => null),
     ])
 
-    // Fed expectations (needs fedRate from macroIndicators)
+    // Fed expectations — depends on fedRate from macroIndicators (already resolved above)
     const fedExpectations = macroIndicators?.fedRate?.current
-      ? await fetchFedExpectations(macroIndicators.fedRate.current)
+      ? await fetchFedExpectations(macroIndicators.fedRate.current).catch(() => null)
       : null
 
     results.macro = {
@@ -442,11 +445,13 @@ export async function GET(req: Request): Promise<NextResponse> {
     results.signalsLoaded = allSignals.length
     results.signalsActive = active.length
     console.log(`[APEX] Signals loaded: ${allSignals.length} total, ${active.length} active`)
-    const learnedWeights = await calcLearnedWeights(getDbClient())
-    const capitalConfig  = await loadCapitalConfig(getDbClient() as any).catch(() => DEFAULT_CONFIG)
-
-    // ── 3b. Options data (Deribit DVOL + Max Pain) — 15-min cache ────────────
-    const optionsData = await fetchOptionsData().catch(() => null)
+    // Supabase reads in parallel — each is independent
+    const [learnedWeights, capitalConfig, prevStateForVoice] = await Promise.all([
+      calcLearnedWeights(getDbClient()),
+      loadCapitalConfig(getDbClient() as any).catch(() => DEFAULT_CONFIG),
+      loadAgentState(getDbClient()),
+    ])
+    // optionsData already fetched in the parallel API batch above (line ~345)
 
     // ── 3c. Walk-Forward validation on real closed signals ───────────────────
     const wfResult = runWalkForward(allSignals)
@@ -473,7 +478,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       tradeType: s.idea.tradeType,
     }))
     let agentOpinionChange: string | null = null   // set inside generate-signal block if bias flips
-    const prevStateForVoice = await loadAgentState(getDbClient())
+    // prevStateForVoice already loaded in parallel Supabase batch above
 
     const TERMINAL_STATUSES = new Set(['closed_manual', 'sl_hit', 'breakeven', 'tp3_hit'])
     for (const sig of active) {
