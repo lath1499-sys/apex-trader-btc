@@ -431,21 +431,23 @@ export async function GET(req: Request): Promise<NextResponse> {
     const hours  = nowUtc.getUTCHours()
 
     // ── 3. Load existing signals + compute learned weights ────────────────────
-    // Use getDbClient() (service key, bypasses RLS). Retry once on network failure.
-    const signalsSb = getDbClient()
+    // Try service key first (bypasses RLS), fall back to anon key on network failure.
+    // Both use NEXT_PUBLIC_SUPABASE_URL so DNS is identical; service key has better perms.
+    const signalsSb  = getDbClient()
+    const signalsSb2 = getSupabase()   // anon key fallback — same DNS path as browser client
     let rawSignals: Record<string, unknown>[] | null = null
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const { data, error: signalsErr } = await Promise.resolve(
-        signalsSb
+    for (const sb of [signalsSb, signalsSb2]) {
+      if (!sb) continue
+      const { data } = await Promise.resolve(
+        sb
           .from('apex_signals')
           .select('*')
           .order('created_at', { ascending: false })
           .limit(500)
-      ).catch((e: Error) => ({ data: null, error: e }))
-      if (data) { rawSignals = data as Record<string, unknown>[]; break }
-      if (attempt === 1) results.errors.push(`[Signals] ${signalsErr?.message ?? 'fetch failed'}`)
-      await new Promise(r => setTimeout(r, 1500))  // wait 1.5s before retry
+      ).catch(() => ({ data: null }))
+      if (data && (data as unknown[]).length >= 0) { rawSignals = data as Record<string, unknown>[]; break }
     }
+    if (!rawSignals) results.errors.push('[Signals] Both service-key and anon-key queries failed')
     const allSignals: SignalRecord[] = Array.isArray(rawSignals) ? rawSignals.map((s) => transformSignal(s)) : []
     const active     = allSignals.filter(s => s.status === 'active')
     results.signalsLoaded = allSignals.length
