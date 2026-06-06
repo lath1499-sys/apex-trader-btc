@@ -827,9 +827,26 @@ export async function GET(req: Request): Promise<NextResponse> {
               ts:         new Date(time),
             },
           }
-          await saveSignalToCloud(rec)   // persist ntfySent=true BEFORE sending NTFY
-          await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
-          results.signals.push({ type: 'Scalp', side: scalpSig.side, confidence: scalpSig.confidence })
+          // Save via direct service-key client (bypasses RLS + avoids anon-key singleton issues)
+          const saveSb = getDbClient()
+          const { error: saveErr } = await Promise.resolve(
+            saveSb.from('apex_signals').upsert({
+              id: rec.id, side: rec.idea.side, trade_type: rec.idea.tradeType,
+              entry: rec.idea.price, sl: rec.idea.sl, tp1: rec.idea.tp1,
+              tp2: rec.idea.tp2, tp3: rec.idea.tp3, confidence: rec.idea.confidence,
+              status: rec.status, reasons: rec.idea.reasons, created_at: rec.createdAt,
+              updated_at: new Date().toISOString(), ntfy_sent: true,
+              pnl: null, pnl_r: null, closed_at: null, exit_price: null, close_reason: null,
+              tp1_hit: false, tp2_hit: false, sl_warning_fired: false,
+              expiry_warning_fired: false, max_lev: rec.idea.maxLev ?? 5,
+            }, { onConflict: 'id' })
+          ).catch((e: Error) => ({ error: e }))
+          if (saveErr) {
+            results.errors.push(`[ScalpSave] ${(saveErr as {message?:string}).message ?? saveErr}`)
+          } else {
+            await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
+            results.signals.push({ type: 'Scalp', side: scalpSig.side, confidence: scalpSig.confidence })
+          }
         }
       }
     }

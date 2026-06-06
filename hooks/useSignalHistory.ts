@@ -53,6 +53,7 @@ export function useSignalHistory() {
   const inds             = useApexStore(s => s.inds)
   const setSignalHistory = useApexStore(s => s.setSignalHistory)
   const pushScalpHistory = useApexStore(s => s.pushScalpHistory)
+  const setScalpSignals  = useApexStore(s => s.setScalpSignals)
 
   // Hydrate: try Supabase first, fall back to localStorage
   // Then subscribe to Realtime AND poll every 60s so cron signals always appear
@@ -74,14 +75,23 @@ export function useSignalHistory() {
       merged
         .filter(r => r.idea?.tradeType === 'Scalp' && r.status !== 'active')
         .forEach(r => pushScalpHistory(signalRecordToScalp(r)))
-      // Fix D: restore active scalp from Supabase into scalpSignal UI state (survives page reload)
+
+      // ── Sync ALL active scalps into scalpSignals[] array (authoritative UI source) ──
+      const activeScalps = merged
+        .filter(r => r.idea?.tradeType === 'Scalp' && r.status === 'active')
+        .map(r => signalRecordToScalp(r))
+      setScalpSignals(activeScalps)
+
+      // Keep legacy scalpSignal (single) in sync for useMarketData compat
       const activeScalpRec = merged.find(r => r.idea?.tradeType === 'Scalp' && r.status === 'active')
       if (activeScalpRec) {
         const currentScalp = useApexStore.getState().scalpSignal
-        // Only restore if there's no in-memory active signal already (avoid overwriting live detection)
         if (!currentScalp || currentScalp.status !== 'active') {
           useApexStore.getState().setScalpSignal(signalRecordToScalp(activeScalpRec))
         }
+      } else {
+        // No active scalps in Supabase — clear the legacy single signal too
+        useApexStore.getState().setScalpSignal(null)
       }
     }
 

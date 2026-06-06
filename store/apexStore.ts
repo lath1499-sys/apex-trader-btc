@@ -74,8 +74,10 @@ interface ApexState {
   // Scalp mode
   scalpMode: boolean
   setScalpMode: (v: boolean) => void
-  scalpSignal: ScalpSignal | null
+  scalpSignal: ScalpSignal | null                    // legacy single-signal (kept for useMarketData compat)
   setScalpSignal: (s: ScalpSignal | null) => void
+  scalpSignals: ScalpSignal[]                        // authoritative array — synced from Supabase
+  setScalpSignals: (signals: ScalpSignal[]) => void
   scalpHistory: ScalpSignal[]
   pushScalpHistory: (s: ScalpSignal) => void
   clearScalpHistory: () => void
@@ -150,6 +152,8 @@ export const useApexStore = create<ApexState>((set) => ({
   setScalpMode: (scalpMode) => set({ scalpMode }),
   scalpSignal: null,
   setScalpSignal: (scalpSignal) => set({ scalpSignal }),
+  scalpSignals: [],
+  setScalpSignals: (scalpSignals) => set({ scalpSignals }),
   scalpHistory: (() => {
     try { return JSON.parse(localStorage.getItem('apex_scalp_history') ?? '[]') as ScalpSignal[] }
     catch { return [] }

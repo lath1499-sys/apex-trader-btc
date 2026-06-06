@@ -1310,7 +1310,9 @@ export default function TradeIdeasPanel() {
   const fvgs           = useApexStore(s => s.fvgs)
   const scalpMode      = useApexStore(s => s.scalpMode)
   const setScalpMode   = useApexStore(s => s.setScalpMode)
-  const scalpSignal    = useApexStore(s => s.scalpSignal)
+  const scalpSignal    = useApexStore(s => s.scalpSignal)         // legacy single (useMarketData compat)
+  const scalpSignals   = useApexStore(s => s.scalpSignals)        // authoritative array from Supabase
+  const activeScalps   = scalpSignals.filter(s => s.status === 'active')
   const rawKMain       = useApexStore(s => s.rawK)
   const cycleMain      = useApexStore(s => s.cycle)
   const newsMain       = useApexStore(s => s.news)
@@ -1456,19 +1458,23 @@ export default function TradeIdeasPanel() {
               </div>
             )}
 
-            {/* Scalp signal card */}
-            {scalpSignal
-              ? <ScalpCard sig={scalpSignal} />
-              : (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-                  padding: '32px 20px', background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, textAlign: 'center' }}>
-                  <div style={{ fontSize: 24 }}>⚡</div>
-                  <div style={{ fontSize: 11, color: T.textSec }}>
-                    {activeKZ ? 'Analizando confluencias scalp…' : 'Esperando Killzone activa'}
+            {/* Scalp signal cards — render ALL active scalps from Supabase array */}
+            {activeScalps.length > 0
+              ? activeScalps.map(sig => <ScalpCard key={sig.id} sig={sig} />)
+              : scalpSignal
+                ? <ScalpCard sig={scalpSignal} />   /* fallback: legacy single signal */
+                : (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+                    padding: '32px 20px', background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, textAlign: 'center' }}>
+                    <div style={{ fontSize: 24 }}>⚡</div>
+                    <div style={{ fontSize: 11, color: T.textSec }}>
+                      Sin scalp activo
+                    </div>
+                    <div style={{ fontSize: 9, color: T.muted }}>
+                      {activeKZ ? 'Agente analizando confluencias…' : 'Esperando Killzone activa'}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 9, color: T.muted }}>Mínimo 4 confluencias requeridas</div>
-                </div>
-              )
+                )
             }
           </div>
         ) : activeRecs.length === 0 && displayIdea?.consolidation
@@ -1542,21 +1548,23 @@ export default function TradeIdeasPanel() {
       {tab === 'Alertas' && <AlertasTab />}
 
       {tab === 'Análisis' && (
-        scalpMode && scalpSignal
-          ? <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        scalpMode && (activeScalps[0] ?? scalpSignal)
+          ? (() => { const sig = activeScalps[0] ?? scalpSignal!; return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ background: T.card, border: `1px solid #fbbf2444`, borderRadius: 10, padding: '14px 16px' }}>
-                <div style={{ fontSize: 7, color: T.muted, letterSpacing: '.1em', marginBottom: 8 }}>⚡ ANÁLISIS SCALP — {scalpSignal.side}</div>
-                <pre style={{ fontSize: 10, color: T.text, lineHeight: 1.8, whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0 }}>{buildScalpAnalysis(scalpSignal)}</pre>
+                <div style={{ fontSize: 7, color: T.muted, letterSpacing: '.1em', marginBottom: 8 }}>⚡ ANÁLISIS SCALP — {sig.side}</div>
+                <pre style={{ fontSize: 10, color: T.text, lineHeight: 1.8, whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0 }}>{buildScalpAnalysis(sig)}</pre>
               </div>
               <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: '14px 16px' }}>
-                <div style={{ fontSize: 7, color: T.muted, letterSpacing: '.1em', marginBottom: 8 }}>CONFLUENCIAS ({scalpSignal.reasons.length})</div>
-                {scalpSignal.reasons.map((r, i) => (
-                  <div key={i} style={{ fontSize: 10, color: scalpSignal.side === 'LONG' ? T.bull : T.danger, lineHeight: 1.8 }}>
-                    {scalpSignal.side === 'LONG' ? '▲' : '▼'} {r}
+                <div style={{ fontSize: 7, color: T.muted, letterSpacing: '.1em', marginBottom: 8 }}>CONFLUENCIAS ({sig.reasons.length})</div>
+                {sig.reasons.map((r, i) => (
+                  <div key={i} style={{ fontSize: 10, color: sig.side === 'LONG' ? T.bull : T.danger, lineHeight: 1.8 }}>
+                    {sig.side === 'LONG' ? '▲' : '▼'} {r}
                   </div>
                 ))}
               </div>
             </div>
+          ); })()
           : displayIdea
             ? <ConfluencePanel idea={displayIdea} inds={inds as IndicatorMap} T={T} analysisText={analysisTextMain} />
             : <div style={{ color: T.textSec, textAlign: 'center', padding: 40, fontSize: 11 }}>Sin señal activa.</div>
