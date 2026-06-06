@@ -627,7 +627,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       // Save new state (fire-and-forget — deliberately excludes last_analysis_at /
       // last_deep_analysis_at so it cannot race-overwrite the 30-min / 4H targeted updates)
       if (memorySb) {
-        memorySb.from('apex_agent_state').upsert({
+        void Promise.resolve(memorySb.from('apex_agent_state').upsert({
           id:              'current',
           last_bias:       newBias,
           last_trade_type: newSignal?.tradeType  ?? null,
@@ -638,7 +638,7 @@ export async function GET(req: Request): Promise<NextResponse> {
           updated_at:      new Date().toISOString(),
           // NOTE: last_analysis_at / last_deep_analysis_at intentionally omitted —
           // those columns are owned exclusively by the 30-min and 4H targeted updates.
-        }).catch(() => {})
+        })).catch(() => {})
       }
 
       // ── Block longs in global risk-off environment ───────────────────────────
