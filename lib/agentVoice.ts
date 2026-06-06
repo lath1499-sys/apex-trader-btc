@@ -27,6 +27,8 @@ export function generateAgentUpdate(
   opinionChanges: string[],
   patternMatch:   any,
   globalMarkets:  any,
+  optionsData?:   any,   // IV Rank + Max Pain + PCR
+  wfGrade?:       string | null,  // Walk-Forward grade A-F
 ): string {
   const i15 = inds?.['15m']
   const i1  = inds?.['1h']
@@ -104,7 +106,8 @@ export function generateAgentUpdate(
   }
 
   // ── FVGs and liquidity ────────────────────────────────────────────────────
-  const activeFVGs: any[] = (fvgs?.['4h'] ?? []).filter((f: any) => !f.filled)
+  // fvgs['4h'] is a FVGResult object {bullish,bearish,all,nearest} — use .all array
+  const activeFVGs: any[] = (fvgs?.['4h']?.all ?? fvgs?.['4h'] ?? []).filter((f: any) => !f.filled)
   if (activeFVGs.length > 0) {
     lines.push('')
     const nearest = [...activeFVGs].sort((a, b) =>
@@ -219,6 +222,17 @@ export function generateAgentUpdate(
 
   if (closingTakes.length > 0) lines.push(closingTakes[0])
 
+  // ── Options + IV Rank ────────────────────────────────────────────────────
+  if (optionsData?.iv) {
+    const iv = optionsData.iv
+    lines.push('')
+    lines.push(`📊 Vol: DVOL ${iv.currentIV.toFixed(1)}% · IVR ${iv.ivRank}/100 (${iv.regime.toUpperCase()})${iv.signal === 'buy_vol' ? ' — opciones baratas' : iv.signal === 'sell_vol' ? ' — opciones caras' : ''}`)
+    if (optionsData.maxPain) lines.push(`Max Pain: $${Math.round(optionsData.maxPain).toLocaleString()} · PCR ${optionsData.putCallRatio?.toFixed(2)} (${optionsData.sentiment})`)
+  }
+  if (wfGrade && wfGrade !== 'F') {
+    lines.push(`WF Grade: ${wfGrade} (validación fuera de muestra de señales recientes)`)
+  }
+
   return lines.join('\n')
 }
 
@@ -238,6 +252,8 @@ export function generateDeepAnalysis(
   activeSignals:   any[],
   perfStats:       any,
   weights:         any,
+  optionsData?:    any,   // IV Rank + Max Pain + PCR
+  wfResult?:       any,   // WalkForwardResult
 ): string {
   const i4  = inds?.['4h']
   const i1d = inds?.['1d']
@@ -319,6 +335,28 @@ export function generateDeepAnalysis(
     })
   } else {
     lines.push('Sin señales activas.')
+  }
+
+  // ── Options + IV Rank ─────────────────────────────────────────────────────
+  if (optionsData?.iv) {
+    const iv = optionsData.iv
+    lines.push('')
+    lines.push('VOLATILIDAD IMPLÍCITA (DERIBIT):')
+    lines.push(`DVOL: ${iv.currentIV.toFixed(1)}% | IVR: ${iv.ivRank}/100 | IVP: ${iv.ivPercentile}%`)
+    lines.push(`Rango 30D: ${iv.min30d.toFixed(0)}–${iv.max30d.toFixed(0)}% | Régimen: ${iv.regime.toUpperCase()}`)
+    lines.push(`Señal: ${iv.signal === 'buy_vol' ? 'opciones baratas — favorece comprar volatilidad' : iv.signal === 'sell_vol' ? 'opciones caras — favorece vender volatilidad' : 'IV en rango normal'}`)
+    if (optionsData.maxPain) {
+      lines.push(`Max Pain: $${Math.round(optionsData.maxPain).toLocaleString()} (${optionsData.maxPainDistance}%) | PCR: ${optionsData.putCallRatio?.toFixed(2)} — ${optionsData.sentiment}`)
+    }
+  }
+
+  // ── Walk-Forward validation ───────────────────────────────────────────────
+  if (wfResult?.isReliable) {
+    lines.push('')
+    lines.push('WALK-FORWARD (validación señales reales):')
+    lines.push(`Grado: ${wfResult.grade} | WR OOS: ${(wfResult.avgTestWR * 100).toFixed(1)}% | PF: ${wfResult.totalTestPF.toFixed(2)}x`)
+    lines.push(`Sobreajuste: ${(wfResult.overfitScore * 100).toFixed(1)}% | Consistencia: ${(wfResult.consistency * 100).toFixed(0)}%`)
+    if (wfResult.recommendation) lines.push(wfResult.recommendation.split('\n')[0])
   }
 
   return lines.join('\n')
