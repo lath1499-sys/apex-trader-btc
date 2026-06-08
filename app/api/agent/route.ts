@@ -915,6 +915,7 @@ export async function GET(req: Request): Promise<NextResponse> {
         mkt,             // MarketData — fg, funding, lsr for Claude context
       }
       const update = await generateAgentUpdate(updateParams)
+      console.log('[APEX Update Preview]', update?.slice(0, 200))
       const upcomingNote = upcoming
         ? `\n\n⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución`
         : ''

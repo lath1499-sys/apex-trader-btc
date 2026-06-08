@@ -101,16 +101,25 @@ INSTRUCCIÓN: Escribe un reporte de mercado de máximo 12 líneas. Habla en espa
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model:      'claude-sonnet-4-5',
+        model:      'claude-sonnet-4-6',  // same model as app/api/apex/route.ts
         max_tokens: 600,
         messages:   [{ role: 'user', content: prompt }],
       }),
-      signal: AbortSignal.timeout(12_000),   // 12s max — stay within Vercel 60s limit
+      signal: AbortSignal.timeout(12_000),
     })
-    if (!res.ok) return null
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '')
+      console.error(`[APEX Voice] Claude API error ${res.status}: ${errBody.slice(0, 200)}`)
+      return null
+    }
     const data = await res.json() as { content?: Array<{ text?: string }> }
-    return data.content?.[0]?.text ?? null
-  } catch {
+    const text = data.content?.[0]?.text ?? null
+    if (text) {
+      console.log(`[APEX Voice] Claude responded — ${text.length} chars`)
+    }
+    return text
+  } catch (err) {
+    console.error('[APEX Voice] Claude API failed:', err instanceof Error ? err.message : err)
     return null
   }
 }
@@ -123,7 +132,8 @@ export async function generateAgentUpdate(params: AgentUpdateParams): Promise<st
   // Try Claude API first — rich, intelligent, non-repetitive
   const claudeText = await callClaudeForUpdate(params).catch(() => null)
   if (claudeText) return claudeText
-  // Fallback to deterministic template (same quality as before)
+  // Fallback to deterministic template
+  console.log('[APEX Voice] Using fallback template')
   return buildDeterministicUpdate(params)
 }
 
