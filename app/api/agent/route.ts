@@ -23,7 +23,7 @@ import { fetchGlobalMarkets }                            from '@/lib/marketCorre
 import { ntfyBBSqueeze }                                 from '@/lib/ntfy'
 import { loadAgentState, saveAgentState, detectOpinionChange } from '@/lib/agentMemory'
 import { fetchSocialSentiment }       from '@/lib/socialSentiment'
-import { generateAgentUpdate, generateDeepAnalysis } from '@/lib/agentVoice'
+import { generateAgentUpdate, generateDeepAnalysis, type AgentUpdateParams } from '@/lib/agentVoice'
 import { detectElliottWaves }          from '@/lib/elliottWaves'
 import { fetchWhaleAlert }             from '@/lib/whaleDetector'
 import { checkCircuitBreaker }         from '@/lib/circuitBreaker'
@@ -891,28 +891,30 @@ export async function GET(req: Request): Promise<NextResponse> {
     if (minsSinceUpdate >= 25 && ntfyTopic) {
       const upcoming     = getUpcomingEvent(Date.now(), 4 * 60 * 60_000)
       const opinionLines = agentOpinionChange ? [agentOpinionChange] : []
-      const update       = generateAgentUpdate(
+      const updateParams: AgentUpdateParams = {
         price,
-        prevStateForVoice?.lastPrice ?? price,
+        prevPrice:       prevStateForVoice?.lastPrice ?? price,
         inds,
         regime,
         session,
         macroSentiment,
         macroIndicators,
         fedExpectations,
-        [],                  // news not fetched server-side
+        news:            [],   // not fetched server-side
         whaleAlert,
-        null,                // realDelta  — future
-        ewMap,
-        fvgsMap,
+        realDelta:       null,
+        elliottWaves:    ewMap,
+        fvgs:            fvgsMap,
         liquidity,
-        activeSigData,
-        opinionLines,
-        null,                // patternMatch — future
+        activeSignals:   activeSigData,
+        opinionChanges:  opinionLines,
+        patternMatch:    null,
         globalMarkets,
-        optionsData,         // IV Rank + Max Pain + PCR
-        wfResult.isReliable ? wfResult.grade : null,   // Walk-Forward grade
-      )
+        optionsData,
+        wfGrade:         wfResult.isReliable ? wfResult.grade : null,
+        mkt,             // MarketData — fg, funding, lsr for Claude context
+      }
+      const update = await generateAgentUpdate(updateParams)
       const upcomingNote = upcoming
         ? `\n\n⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución`
         : ''

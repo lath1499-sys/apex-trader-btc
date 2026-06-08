@@ -211,7 +211,10 @@ export function scoreTradeIdea(
 
   // ── FILTROS DE CALIDAD ───────────────────────────────────────────────────
   // 1. Minimum confluence per type
-  if (maxSc < MIN_CONF[tradeType]) return null
+  if (maxSc < MIN_CONF[tradeType]) {
+    console.log(`[SCORE REJECT] ${side} ${tradeType} score=${maxSc} min=${MIN_CONF[tradeType]} bias4h=${i4?.bias ?? '?'} rsi4h=${i4?.rsi?.toFixed(0) ?? '?'}`)
+    return null
+  }
 
   // 2. Extreme BB compression: return consolidation signal instead of null
   const bbExtreme = (i4.bb.width ?? 99) < 1 && (i1.bb.width ?? 99) < 1
@@ -253,10 +256,16 @@ export function scoreTradeIdea(
   const minScoreAdj = (learnedWeights?.minScoreAdjustment ?? 0)
     + (coldStreak ? 1 : 0)
     - (hotStreak  ? 1 : 0)
-  if (minScoreAdj > 0 && maxSc < MIN_CONF[tradeType] + minScoreAdj) return null
+  if (minScoreAdj > 0 && maxSc < MIN_CONF[tradeType] + minScoreAdj) {
+    console.log(`[SCORE REJECT] ${side} ${tradeType} score=${maxSc} min=${MIN_CONF[tradeType]+minScoreAdj} (adj+${minScoreAdj}) cold=${coldStreak} hot=${hotStreak}`)
+    return null
+  }
 
   // 3b. Trading session gate — don't trade during low-liquidity hours
-  if (!shouldGenerateSignal(tradeType, confidence)) return null
+  if (!shouldGenerateSignal(tradeType, confidence)) {
+    console.log(`[SESSION REJECT] ${side} ${tradeType} conf=${confidence} session blocked`)
+    return null
+  }
 
   // 4. Regime gate — no_signal only; bias is now handled by penalties/bonuses below
   if (regime?.signalBias === 'no_signal') return null

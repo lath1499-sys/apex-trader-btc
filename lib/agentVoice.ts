@@ -5,31 +5,132 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 30-min conversational update
+// 30-min conversational update — params interface
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function generateAgentUpdate(
-  price:          number,
-  prevPrice:      number,      // price 30min ago from apex_agent_state
-  inds:           any,
-  regime:         any,
-  session:        any,
-  macroSentiment: any,
-  macroIndicators: any,
-  fedExpectations: any,
-  news:           any[],
-  whaleAlert:     any,
-  realDelta:      any,
-  elliottWaves:   any,
-  fvgs:           any,
-  liquidity:      any,
-  activeSignals:  any[],
-  opinionChanges: string[],
-  patternMatch:   any,
-  globalMarkets:  any,
-  optionsData?:   any,   // IV Rank + Max Pain + PCR
-  wfGrade?:       string | null,  // Walk-Forward grade A-F
-): string {
+export interface AgentUpdateParams {
+  price:           number
+  prevPrice:       number
+  inds:            any
+  regime:          any
+  session:         any
+  macroSentiment:  any
+  macroIndicators: any
+  fedExpectations: any
+  news:            any[]
+  whaleAlert:      any
+  realDelta:       any
+  elliottWaves:    any
+  fvgs:            any
+  liquidity:       any
+  activeSignals:   any[]
+  opinionChanges:  string[]
+  patternMatch:    any
+  globalMarkets:   any
+  optionsData?:    any
+  wfGrade?:        string | null
+  mkt?:            any   // MarketData — fg, funding, lsr for Claude context
+}
+
+// ── Claude API call for rich, intelligent voice ────────────────────────────
+async function callClaudeForUpdate(p: AgentUpdateParams): Promise<string | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return null
+
+  const { price, prevPrice, inds, regime, session, activeSignals, opinionChanges,
+          mkt, whaleAlert, macroSentiment, macroIndicators, fedExpectations,
+          globalMarkets, elliottWaves, optionsData, news } = p
+
+  const i4   = inds?.['4h']
+  const i1   = inds?.['1h']
+  const i1d  = inds?.['1d']
+  const i15  = inds?.['15m']
+  const ew4h = elliottWaves?.['4h']
+
+  const priceChange = prevPrice > 0
+    ? ((price - prevPrice) / prevPrice * 100).toFixed(2)
+    : '0.00'
+
+  const sigLines = activeSignals.length > 0
+    ? activeSignals.map((s: any) => {
+        const isLong = s.side === 'LONG'
+        const pnl    = isLong ? (price - s.entry) / s.entry * 100 : (s.entry - price) / s.entry * 100
+        const slDist = Math.abs(price - s.sl) / s.entry * 100
+        return `${s.side} ${s.tradeType} desde $${Math.round(s.entry).toLocaleString()} | P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% | SL a ${slDist.toFixed(1)}%`
+      }).join('\n')
+    : 'Sin señales activas'
+
+  const prompt = `Eres APEX, un agente de trading de Bitcoin experto. Reportas al trader como un colega senior — directo, con opinión propia, usando terminología de trading real. No eres un bot de datos. Tienes personalidad y criterio propio.
+
+DATOS ACTUALES (${new Date().toUTCString()}):
+Precio: $${Math.round(price).toLocaleString()} (${priceChange}% vs hace 30min)
+Sesión: ${session?.name ?? 'N/A'}
+Régimen: ${regime?.regime?.replace(/_/g, ' ') ?? 'N/A'} | ADX: ${regime?.adx?.toFixed(1) ?? '?'}
+
+MULTI-TIMEFRAME:
+1D: ${i1d?.bias ?? '?'} | RSI ${i1d?.rsi?.toFixed(0) ?? '?'}
+4H: ${i4?.bias ?? '?'} | RSI ${i4?.rsi?.toFixed(0) ?? '?'} | MACD hist ${i4?.macd?.hist?.toFixed(0) ?? '?'} | Stoch ${i4?.stoch?.k?.toFixed(0) ?? '?'}
+1H: ${i1?.bias ?? '?'} | RSI ${i1?.rsi?.toFixed(0) ?? '?'} | MACD hist ${i1?.macd?.hist?.toFixed(0) ?? '?'}
+15M: ${i15?.bias ?? '?'} | RSI ${i15?.rsi?.toFixed(0) ?? '?'}
+${ew4h && ew4h.currentWave !== 'unclear' ? `\nELLIOTT 4H: Onda ${ew4h.currentWave} ${ew4h.direction} | Target: $${ew4h.nextTarget ? Math.round(ew4h.nextTarget).toLocaleString() : 'N/A'} | Inval: $${ew4h.invalidation ? Math.round(ew4h.invalidation).toLocaleString() : 'N/A'}` : ''}
+
+MERCADO:
+F&G: ${mkt?.fg ?? '?'}/100 | Funding: ${mkt?.funding != null ? mkt.funding.toFixed(4) : '?'}% | L/S: ${mkt?.lsr?.toFixed(2) ?? '?'}
+${whaleAlert?.detected ? `WHALE ALERT: ${whaleAlert.description}` : ''}
+
+MACRO:
+${macroSentiment ? `Sentimiento: ${macroSentiment.label} (score ${macroSentiment.score}/100)` : ''}
+${macroIndicators?.fedRate ? `Fed: ${macroIndicators.fedRate.current?.toFixed(2)}% (${macroIndicators.fedRate.trend})` : ''}
+${fedExpectations ? `Corte Fed: ${fedExpectations.cutProbability}% prob | FOMC: ${fedExpectations.nextMeetingDate ?? 'N/A'}` : ''}
+${globalMarkets?.signalImpact !== 'NEUTRAL' ? `Global: ${globalMarkets?.btcCorrelation ?? ''}` : ''}
+${optionsData?.iv ? `IV Rank: ${optionsData.iv.ivRank}/100 | DVOL: ${optionsData.iv.currentIV.toFixed(1)}% (${optionsData.iv.regime})` : ''}
+
+SEÑALES ACTIVAS:
+${sigLines}
+${opinionChanges.length > 0 ? `\nCAMBIOS: ${opinionChanges.join(' | ')}` : ''}
+${(news ?? []).length > 0 ? `\nNOTICIAS: ${(news ?? []).slice(0, 2).map((n: any) => String(n.title ?? '').slice(0, 60)).join(' | ')}` : ''}
+
+INSTRUCCIÓN: Escribe un reporte de mercado de máximo 12 líneas. Habla en español como trader senior. Empieza con tu lectura de lo que está pasando ahora mismo. Interpreta los datos, no los copies. Menciona las señales activas y su estado. Da tu sesgo para las próximas horas. Sé directo y con criterio.`
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:  'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model:      'claude-sonnet-4-5',
+        max_tokens: 600,
+        messages:   [{ role: 'user', content: prompt }],
+      }),
+      signal: AbortSignal.timeout(12_000),   // 12s max — stay within Vercel 60s limit
+    })
+    if (!res.ok) return null
+    const data = await res.json() as { content?: Array<{ text?: string }> }
+    return data.content?.[0]?.text ?? null
+  } catch {
+    return null
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 30-min conversational update — async (Claude API with deterministic fallback)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateAgentUpdate(params: AgentUpdateParams): Promise<string> {
+  // Try Claude API first — rich, intelligent, non-repetitive
+  const claudeText = await callClaudeForUpdate(params).catch(() => null)
+  if (claudeText) return claudeText
+  // Fallback to deterministic template (same quality as before)
+  return buildDeterministicUpdate(params)
+}
+
+function buildDeterministicUpdate(params: AgentUpdateParams): string {
+  const { price, prevPrice, inds, regime, session, macroSentiment, macroIndicators,
+          fedExpectations, news, whaleAlert, realDelta, elliottWaves, fvgs, liquidity,
+          activeSignals, opinionChanges, globalMarkets, optionsData, wfGrade } = params
   const i15 = inds?.['15m']
   const i1  = inds?.['1h']
   const i4  = inds?.['4h']
@@ -41,6 +142,8 @@ export function generateAgentUpdate(
   const changeTxt = `${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%`
 
   const lines: string[] = []
+
+  void macroSentiment  // referenced indirectly via closingTakes below
 
   // ── Opening line — price action ───────────────────────────────────────────
   const opening =
