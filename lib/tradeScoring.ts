@@ -263,7 +263,8 @@ export function scoreTradeIdea(
 
   // 3b. Trading session gate — don't trade during low-liquidity hours
   if (!shouldGenerateSignal(tradeType, confidence)) {
-    console.log(`[SESSION REJECT] ${side} ${tradeType} conf=${confidence} session blocked`)
+    const sess = getCurrentTradingSession()
+    console.log(`[SESSION REJECT] ${side} ${tradeType} conf=${confidence} session="${sess.name}" allowDT=${sess.allowDayTrade} minConf=${sess.minConfidence}`)
     return null
   }
 

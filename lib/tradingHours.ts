@@ -21,7 +21,7 @@ export const TRADING_SESSIONS: TradingSession[] = [
     utcStart: 21, utcEnd: 1,
     quality: 'avoid',
     reason: 'Liquidez minima, spreads amplios, movimientos manipulados',
-    allowScalp: false, allowDayTrade: false, allowSwing: true,
+    allowScalp: false, allowDayTrade: true, allowSwing: true,  // ALTA-only DayTrade allowed
     minConfidence: 'ALTA',
   },
   {
