@@ -32,6 +32,8 @@ import { fetchOptionsData }             from '@/lib/deribitFetch'
 import { runWalkForward }               from '@/lib/walkForwardBacktest'
 import { analyzeAllABCD, getABCDScoreImpact } from '@/lib/harmonicPatterns'
 import type { MultiTFABCD } from '@/lib/harmonicPatterns'
+import { askClaudeForDecision } from '@/lib/aiDecisionMaker'
+import type { TradeDecision }   from '@/lib/aiDecisionMaker'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
@@ -302,6 +304,9 @@ export async function GET(req: Request): Promise<NextResponse> {
     signalsLoaded?: number
     signalsActive?: number
     abcd?: { inPRZ: boolean; signal: string; strength: number; tf?: string; direction?: string; dTarget?: number; completion?: number }
+    waitReason?: string
+    aiReasoning?: string
+    aiDecision?: string
   } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null, macro: null }
 
   try {
@@ -665,127 +670,136 @@ export async function GET(req: Request): Promise<NextResponse> {
       : learnedWeights
 
     if (activeCount < 3) {
-      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, effectiveWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined, fedExpectations ?? undefined, socialSentiment ?? undefined, whaleAlert ?? undefined, abcdAnalysis)
+      // ── PRIMARY: Ask Claude AI for trading decision ─────────────────────────
+      const aiDecision: TradeDecision | null = await askClaudeForDecision({
+        price,
+        prevPrice:       prevStateForVoice?.lastPrice ?? price,
+        inds, regime, session,
+        news:            [],   // not fetched server-side
+        activeSignals:   activeSigData,
+        mkt,
+        elliottWaves:    ewMap,
+        fvgs:            fvgsMap,
+        liquidity,
+        whaleAlert,
+        macroSentiment,
+        macroIndicators,
+        fedExpectations,
+        globalMarkets,
+        socialSentiment,
+        abcdAnalysis,
+        optionsData,
+        perfStats,
+        klines4h:        klines['4h'],
+      })
 
-      // ── Agent memory: detect & record opinion changes ────────────────────────
+      if (aiDecision) {
+        results.aiDecision = aiDecision.action
+        if (aiDecision.action === 'WAIT') {
+          results.waitReason   = aiDecision.waitingFor ?? 'Claude esperando mejor setup'
+          results.aiReasoning  = aiDecision.reasoning
+          console.log(`[APEX AI] WAIT — ${aiDecision.waitingFor ?? aiDecision.reasoning.slice(0, 80)}`)
+        }
+      }
+
+      // ── FALLBACK: rule-based if Claude returned null ─────────────────────────
+      const fallbackSignal = !aiDecision
+        ? scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, effectiveWeights,
+            macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined,
+            fedExpectations ?? undefined, socialSentiment ?? undefined, whaleAlert ?? undefined,
+            abcdAnalysis)
+        : null
+
+      // ── Determine which signal source to use ────────────────────────────────
+      const useAI  = aiDecision && aiDecision.action !== 'WAIT' && aiDecision.action !== 'CLOSE_EXISTING'
+                     && aiDecision.entry > 0 && aiDecision.sl > 0
+      const useRules = !aiDecision && !!fallbackSignal && !fallbackSignal.consolidation
+
+      // ── Agent memory ─────────────────────────────────────────────────────────
       const memorySb    = getDbClient()
-      const newBias     = newSignal ? newSignal.side : 'NEUTRAL'
-      const opinionNote = detectOpinionChange(prevStateForVoice, newBias, newSignal ?? null, inds, regime ?? null)
+      const newBias     = useAI ? aiDecision!.action : (fallbackSignal?.side ?? 'NEUTRAL')
+      const opinionNote = detectOpinionChange(prevStateForVoice, newBias, fallbackSignal ?? null, inds, regime ?? null)
       if (opinionNote) agentOpinionChange = opinionNote
-      // Save new state (fire-and-forget — deliberately excludes last_analysis_at /
-      // last_deep_analysis_at so it cannot race-overwrite the 30-min / 4H targeted updates)
       if (memorySb) {
         void Promise.resolve(memorySb.from('apex_agent_state').upsert({
           id:              'current',
           last_bias:       newBias,
-          last_trade_type: newSignal?.tradeType  ?? null,
-          last_confidence: newSignal?.confidence ?? null,
+          last_trade_type: useAI ? aiDecision!.tradeType : (fallbackSignal?.tradeType ?? null),
+          last_confidence: useAI ? aiDecision!.confidence : (fallbackSignal?.confidence ?? null),
           last_price:      mkt.price             ?? 0,
-          last_score:      newSignal?.maxSc      ?? 0,
+          last_score:      fallbackSignal?.maxSc ?? 10,
           change_reason:   opinionNote,
           updated_at:      new Date().toISOString(),
-          // NOTE: last_analysis_at / last_deep_analysis_at intentionally omitted —
-          // those columns are owned exclusively by the 30-min and 4H targeted updates.
         })).catch(() => {})
       }
 
-      // ── Block longs in global risk-off environment ───────────────────────────
-      const blockedByCorrelation =
-        globalMarkets?.signalImpact === 'BLOCK_LONGS' && newSignal?.side === 'LONG'
-      if (blockedByCorrelation) {
-        results.errors.push(`[APEX Correlation] Long bloqueado: ${globalMarkets!.btcCorrelation}`)
-      }
+      // ── Safety checks (apply to both AI and rule-based) ─────────────────────
+      const signalSide = useAI ? aiDecision!.action as 'LONG' | 'SHORT' : fallbackSignal?.side
+      const blockedByCorrelation = globalMarkets?.signalImpact === 'BLOCK_LONGS' && signalSide === 'LONG'
+      if (blockedByCorrelation) results.errors.push(`[APEX Correlation] Long bloqueado: ${globalMarkets!.btcCorrelation}`)
 
-      // ── Circuit breaker: block new signals if loss limits breached ──────────
       const cb = checkCircuitBreaker(allSignals, capitalConfig)
       if (cb.blocked) {
         results.errors.push(`[Circuit Breaker] ${cb.reason}`)
         console.log(`[Circuit Breaker] BLOCKED — ${cb.reason}`)
       }
 
-      // ── Log decision to apex_decisions (learn from everything, win or skip) ──
-      const sb = getDbClient()
-      if (sb) {
-        const decisionId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-        await sb.from('apex_decisions').insert({
-          id:            decisionId,
-          decision_type: newSignal ? 'signal_generated' : 'signal_skipped',
-          side:          newSignal?.side ?? null,
-          trade_type:    newSignal?.tradeType ?? null,
-          score:         newSignal?.maxSc ?? null,
-          confidence:    newSignal?.confidence ?? null,
-          regime:        regime?.regime ?? null,
-          session:       session.name,
-          bias_1d:       inds['1d']?.bias ?? null,
-          bias_4h:       inds['4h']?.bias ?? null,
-          bias_1h:       inds['1h']?.bias ?? null,
-          rsi_4h:        inds['4h']?.rsi ?? null,
-          macd_4h:       inds['4h']?.macd?.hist ?? null,
-          stoch_4h:      inds['4h']?.stoch?.k ?? null,
-          fg:            mkt.fg ?? null,
-          funding:       mkt.funding ?? null,
-          skip_reason:   blockedByCorrelation ? 'correlation_risk_off' : cb.blocked ? 'circuit_breaker' : newSignal ? null : 'score_or_filter',
-          signal_id:     null,   // updated after saveSignalToCloud
-        }).then(({ error }: { error: { message: string } | null }) => {
-          if (error) console.error('[APEX Decisions] insert error:', error.message)
-        })
-      }
+      const canTrade = (useAI || useRules) && !blockedByCorrelation && !cb.blocked
 
-      if (newSignal && !newSignal.consolidation && !blockedByCorrelation && !cb.blocked) {
-        // Dedup: don't add same-side signal if one already active OR already notified in last 2h
-        const sameActive = active.some(s => s.idea.side === newSignal.side && s.status === 'active')
+      if (canTrade) {
+        // ── Build signal record from either AI decision or rule-based ───────────
+        const recId = Date.now().toString()
+
+        const recSide       = (useAI ? aiDecision!.action   : fallbackSignal!.side)       as 'LONG' | 'SHORT'
+        const recType       = (useAI ? aiDecision!.tradeType : fallbackSignal!.tradeType)  as 'Scalp' | 'DayTrade' | 'Swing'
+        const recConf       = (useAI ? aiDecision!.confidence: fallbackSignal!.confidence) as 'ALTA' | 'MEDIA' | 'BAJA'
+        const recEntry      = useAI ? aiDecision!.entry  : fallbackSignal!.price
+        const recSL         = useAI ? aiDecision!.sl     : fallbackSignal!.sl
+        const recTP1        = useAI ? aiDecision!.tp1    : fallbackSignal!.tp1
+        const recTP2        = useAI ? aiDecision!.tp2    : fallbackSignal!.tp2
+        const recTP3        = useAI ? aiDecision!.tp3    : fallbackSignal!.tp3
+        const recLev        = fallbackSignal?.maxLev ?? 5
+        const recReasons    = useAI
+          ? aiDecision!.keyFactors.map(f => ({ s: recSide === 'LONG' ? 'bull' as const : 'bear' as const, txt: f }))
+          : (fallbackSignal!.reasons)
+        const recAnalysis   = useAI
+          ? [
+              `🤖 DECISIÓN IA: ${aiDecision!.reasoning}`,
+              `\nFactores clave:\n${aiDecision!.keyFactors.map(f => `• ${f}`).join('\n')}`,
+              `\nRiesgos:\n${aiDecision!.risks.map(r => `• ${r}`).join('\n')}`,
+              `\nInvalidación: ${aiDecision!.invalidation}`,
+            ].join('')
+          : writeTradeAnalysis({ idea: fallbackSignal!, inds, mkt, regime: regime ?? null,
+              ew: ewMap as Record<string, { currentWave?: string; direction?: string; confidence?: string; nextTarget?: number; invalidation?: number }>,
+              optionsData: optionsData ?? null, macroIndicators: macroIndicators ?? null,
+              globalLiquidity: globalLiquidity ?? null, fedExpectations: fedExpectations ?? null,
+              upcomingEvents: upcomingEvents ?? [], socialSentiment: socialSentiment ?? null,
+              whaleAlert: whaleAlert ?? null, abcdAnalysis,
+            })
+
+        // Dedup: skip if same-side active or recently notified
+        const sameActive = active.some(s => s.idea.side === recSide && s.status === 'active')
         const alreadyNotified = allSignals.some(s =>
-          s.status === 'active' &&
-          s.ntfySent === true &&
-          s.idea.side === newSignal.side &&
-          Math.abs(s.idea.price - newSignal.price) / newSignal.price < 0.003 &&
+          s.status === 'active' && s.ntfySent === true && s.idea.side === recSide &&
+          Math.abs(s.idea.price - recEntry) / recEntry < 0.003 &&
           new Date(s.createdAt).getTime() > Date.now() - 2 * 3_600_000,
         )
-        if (!sameActive && !alreadyNotified && shouldGenerateSignal(newSignal.tradeType, newSignal.confidence)) {
-          const recId = Date.now().toString()
+        if (sameActive || alreadyNotified) {
+          console.log(`[APEX] Signal deduped — sameActive=${sameActive} alreadyNotified=${alreadyNotified}`)
+        } else {
           const rec: SignalRecord = {
-            id:        recId,
-            createdAt: time,
-            status:    'active',
-            ntfySent:  true,   // mark true BEFORE save — prevents re-fire if read before NTFY completes
-            exitPrice: null,
-            exitTs:    null,
-            pnl:       null,
-            pnlR:      null,
-            closedAt:  null,
-            closeReason: null,
-            idea:      {
-              side:       newSignal.side,
-              tradeType:  newSignal.tradeType,
-              confidence: newSignal.confidence,
-              price:      newSignal.price,
-              sl:         newSignal.sl,
-              tp1:        newSignal.tp1,
-              tp2:        newSignal.tp2,
-              tp3:        newSignal.tp3,
-              maxLev:     newSignal.maxLev,
-              bull:       newSignal.bull,
-              bear:       newSignal.bear,
-              maxSc:      newSignal.maxSc,
-              reasons:    newSignal.reasons,
-              analysis:   [
-                            opinionNote,
-                            writeTradeAnalysis({ idea: newSignal, inds, mkt, regime: regime ?? null,
-                              ew:               ewMap as Record<string, { currentWave?: string; direction?: string; confidence?: string; nextTarget?: number; invalidation?: number }>,
-                              optionsData:      optionsData ?? null,
-                              macroIndicators:  macroIndicators ?? null,
-                              globalLiquidity:  globalLiquidity ?? null,
-                              fedExpectations:  fedExpectations ?? null,
-                              upcomingEvents:   upcomingEvents ?? [],
-                              socialSentiment:  socialSentiment ?? null,
-                              whaleAlert:       whaleAlert ?? null,
-                              abcdAnalysis,
-                            }),
-                          ].filter(Boolean).join('\n\n'),
-              ts:         new Date(time),
+            id: recId, createdAt: time, status: 'active', ntfySent: true,
+            exitPrice: null, exitTs: null, pnl: null, pnlR: null, closedAt: null, closeReason: null,
+            idea: {
+              side: recSide, tradeType: recType, confidence: recConf,
+              price: recEntry, sl: recSL, tp1: recTP1, tp2: recTP2, tp3: recTP3,
+              maxLev: recLev, bull: 0, bear: 0, maxSc: 10,
+              reasons: recReasons, analysis: [opinionNote, recAnalysis].filter(Boolean).join('\n\n'),
+              ts: new Date(time),
             },
           }
-          // Save FIRST via direct service-key client — NTFY only fires if save succeeds
+
+          // Save to DB first — NTFY only if save succeeds
           const recSaveSb = getDbClient()
           const { error: recSaveErr } = await Promise.resolve(
             recSaveSb.from('apex_signals').upsert({
@@ -796,27 +810,15 @@ export async function GET(req: Request): Promise<NextResponse> {
               updated_at: new Date().toISOString(), ntfy_sent: true,
               pnl: null, pnl_r: null, closed_at: null, exit_price: null, close_reason: null,
               tp1_hit: false, tp2_hit: false, sl_warning_fired: false,
-              expiry_warning_fired: false, max_lev: rec.idea.maxLev ?? 5,
+              expiry_warning_fired: false,
             }, { onConflict: 'id' })
           ).catch((e: Error) => ({ error: e }))
+
           if (recSaveErr) {
             results.errors.push(`[SignalSave] ${(recSaveErr as {message?:string}).message ?? recSaveErr}`)
           } else {
-            // DB save confirmed — now send NTFY
             await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
-            results.signals.push({ type: newSignal.tradeType, side: newSignal.side, confidence: newSignal.confidence })
-          }
-          // Link decision record to the generated signal
-          if (sb) {
-            await sb.from('apex_decisions')
-              .update({ signal_id: recId, decision_type: 'signal_generated' })
-              .eq('session', session.name)
-              .is('signal_id', null)
-              .order('created_at', { ascending: false })
-              .limit(1)
-              .then(({ error }: { error: { message: string } | null }) => {
-                if (error) console.error('[APEX Decisions] link error:', error.message)
-              })
+            results.signals.push({ type: recType, side: recSide, confidence: recConf })
           }
         }
       }
