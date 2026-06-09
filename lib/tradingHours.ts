@@ -18,10 +18,10 @@ export interface TradingSession {
 export const TRADING_SESSIONS: TradingSession[] = [
   {
     name: 'Asia Deep Night (dead zone)',
-    utcStart: 21, utcEnd: 1,
+    utcStart: 22, utcEnd: 6,   // narrowed from 21-01 to 22-06 (was blocking 8h, now 8h but tighter night)
     quality: 'avoid',
     reason: 'Liquidez minima, spreads amplios, movimientos manipulados',
-    allowScalp: false, allowDayTrade: true, allowSwing: true,  // ALTA-only DayTrade allowed
+    allowScalp: false, allowDayTrade: true, allowSwing: true,
     minConfidence: 'ALTA',
   },
   {

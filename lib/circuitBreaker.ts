@@ -81,11 +81,11 @@ export function checkCircuitBreaker(
     }
   }
 
-  // 3 consecutive losses → pause until next session
-  if (consecLosses >= 3) {
+  // 5 consecutive losses → pause until next session (was 3 — too aggressive)
+  if (consecLosses >= 5) {
     return {
       blocked: true,
-      reason: `🛑 3 pérdidas consecutivas. Pausa automática — espera nueva sesión de mercado.`,
+      reason: `🛑 5 pérdidas consecutivas. Pausa automática — espera nueva sesión de mercado.`,
       dailyPnl, weeklyPnl, consecLosses,
     }
   }

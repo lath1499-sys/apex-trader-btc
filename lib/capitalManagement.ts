@@ -25,8 +25,8 @@ export const DEFAULT_CONFIG: CapitalConfig = {
   totalCapital:    1000,
   maxRiskPerTrade: 2,
   maxOpenTrades:   3,
-  maxDailyLoss:    5,
-  maxWeeklyLoss:   10,
+  maxDailyLoss:    6,    // was 5
+  maxWeeklyLoss:   12,   // was 10
   leverageLimit:   10,
 }
 

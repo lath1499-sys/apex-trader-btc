@@ -650,8 +650,22 @@ export async function GET(req: Request): Promise<NextResponse> {
     const activeCount  = active.filter(s => s.status === 'active').length
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
 
+    // Permissive mode: lower thresholds by 1 if no signal generated in 48+ hours
+    const lastSignalTime = allSignals[0]?.createdAt
+      ? new Date(allSignals[0].createdAt).getTime() : 0
+    const hoursSinceLastSignal = (Date.now() - lastSignalTime) / 3_600_000
+    const permissiveMode = hoursSinceLastSignal > 48
+    if (permissiveMode) {
+      console.log(`[APEX] Permissive mode — ${Math.round(hoursSinceLastSignal)}h since last signal, lowering thresholds`)
+    }
+
+    // Pass permissiveMode via learnedWeights override
+    const effectiveWeights = permissiveMode
+      ? { ...learnedWeights, minScoreAdjustment: Math.min(0, (learnedWeights?.minScoreAdjustment ?? 0) - 1) }
+      : learnedWeights
+
     if (activeCount < 3) {
-      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined, fedExpectations ?? undefined, socialSentiment ?? undefined, whaleAlert ?? undefined, abcdAnalysis)
+      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, effectiveWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined, fedExpectations ?? undefined, socialSentiment ?? undefined, whaleAlert ?? undefined, abcdAnalysis)
 
       // ── Agent memory: detect & record opinion changes ────────────────────────
       const memorySb    = getDbClient()

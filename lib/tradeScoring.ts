@@ -26,7 +26,7 @@ function confirmCandles(klines: Kline[] | undefined, side: 'LONG' | 'SHORT'): bo
   return recent.some(ok)
 }
 
-const MIN_CONF: Record<string, number> = { Scalp: 4, DayTrade: 5, Swing: 6 }
+const MIN_CONF: Record<string, number> = { Scalp: 4, DayTrade: 5, Swing: 5 }
 
 function expScore(sc: number): string {
   if (sc >= 8) return 'Señal de libro'
@@ -283,14 +283,14 @@ export function scoreTradeIdea(
   // 4. Regime gate — no_signal only; bias is now handled by penalties/bonuses below
   if (regime?.signalBias === 'no_signal') return null
 
-  // 4b. Counter-trend penalty — need 2 extra confluences to go against strong trend
+  // 4b. Counter-trend penalty — need 1 extra confluence to go against strong trend (was 2)
   if (regime?.regime === 'STRONG_TREND_DOWN' && side === 'LONG') {
-    if (bull < bear + 2) return null
-    reasons.push({ s: 'bull', txt: '⚠️ Long en tendencia bajista — confluencias extra requeridas' })
+    if (bull < bear + 1) return null
+    reasons.push({ s: 'bull', txt: '⚠️ Long en tendencia bajista — confluencia extra requerida' })
   }
   if (regime?.regime === 'STRONG_TREND_UP' && side === 'SHORT') {
-    if (bear < bull + 2) return null
-    reasons.push({ s: 'bear', txt: '⚠️ Short en tendencia alcista — confluencias extra requeridas' })
+    if (bear < bull + 1) return null
+    reasons.push({ s: 'bear', txt: '⚠️ Short en tendencia alcista — confluencia extra requerida' })
   }
 
   // 4c. With-trend bonus — extra confluence credit for trading in regime direction
@@ -303,11 +303,12 @@ export function scoreTradeIdea(
     reasons.push({ s: 'bull', txt: 'Tendencia alcista fuerte — favor del trade' })
   }
 
-  // 4d. Multi-TF alignment block — ONLY block when ALL three TFs unanimously oppose the trade
+  // 4d. Multi-TF alignment block — block when ALL three TFs oppose AND score < 7
+  // Score ≥7 = enough conviction to trade even against all TFs (e.g. extreme RSI reversal)
   const allTFsBearish = i1d?.bias === 'BAJISTA' && i4.bias === 'BAJISTA' && i1.bias === 'BAJISTA'
   const allTFsBullish = i1d?.bias === 'ALCISTA' && i4.bias === 'ALCISTA' && i1.bias === 'ALCISTA'
-  if (side === 'LONG'  && allTFsBearish) return null
-  if (side === 'SHORT' && allTFsBullish) return null
+  if (side === 'LONG'  && allTFsBearish && maxSc < 7) return null
+  if (side === 'SHORT' && allTFsBullish && maxSc < 7) return null
 
   // 4e. Triple confirmation bonus — all TFs aligned = high confidence entry
   if (allTFsBullish && side === 'LONG') {
@@ -352,13 +353,13 @@ export function scoreTradeIdea(
     regime,
     signalHistory,
   )
-  // Filter: reject negative EV or very low win probability
-  if (probScore.expectedValue < 0)   return null
-  if (probScore.winProbability < 45) return null
+  // Filter: reject only very negative EV or very low win probability (was 45%, now 40%)
+  if (probScore.expectedValue < -0.05) return null   // allow slight negative EV margin
+  if (probScore.winProbability < 40)   return null   // was 45
 
   // ── MONTE CARLO RISK GATE ─────────────────────────────────────────────────
   const mc = runMonteCarlo(probScore.winProbability / 100, avgWinR, avgLossR, 0.01)
-  if (mc.ruinProbability > 15) return null
+  if (mc.ruinProbability > 20) return null   // was 15
 
   const keySignals = reasons.slice(0, 4).map(r => r.txt).join(', ')
   const typeDesc = tradeType === 'Scalp'
