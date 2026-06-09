@@ -30,6 +30,8 @@ import { checkCircuitBreaker }         from '@/lib/circuitBreaker'
 import { loadCapitalConfig, DEFAULT_CONFIG } from '@/lib/capitalManagement'
 import { fetchOptionsData }             from '@/lib/deribitFetch'
 import { runWalkForward }               from '@/lib/walkForwardBacktest'
+import { analyzeAllABCD, getABCDScoreImpact } from '@/lib/harmonicPatterns'
+import type { MultiTFABCD } from '@/lib/harmonicPatterns'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
@@ -299,6 +301,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     update30minSkipped?: string
     signalsLoaded?: number
     signalsActive?: number
+    abcd?: { inPRZ: boolean; signal: string; strength: number; tf?: string; direction?: string; dTarget?: number; completion?: number }
   } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null, macro: null }
 
   try {
@@ -309,7 +312,9 @@ export async function GET(req: Request): Promise<NextResponse> {
     if (!price) return NextResponse.json({ error: 'Failed to fetch price' }, { status: 503 })
 
     const klines = {
+      '3d':  toKlines(md.klines['3d']  as { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined),
       '1d':  toKlines(md.klines['1d']  as { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined),
+      '12h': toKlines(md.klines['12h'] as { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined),
       '4h':  toKlines(md.klines['4h']  as { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined),
       '1h':  toKlines(md.klines['1h']  as { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined),
       '15m': toKlines(md.klines['15m'] as { t:number;o:number;h:number;l:number;c:number;v:number }[] | undefined),
@@ -424,6 +429,25 @@ export async function GET(req: Request): Promise<NextResponse> {
     const session   = getCurrentTradingSession()
     results.session = session.name
     results.regime  = regime?.regime ?? 'UNKNOWN'
+
+    // ── ABCD Harmonic Pattern Analysis (all timeframes) ───────────────────────
+    const abcdAnalysis: MultiTFABCD = analyzeAllABCD({
+      '15m': klines['15m'],
+      '1h':  klines['1h'],
+      '4h':  klines['4h'],
+      '12h': klines['12h'],
+      '1d':  klines['1d'],
+      '2d':  klines['3d'],   // 3d as proxy for 2d
+    }, price)
+    results.abcd = {
+      inPRZ:     abcdAnalysis.inPRZ,
+      signal:    abcdAnalysis.tradingSignal,
+      strength:  abcdAnalysis.signalStrength,
+      tf:        abcdAnalysis.mostRelevant?.timeframe,
+      direction: abcdAnalysis.mostRelevant?.direction,
+      dTarget:   abcdAnalysis.mostRelevant?.D_target,
+      completion:abcdAnalysis.mostRelevant?.completion,
+    }
 
     // Pre-declare time components used in multiple blocks below
     const nowUtc = new Date()
@@ -627,7 +651,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
 
     if (activeCount < 3) {
-      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined, fedExpectations ?? undefined, socialSentiment ?? undefined, whaleAlert ?? undefined)
+      const newSignal = scoreTradeIdea(mkt, inds, obVal, rawK, undefined, allSignals, learnedWeights, macroSentiment, macroIndicators ?? undefined, globalLiquidity ?? undefined, fedExpectations ?? undefined, socialSentiment ?? undefined, whaleAlert ?? undefined, abcdAnalysis)
 
       // ── Agent memory: detect & record opinion changes ────────────────────────
       const memorySb    = getDbClient()
@@ -741,6 +765,7 @@ export async function GET(req: Request): Promise<NextResponse> {
                               upcomingEvents:   upcomingEvents ?? [],
                               socialSentiment:  socialSentiment ?? null,
                               whaleAlert:       whaleAlert ?? null,
+                              abcdAnalysis,
                             }),
                           ].filter(Boolean).join('\n\n'),
               ts:         new Date(time),
@@ -873,6 +898,49 @@ export async function GET(req: Request): Promise<NextResponse> {
             await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
             results.signals.push({ type: 'Scalp', side: scalpSig.side, confidence: scalpSig.confidence })
           }
+        }
+      }
+    }
+
+    // ── 5b. ABCD PRZ alert — fires when price enters a Potential Reversal Zone ──
+    if (abcdAnalysis.inPRZ && ntfyTopic) {
+      const p = abcdAnalysis.mostRelevant!
+      const action = p.direction === 'BULLISH' ? 'LONG' : 'SHORT'
+      const emoji  = p.direction === 'BULLISH' ? '▲' : '▼'
+      // Spam guard: max one PRZ alert per 2 hours (tracked via agent state)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const lastPRZAlert    = (prevStateForVoice as any)?.lastPrzAlertAt
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ? new Date(String((prevStateForVoice as any).lastPrzAlertAt)).getTime() : 0
+      const hoursSincePRZAlert = (Date.now() - lastPRZAlert) / 3_600_000
+      if (hoursSincePRZAlert > 2) {
+        await ntfy(
+          ntfyTopic,
+          sanitizeHdr(`APEX ABCD ${emoji} ${action} — Precio en PRZ`),
+          [
+            `${emoji} PATRÓN ABCD HARMÓNICO COMPLETADO`,
+            ``,
+            `TF: ${p.timeframe.toUpperCase()} | Calidad: ${p.quality}`,
+            `Dirección: ${action} — reversión esperada`,
+            ``,
+            `PRZ: $${Math.round(p.prz_low).toLocaleString()}–$${Math.round(p.prz_high).toLocaleString()}`,
+            `Punto D: $${Math.round(p.D_target).toLocaleString()}`,
+            `BC retroceso: ${(p.BC_retrace * 100).toFixed(0)}% | CD: ${p.CD_extension}x`,
+            ``,
+            `TP1: $${Math.round(p.target1).toLocaleString()}`,
+            `TP2: $${Math.round(p.target2).toLocaleString()}`,
+            `TP3: $${Math.round(p.target3).toLocaleString()} (vuelta a C)`,
+            `Invalidación: $${Math.round(p.invalidation).toLocaleString()}`,
+          ].join('\n'),
+          5,
+          'rotating_light',
+        )
+        // Mark PRZ alert time
+        const przSb = getDbClient()
+        if (przSb) {
+          await Promise.resolve(
+            przSb.from('apex_agent_state').update({ last_prz_alert_at: new Date().toISOString() }).eq('id', 'current')
+          ).catch(() => {})
         }
       }
     }

@@ -18,14 +18,7 @@ interface ElliottContext {
   invalidation?: number
 }
 
-interface OptionsData {
-  maxPain:          number
-  maxPainDistance:  string
-  putCallRatio:     number
-  sentiment:        string
-  daysToExpiry:     number
-}
-
+import type { OptionsData }               from './impliedVolatility'
 import type { MacroIndicators, FedExpectations } from './macroEconomics'
 import type { GlobalLiquidity }                  from './globalLiquidity'
 import type { EconomicEvent }                    from './macroCalendar'
@@ -50,10 +43,12 @@ export function writeTradeAnalysis(opts: {
   upcomingEvents?:  EconomicEvent[]
   socialSentiment?: SocialSentiment | null
   whaleAlert?:      WhaleAlert | null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  abcdAnalysis?:    any   // MultiTFABCD
 }): string {
   const { idea, inds, regime, ew, confluence, probScore, mc, mkt, cycle, news, optionsData,
           macroIndicators, globalLiquidity, fedExpectations, upcomingEvents, socialSentiment,
-          whaleAlert } = opts
+          whaleAlert, abcdAnalysis } = opts
   const sess  = getSession()
   const now   = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
   const i4    = inds['4h']
@@ -93,6 +88,7 @@ export function writeTradeAnalysis(opts: {
     `💧 ZONAS CLAVE`,
     optionsData ? `Max Pain semanal: $${optionsData.maxPain.toLocaleString()} (${Math.abs(parseFloat(optionsData.maxPainDistance))}% ${parseFloat(optionsData.maxPainDistance) > 0 ? 'arriba' : 'abajo'} · ${optionsData.daysToExpiry}d)` : null,
     optionsData ? `Put/Call: ${optionsData.putCallRatio.toFixed(2)} — ${optionsData.sentiment}` : null,
+    optionsData?.iv ? `IV Rank: ${optionsData.iv.ivRank}/100 · DVOL ${optionsData.iv.currentIV.toFixed(1)}% · ${optionsData.iv.regime.toUpperCase()} — ${optionsData.iv.signal === 'buy_vol' ? 'opciones baratas' : optionsData.iv.signal === 'sell_vol' ? 'opciones caras' : 'IV neutral'}` : null,
     ``,
     `🎯 PLAN DE TRADING`,
     `${isLong ? '▲ LONG' : '▼ SHORT'} BTC | Tipo: ${idea.tradeType} | Leverage: ${idea.maxLev}x max`,
@@ -138,6 +134,11 @@ export function writeTradeAnalysis(opts: {
     )),
     regime?.regime === 'RANGING' ? `⚠️ ATENCIÓN: Mercado en lateral — mayor ruido, señales menos fiables` : null,
     `Score: ${idea.bull + idea.bear}/${idea.maxSc} | Sesión: ${sess.n}`,
+    // ── ABCD Harmonic Patterns ────────────────────────────────────────────
+    abcdAnalysis ? `\n📐 PATRONES ABCD HARMÓNICOS` : null,
+    abcdAnalysis ? abcdAnalysis.analysis : null,
+    abcdAnalysis?.inPRZ ? `⚡ PRECIO EN PRZ — ZONA DE REVERSIÓN ACTIVA` : null,
+    abcdAnalysis?.mostRelevant ? `TFs activos: ${abcdAnalysis.patterns.map((x: {tf:string}) => x.tf.toUpperCase()).join(', ')} | D: $${Math.round(abcdAnalysis.mostRelevant.D_target).toLocaleString()} | PRZ: $${Math.round(abcdAnalysis.mostRelevant.prz_low).toLocaleString()}–$${Math.round(abcdAnalysis.mostRelevant.prz_high).toLocaleString()}` : null,
   ]
 
   return lines.filter(l => l !== null).join('\n')

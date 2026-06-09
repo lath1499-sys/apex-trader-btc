@@ -14,15 +14,15 @@ const BYBIT  = 'https://api.bybit.com'
 const KRAKEN = 'https://api.kraken.com/0/public'
 
 export const TF_LIMITS: Record<string, number> = {
-  '1d': 300, '4h': 300, '1h': 150, '15m': 150, '5m': 100, '3m': 100, '1m': 100,
+  '3d': 100, '1d': 300, '12h': 150, '4h': 300, '1h': 150, '15m': 150, '5m': 100, '3m': 100, '1m': 100,
 }
-export const TFS = ['1d', '4h', '1h', '15m', '5m', '3m', '1m'] as const
+export const TFS = ['3d', '1d', '12h', '4h', '1h', '15m', '5m', '3m', '1m'] as const
 const BYBIT_TF: Record<string, string> = {
-  '1d': 'D', '4h': '240', '1h': '60', '15m': '15', '5m': '5', '3m': '3', '1m': '1',
+  '3d': 'D', '1d': 'D', '12h': '720', '4h': '240', '1h': '60', '15m': '15', '5m': '5', '3m': '3', '1m': '1',
 }
 // Kraken OHLC intervals in minutes (fallback #3 when Binance + Bybit blocked)
 const KRAKEN_TF: Record<string, number> = {
-  '1d': 1440, '4h': 240, '1h': 60, '15m': 15, '5m': 5, '1m': 1,
+  '3d': 4320, '1d': 1440, '12h': 720, '4h': 240, '1h': 60, '15m': 15, '5m': 5, '1m': 1,
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────

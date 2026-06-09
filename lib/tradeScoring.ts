@@ -13,6 +13,8 @@ import { calcWinProbability }   from './probabilisticModel'
 import { runMonteCarlo }        from './monteCarlo'
 import { findPatternConfluence }   from './patternConfluence'
 import { shouldGenerateSignal, getCurrentTradingSession } from './tradingHours'
+import { getABCDScoreImpact } from './harmonicPatterns'
+import type { MultiTFABCD } from './harmonicPatterns'
 
 type RawK = Partial<Record<string, Kline[]>>
 
@@ -47,6 +49,7 @@ export function scoreTradeIdea(
   fedExpectations?:  FedExpectations,
   socialSentiment?:  SocialSentiment,
   whaleAlert?:       WhaleAlert,
+  abcdAnalysis?:     MultiTFABCD,   // harmonic ABCD patterns
 ): TradeIdea | null {
   const i4 = inds['4h'], i1 = inds['1h'], i1d = inds['1d'], i15 = inds['15m']
   if (!i4 || !i1) return null
@@ -193,6 +196,15 @@ export function scoreTradeIdea(
       if (bull > bear) { bull += bonus; b(`Confluencia multi-TF: ${confluence.description}`) }
       else             { bear += bonus; be(`Confluencia multi-TF: ${confluence.description}`) }
     }
+  }
+
+  // ── ABCD HARMONIC SCORE IMPACT ────────────────────────────────────────────
+  if (abcdAnalysis) {
+    const tentativeSide: 'LONG' | 'SHORT' = bull >= bear ? 'LONG' : 'SHORT'
+    const impact = getABCDScoreImpact(abcdAnalysis, tentativeSide)
+    bull += impact.bull
+    bear += impact.bear
+    impact.reasons.forEach(r => (tentativeSide === 'LONG' ? b : be)(r))
   }
 
   // ── DECISIÓN ─────────────────────────────────────────────────────────────
