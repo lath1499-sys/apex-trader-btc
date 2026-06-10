@@ -323,10 +323,10 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
             <span style={{ fontSize: 8, color: T.muted, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 3, padding: '1px 5px' }}>{idea.tradeType.toUpperCase()}</span>
             <span style={{ fontSize: 8, fontWeight: 700, color: confCol }}>{idea.confidence}</span>
             <span style={{ fontSize: 8, fontWeight: 700, color: STATUS_COLOR[status] ?? T.muted }}>{STATUS_LABEL[status] ?? status}</span>
-            {status === 'active' && rec?.tp2Hit && (
+            {(status === 'tp2_hit' || (status === 'active' && rec?.tp2Hit)) && (
               <span style={{ fontSize: 8, fontWeight: 700, color: '#16a34a' }}>🎯🎯 TP2·SL→TP1</span>
             )}
-            {status === 'active' && rec?.tp1Hit && !rec?.tp2Hit && (
+            {(status === 'tp1_hit' || (status === 'active' && rec?.tp1Hit && !rec?.tp2Hit)) && (
               <span style={{ fontSize: 8, fontWeight: 700, color: '#22c55e' }}>🎯 TP1·SL→entry</span>
             )}
             {rec?.pnlR != null && <span style={{ fontSize: 8, color: rec.pnlR >= 0 ? T.bull : T.danger }}>{rec.pnlR >= 0 ? '+' : ''}{rec.pnlR.toFixed(2)}R</span>}
@@ -1192,7 +1192,7 @@ function HistorialTabView({ sigH, hFilter, setHFilter, onClose }: {
   const scalpHistory = useApexStore(s => s.scalpHistory)
   const [hMode, setHMode] = React.useState<HMode>('normal')
 
-  const activeCount  = sigH.filter(r => r.status === 'active' || r.status === 'pending_confirmation').length
+  const activeCount  = sigH.filter(r => r.status === 'active' || r.status === 'pending_confirmation' || r.status === 'tp1_hit' || r.status === 'tp2_hit').length
   const wonCount     = sigH.filter(r => r.status.startsWith('tp')).length
   const lostCount    = sigH.filter(r => r.status === 'sl_hit').length
   const closedCount  = sigH.filter(r => r.status === 'breakeven' || r.status === 'closed_manual').length
@@ -1333,7 +1333,7 @@ export default function TradeIdeasPanel() {
   const lastAutoAlert  = useRef<string | null>(null)
   const activeKZ       = killzones.find(kz => kz.active)
   // All active signal records (multiple concurrent signals supported)
-  const activeRecs  = sigH.filter(r => r.status === 'active' || r.status === 'pending_confirmation')
+  const activeRecs  = sigH.filter(r => r.status === 'active' || r.status === 'pending_confirmation' || r.status === 'tp1_hit' || r.status === 'tp2_hit')
   // Fallback single-idea display for ConfluencePanel and LimitOrdersCard
   const activeRec   = activeRecs[0] ?? null
   const displayIdea = activeRec?.idea ?? (history.length ? history[0] : tradeIdea)

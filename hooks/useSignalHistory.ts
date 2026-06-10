@@ -98,7 +98,16 @@ export function useSignalHistory() {
     // Initial load
     syncFromCloud().catch(() => {
       const saved = loadSignalHistory()
-      if (saved.length) setSignalHistory(saved)
+      if (!saved.length) return
+      setSignalHistory(prev => {
+        const merged = [...prev]
+        saved.forEach(s => {
+          const idx = merged.findIndex(x => x.id === s.id)
+          if (idx >= 0) merged[idx] = s
+          else merged.unshift(s)
+        })
+        return merged
+      })
     })
 
     // ── Polling fallback (60s) — guarantees new cron signals appear even if
@@ -182,7 +191,7 @@ export function useSignalHistory() {
     if (!price) return
     // Use store state (includes Supabase-loaded signals); localStorage only has client signals
     const current = useApexStore.getState().signalHistory
-    if (!current.some(r => r.status === 'active' || r.status === 'pending_confirmation')) return
+    if (!current.some(r => r.status === 'active' || r.status === 'pending_confirmation' || r.status === 'tp1_hit' || r.status === 'tp2_hit')) return
 
     // ── 1. TP/SL hit detection ────────────────────────────────────────────────
     let updated = updateSignalStatusesByPrice(current, price)
@@ -250,7 +259,7 @@ export function useSignalHistory() {
     // Server agent is sole authority for closing signals — client must NOT write
     // sl_hit / tp*_hit / breakeven back to Supabase or it races with the server.
     updated
-      .filter((r, i) => r !== current[i] && (r.status === 'active' || r.status === 'pending_confirmation'))
+      .filter((r, i) => r !== current[i] && (r.status === 'active' || r.status === 'pending_confirmation' || r.status === 'tp1_hit' || r.status === 'tp2_hit'))
       .forEach(r => saveSignalToCloud(r).catch(() => {}))
   }, [mkt.price, mkt, inds, rawK, setSignalHistory])
 
@@ -258,7 +267,7 @@ export function useSignalHistory() {
   useEffect(() => {
     // Use store state — same reason as price-update effect above
     const current = useApexStore.getState().signalHistory
-    if (!current.some(r => r.status === 'active')) return
+    if (!current.some(r => r.status === 'active' || r.status === 'tp1_hit' || r.status === 'tp2_hit')) return
     const klines = rawK['1h'] ?? rawK['4h'] ?? []
     if (!klines.length) return
     const updated = updateSignalStatuses(current, klines)
