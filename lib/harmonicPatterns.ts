@@ -245,14 +245,14 @@ export function analyzeAllABCD(
 
   let tradingSignal: MultiTFABCD['tradingSignal'] = 'NONE'
   if (mostRelevant && inPRZ) {
-    tradingSignal = mostRelevant.direction === 'BULLISH' ? 'LONG_AT_D' : 'SHORT_AT_D'
+    tradingSignal = mostRelevant.direction === 'BULLISH' ? 'SHORT_AT_D' : 'LONG_AT_D'
   } else if (mostRelevant && mostRelevant.completion > 85) {
     tradingSignal = 'WAIT'
   }
 
   let przDetails = ''
   if (mostRelevant) {
-    const dir  = mostRelevant.direction === 'BEARISH' ? 'SHORT' : 'LONG'
+    const dir  = mostRelevant.direction === 'BEARISH' ? 'LONG' : 'SHORT'
     const dist = ((Math.abs(currentPrice - mostRelevant.D_target) / currentPrice) * 100).toFixed(1)
     przDetails = inPRZ
       ? `✅ Precio EN PRZ del ABCD ${dir} (${mostRelevant.timeframe.toUpperCase()}) — D=$${Math.round(mostRelevant.D_target).toLocaleString()}. Buscar entrada ${dir}.`
@@ -265,7 +265,7 @@ export function analyzeAllABCD(
   } else {
     const tf     = mostRelevant.timeframe.toUpperCase()
     const dir    = mostRelevant.direction === 'BEARISH' ? 'bajista' : 'alcista'
-    const action = mostRelevant.direction === 'BEARISH' ? 'SHORT' : 'LONG'
+    const action = mostRelevant.direction === 'BEARISH' ? 'LONG' : 'SHORT'
     const bc     = (mostRelevant.BC_retrace * 100).toFixed(0)
     const cd     = mostRelevant.CD_extension.toFixed(3)
 
@@ -310,31 +310,31 @@ export function getABCDScoreImpact(
 
   if (p.at_prz) {
     const boost = p.quality === 'PERFECT' ? 4 : p.quality === 'GOOD' ? 3 : 2
-    if (p.direction === 'BULLISH' && side === 'LONG') {
+    if (p.direction === 'BEARISH' && side === 'LONG') {
       bull += boost
-      reasons.push(`📐 ABCD bullish PRZ (${p.timeframe.toUpperCase()}, ${p.quality}) — entrada LONG $${Math.round(p.D_target).toLocaleString()}`)
-    }
-    if (p.direction === 'BEARISH' && side === 'SHORT') {
-      bear += boost
-      reasons.push(`📐 ABCD bearish PRZ (${p.timeframe.toUpperCase()}, ${p.quality}) — entrada SHORT $${Math.round(p.D_target).toLocaleString()}`)
+      reasons.push(`📐 ABCD bajista PRZ (${p.timeframe.toUpperCase()}, ${p.quality}) — reversión LONG en $${Math.round(p.D_target).toLocaleString()}`)
     }
     if (p.direction === 'BULLISH' && side === 'SHORT') {
-      bear -= 2
-      reasons.push(`⚠️ ABCD bullish en PRZ — SHORT contra patrón, riesgo elevado`)
+      bear += boost
+      reasons.push(`📐 ABCD alcista PRZ (${p.timeframe.toUpperCase()}, ${p.quality}) — reversión SHORT en $${Math.round(p.D_target).toLocaleString()}`)
     }
-    if (p.direction === 'BEARISH' && side === 'LONG') {
+    if (p.direction === 'BEARISH' && side === 'SHORT') {
+      bear -= 2
+      reasons.push(`⚠️ ABCD bajista en PRZ — SHORT contra reversión esperada, riesgo elevado`)
+    }
+    if (p.direction === 'BULLISH' && side === 'LONG') {
       bull -= 2
-      reasons.push(`⚠️ ABCD bearish en PRZ — LONG contra patrón, riesgo elevado`)
+      reasons.push(`⚠️ ABCD alcista en PRZ — LONG contra reversión esperada, riesgo elevado`)
     }
     // Multi-TF confluence bonus
     const multiPRZ = abcd.patterns.flatMap(x => x.patterns).filter(x => x.at_prz).length
     if (multiPRZ > 1) {
-      if (p.direction === 'BULLISH' && side === 'LONG')  { bull += 2; reasons.push(`⚡ Confluencia ABCD multi-TF en PRZ`) }
-      if (p.direction === 'BEARISH' && side === 'SHORT') { bear += 2; reasons.push(`⚡ Confluencia ABCD multi-TF en PRZ`) }
+      if (p.direction === 'BEARISH' && side === 'LONG')  { bull += 2; reasons.push(`⚡ Confluencia ABCD multi-TF en PRZ`) }
+      if (p.direction === 'BULLISH' && side === 'SHORT') { bear += 2; reasons.push(`⚡ Confluencia ABCD multi-TF en PRZ`) }
     }
   } else if (p.completion > 85) {
-    if (p.direction === 'BULLISH' && side === 'LONG')  { bull += 1; reasons.push(`📐 ABCD bullish ${p.completion}% — D próximo $${Math.round(p.D_target).toLocaleString()}`) }
-    if (p.direction === 'BEARISH' && side === 'SHORT') { bear += 1; reasons.push(`📐 ABCD bearish ${p.completion}% — D próximo $${Math.round(p.D_target).toLocaleString()}`) }
+    if (p.direction === 'BEARISH' && side === 'LONG')  { bull += 1; reasons.push(`📐 ABCD bajista ${p.completion}% — reversión LONG próxima en $${Math.round(p.D_target).toLocaleString()}`) }
+    if (p.direction === 'BULLISH' && side === 'SHORT') { bear += 1; reasons.push(`📐 ABCD alcista ${p.completion}% — reversión SHORT próxima en $${Math.round(p.D_target).toLocaleString()}`) }
   }
 
   return { bull, bear, reasons }

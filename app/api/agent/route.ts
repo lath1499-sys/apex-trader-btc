@@ -480,7 +480,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     }
     if (!rawSignals) results.errors.push('[Signals] Both clients failed — check Supabase project status/URL')
     const allSignals: SignalRecord[] = Array.isArray(rawSignals) ? rawSignals.map((s) => transformSignal(s)) : []
-    const active     = allSignals.filter(s => s.status === 'active')
+    const active     = allSignals.filter(s => s.status === 'active' || s.status === 'tp1_hit' || s.status === 'tp2_hit')
     results.signalsLoaded = allSignals.length
     results.signalsActive = active.length
     console.log(`[APEX] Signals loaded: ${allSignals.length} total, ${active.length} active`)
@@ -921,8 +921,8 @@ export async function GET(req: Request): Promise<NextResponse> {
     // ── 5b. ABCD PRZ alert — fires when price enters a Potential Reversal Zone ──
     if (abcdAnalysis.inPRZ && ntfyTopic) {
       const p = abcdAnalysis.mostRelevant!
-      const action = p.direction === 'BULLISH' ? 'LONG' : 'SHORT'
-      const emoji  = p.direction === 'BULLISH' ? '▲' : '▼'
+      const action = p.direction === 'BEARISH' ? 'LONG' : 'SHORT'
+      const emoji  = p.direction === 'BEARISH' ? '▲' : '▼'
       // Spam guard: max one PRZ alert per 2 hours (tracked via agent state)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lastPRZAlert    = (prevStateForVoice as any)?.lastPrzAlertAt
@@ -932,12 +932,13 @@ export async function GET(req: Request): Promise<NextResponse> {
       if (hoursSincePRZAlert > 2) {
         await ntfy(
           ntfyTopic,
-          sanitizeHdr(`APEX ABCD ${emoji} ${action} — Precio en PRZ`),
+          sanitizeHdr(`APEX ABCD ${action} — Precio en PRZ (patrón ${p.direction.toLowerCase()})`),
           [
-            `${emoji} PATRÓN ABCD HARMÓNICO COMPLETADO`,
+            `${emoji} PATRÓN ABCD ${p.direction} COMPLETADO`,
+            `El patrón se movió ${p.direction === 'BEARISH' ? 'hacia abajo' : 'hacia arriba'} hasta D.`,
+            `El trade es ${action} — reversión esperada ${p.direction === 'BEARISH' ? 'hacia arriba' : 'hacia abajo'}.`,
             ``,
             `TF: ${p.timeframe.toUpperCase()} | Calidad: ${p.quality}`,
-            `Dirección: ${action} — reversión esperada`,
             ``,
             `PRZ: $${Math.round(p.prz_low).toLocaleString()}–$${Math.round(p.prz_high).toLocaleString()}`,
             `Punto D: $${Math.round(p.D_target).toLocaleString()}`,
