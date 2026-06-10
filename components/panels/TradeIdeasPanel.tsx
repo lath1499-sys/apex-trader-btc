@@ -4,7 +4,7 @@ import { useApexStore } from '@/store/apexStore'
 import { useTheme } from '@/hooks/useTheme'
 import { fmt } from '@/lib/buildContext'
 import { calcSignalStats, closeManualSignal, loadSignalHistory, saveSignalHistory } from '@/lib/signalHistory'
-import { saveSignalToCloud, getSupabase } from '@/lib/supabase'
+import { getSupabase } from '@/lib/supabase'
 import { getLearnedWeights } from '@/lib/scoreWeights'
 import type { TradeIdea, SignalRecord, IndicatorMap, MarketData } from '@/lib/types'
 import type { FVGResult } from '@/lib/fvg'
@@ -1400,9 +1400,22 @@ export default function TradeIdeasPanel() {
       })
       return merged
     })
-    // Persist to Supabase immediately so agent never re-activates this signal
+    // Persist via server API (service key bypasses RLS — anon key would fail)
     const closed = updated.find(s => s.id === id)
-    if (closed) saveSignalToCloud(closed).catch(() => {})
+    if (closed) {
+      fetch('/api/close-signal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id:          closed.id,
+          exitPrice:   closed.exitPrice,
+          closeReason: closed.closeReason,
+          pnl:         closed.pnl,
+          pnlR:        closed.pnlR,
+          closedAt:    closed.closedAt,
+        }),
+      }).catch(() => {})
+    }
   }
 
   return (

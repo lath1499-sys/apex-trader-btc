@@ -1,10 +1,16 @@
 'use client'
 import { useApexStore } from '@/store/apexStore'
-import { useTheme } from '@/hooks/useTheme'
+import { useTheme }     from '@/hooks/useTheme'
+import { useOptions }   from '@/hooks/useOptions'
+
+const REGIME_COLOR: Record<string, string> = {
+  low: '#22c55e', normal: '#eab308', elevated: '#f97316', extreme: '#ef4444',
+}
 
 export default function OnChainPanel() {
   const T = useTheme()
   const D = useApexStore(s => s.onchain)
+  const { data: opts } = useOptions()
 
   if (!D) return <div style={{ color: T.textSec, textAlign: 'center', padding: 40, fontSize: 11 }}>Cargando datos on-chain de mempool.space...</div>
 
@@ -59,6 +65,40 @@ export default function OnChainPanel() {
           : signals.map((s, i) => <div key={i} style={{ fontSize: 9, color: s.c, lineHeight: 1.7, marginBottom: 3 }}>● {s.t}</div>)
         }
         <div style={{ fontSize: 8, color: T.muted, marginTop: 8 }}>Fuente: mempool.space · Refresh cada 90s</div>
+      </div>
+
+      {/* IV Rank — Deribit DVOL */}
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 7, padding: 14 }}>
+        <div style={{ fontSize: 9, color: T.muted, letterSpacing: '.14em', marginBottom: 10 }}>📊 VOLATILIDAD IMPLÍCITA (DERIBIT DVOL)</div>
+        {!opts?.iv ? (
+          <div style={{ fontSize: 9, color: T.textSec }}>Cargando DVOL...</div>
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginBottom: 10 }}>
+              {([
+                { l: 'DVOL', v: `${opts.iv.currentIV.toFixed(1)}%`, c: REGIME_COLOR[opts.iv.regime] },
+                { l: 'IV RANK', v: `${opts.iv.ivRank}/100`, c: REGIME_COLOR[opts.iv.regime] },
+                { l: 'IVP', v: `${opts.iv.ivPercentile}%`, c: T.textSec },
+                { l: 'RANGO 30D', v: `${opts.iv.min30d.toFixed(0)}–${opts.iv.max30d.toFixed(0)}%`, c: T.textSec },
+              ] as { l: string; v: string; c: string }[]).map(({ l, v, c }) => (
+                <div key={l} style={{ background: T.bg, borderRadius: 5, padding: '6px 8px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 7, color: T.muted, marginBottom: 2 }}>{l}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: c }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 9, color: T.textSec }}>
+              <span style={{ color: REGIME_COLOR[opts.iv.regime], fontWeight: 600 }}>
+                {opts.iv.regime.toUpperCase()}
+              </span>
+              {' — '}
+              {opts.iv.signal === 'buy_vol'  && '📉 IV bajo: opciones baratas, buena relación riesgo/recompensa para comprar.'}
+              {opts.iv.signal === 'sell_vol' && '📈 IV alto: opciones caras, considerar estrategias de venta de volatilidad.'}
+              {opts.iv.signal === 'neutral'  && 'Volatilidad implícita en rango normal.'}
+            </div>
+            <div style={{ fontSize: 8, color: T.muted, marginTop: 6 }}>Max Pain ${opts.maxPain.toLocaleString()} · PCR {opts.putCallRatio.toFixed(2)} · {opts.expiryDate} (+{opts.daysToExpiry}d) · Fuente: Deribit</div>
+          </>
+        )}
       </div>
     </div>
   )

@@ -1,9 +1,10 @@
 'use client'
 import { useState, useMemo } from 'react'
-import { useApexStore } from '@/store/apexStore'
-import { useTheme } from '@/hooks/useTheme'
-import { fmt } from '@/lib/buildContext'
+import { useApexStore }    from '@/store/apexStore'
+import { useTheme }        from '@/hooks/useTheme'
+import { fmt }             from '@/lib/buildContext'
 import { ALL_STRATEGIES, runStrategy, btStats } from '@/lib/backtest'
+import WalkForwardCard     from './WalkForwardCard'
 import type { BacktestStats } from '@/lib/types'
 
 type Row = { name: string; stats: BacktestStats }
@@ -11,11 +12,11 @@ type Row = { name: string; stats: BacktestStats }
 export default function BacktestPanel() {
   const T    = useTheme()
   const rawK = useApexStore(s => s.rawK)
-  const [tf, setTf]           = useState<'1h' | '4h' | '1d'>('1h')
-  const [running, setRunning] = useState(false)
-  const [rows, setRows]       = useState<Row[]>([])
+  const [tf, setTf]             = useState<'1h' | '4h' | '1d'>('1h')
+  const [running, setRunning]   = useState(false)
+  const [rows, setRows]         = useState<Row[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [sort, setSort]       = useState<keyof BacktestStats>('wr')
+  const [sort, setSort]         = useState<keyof BacktestStats>('wr')
 
   const klines = rawK[tf] ?? []
 
@@ -44,6 +45,9 @@ export default function BacktestPanel() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Walk-Forward Analysis (real closed signals) */}
+      <WalkForwardCard />
+
       {/* Controls */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {(['1h', '4h', '1d'] as const).map(t => (

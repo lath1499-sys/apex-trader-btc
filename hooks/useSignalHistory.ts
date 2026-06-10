@@ -77,20 +77,21 @@ export function useSignalHistory() {
         .forEach(r => pushScalpHistory(signalRecordToScalp(r)))
 
       // ── Sync ALL active scalps into scalpSignals[] array (authoritative UI source) ──
-      const activeScalps = merged
-        .filter(r => r.idea?.tradeType === 'Scalp' && r.status === 'active')
-        .map(r => signalRecordToScalp(r))
+      const isOpenScalp = (r: SignalRecord) =>
+        r.idea?.tradeType === 'Scalp' &&
+        (r.status === 'active' || r.status === 'tp1_hit' || r.status === 'tp2_hit')
+      const activeScalps = merged.filter(isOpenScalp).map(r => signalRecordToScalp(r))
       setScalpSignals(activeScalps)
 
       // Keep legacy scalpSignal (single) in sync for useMarketData compat
-      const activeScalpRec = merged.find(r => r.idea?.tradeType === 'Scalp' && r.status === 'active')
+      const activeScalpRec = merged.find(isOpenScalp)
       if (activeScalpRec) {
         const currentScalp = useApexStore.getState().scalpSignal
-        if (!currentScalp || currentScalp.status !== 'active') {
+        if (!currentScalp || currentScalp.status !== activeScalpRec.status) {
           useApexStore.getState().setScalpSignal(signalRecordToScalp(activeScalpRec))
         }
       } else {
-        // No active scalps in Supabase — clear the legacy single signal too
+        // No open scalps in Supabase — clear the legacy single signal too
         useApexStore.getState().setScalpSignal(null)
       }
     }

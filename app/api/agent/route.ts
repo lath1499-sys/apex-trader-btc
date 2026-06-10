@@ -93,7 +93,7 @@ async function handleSignalEvent(
     ? (eventPrice - entry) / entry * 100
     : (entry - eventPrice) / entry * 100
 
-  const TERMINAL: SignalEvent[] = ['tp3', 'sl', 'breakeven', 'breakeven_sl', 'manual_close']
+  const TERMINAL: SignalEvent[] = ['tp3', 'sl', 'breakeven_sl', 'manual_close']
   const isClosed = TERMINAL.includes(event)
 
   const newStatus: SignalRecord['status'] = (
@@ -652,7 +652,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     }
 
     // ── 4. Generate new Normal signal ─────────────────────────────────────────
-    const activeCount  = active.filter(s => s.status === 'active').length
+    const activeCount  = active.filter(s => s.idea.tradeType !== 'Scalp').length
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
 
     // Permissive mode: lower thresholds by 1 if no signal generated in 48+ hours
@@ -778,10 +778,11 @@ export async function GET(req: Request): Promise<NextResponse> {
             })
 
         // Dedup: skip if same-side active or recently notified
-        const sameActive = active.some(s => s.idea.side === recSide && s.status === 'active')
+        // Block new signal if same side is already open (any open status) or recently notified
+        const sameActive = active.some(s => s.idea.tradeType !== 'Scalp' && s.idea.side === recSide)
         const alreadyNotified = allSignals.some(s =>
-          s.status === 'active' && s.ntfySent === true && s.idea.side === recSide &&
-          Math.abs(s.idea.price - recEntry) / recEntry < 0.003 &&
+          (s.status === 'active' || s.status === 'tp1_hit' || s.status === 'tp2_hit') &&
+          s.ntfySent === true && s.idea.side === recSide &&
           new Date(s.createdAt).getTime() > Date.now() - 2 * 3_600_000,
         )
         if (sameActive || alreadyNotified) {
@@ -825,7 +826,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     }
 
     // ── 5. Generate Scalp signal (only during valid sessions + killzone) ───────
-    const hasActiveScalp = active.some(s => s.idea.tradeType === 'Scalp' && s.status === 'active')
+    const hasActiveScalp = active.some(s => s.idea.tradeType === 'Scalp')
 
     if (!hasActiveScalp && shouldGenerateSignal('Scalp', 'MEDIA') && klines['15m'].length >= 14) {
       // Compute VWAP from today's 15m candles
@@ -849,7 +850,7 @@ export async function GET(req: Request): Promise<NextResponse> {
         const twoHoursAgo = Date.now() - 2 * 3_600_000
         const duplicate = allSignals.find(s =>
           s.idea.tradeType === 'Scalp' &&
-          s.status === 'active' &&
+          (s.status === 'active' || s.status === 'tp1_hit' || s.status === 'tp2_hit') &&
           s.idea.side === scalpSig.side &&
           Math.abs(s.idea.price - scalpSig.entry) / scalpSig.entry < 0.005 &&
           new Date(s.createdAt).getTime() > twoHoursAgo,
