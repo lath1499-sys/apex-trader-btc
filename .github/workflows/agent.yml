@@ -5,7 +5,15 @@ on:
     - cron: '*/5 * * * *'   # every 5 minutes — SL/TP detected within 5 min max
   workflow_dispatch:          # manual trigger
   push:
-    branches: [master]        # also runs on every push
+    branches: [master]
+    paths-ignore:             # heartbeat commit must NOT re-trigger agent
+      - '.agent-heartbeat'
+      - '**.md'
+
+# Prevent parallel agent runs — queue instead of cancel (avoids missed TP/SL)
+concurrency:
+  group: apex-agent-run
+  cancel-in-progress: false
 
 jobs:
   trigger-agent:

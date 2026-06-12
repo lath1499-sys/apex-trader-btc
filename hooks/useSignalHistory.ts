@@ -58,22 +58,36 @@ export function useSignalHistory() {
   // Hydrate: try Supabase first, fall back to localStorage
   // Then subscribe to Realtime AND poll every 60s so cron signals always appear
   useEffect(() => {
+    // Status progression order — higher = more advanced, never go backwards
+    const STATUS_RANK: Record<string, number> = {
+      active: 0, pending_confirmation: 0,
+      tp1_hit: 1, tp2_hit: 2,
+      tp3_hit: 3, sl_hit: 3, breakeven: 3, closed_manual: 3,
+    }
+
     const syncFromCloud = async () => {
       const cloud = await loadSignalsFromCloud()
       if (!cloud?.length) return
-      // Merge: NEVER remove existing signals — only update or add.
-      // Replacing the whole array caused signals to disappear on every 60s poll.
+      // Merge: NEVER remove existing signals, NEVER regress status.
+      // Realtime may have already applied a newer state than this poll snapshot.
       const current = useApexStore.getState().signalHistory
       const merged = [...current]
       cloud.forEach(s => {
         const idx = merged.findIndex(x => x.id === s.id)
-        if (idx >= 0) merged[idx] = s   // update status / fields in place
-        else merged.unshift(s)           // new signal from Supabase — prepend
+        if (idx >= 0) {
+          const local = merged[idx]
+          const localRank = STATUS_RANK[local.status] ?? 0
+          const cloudRank = STATUS_RANK[s.status]    ?? 0
+          // Only overwrite if cloud status is equal or more advanced
+          if (cloudRank >= localRank) merged[idx] = s
+        } else {
+          merged.unshift(s)  // new signal from Supabase — prepend
+        }
       })
       setSignalHistory(merged)
       // Sync closed scalps into scalpHistory store so historial tab shows them
       merged
-        .filter(r => r.idea?.tradeType === 'Scalp' && r.status !== 'active')
+        .filter(r => r.idea?.tradeType === 'Scalp' && !isOpenScalp(r))
         .forEach(r => pushScalpHistory(signalRecordToScalp(r)))
 
       // ── Sync ALL active scalps into scalpSignals[] array (authoritative UI source) ──

@@ -181,8 +181,12 @@ export interface SignalRecord {
   // One-time NTFY flag — prevents re-firing on every agent run
   ntfySent?: boolean
   // Warning flags — prevent duplicate NTFY spam
-  slWarningFired?:    boolean
+  slWarningFired?:     boolean
   expiryWarningFired?: boolean
+  // Stop management state — persisted so agent restarts don't re-fire NTFY
+  breakevenSet?:   boolean
+  trailing2Set?:   boolean
+  trailingActive?: boolean
 }
 
 export interface ChatMessage { role: 'user' | 'assistant'; text: string }

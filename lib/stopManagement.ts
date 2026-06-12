@@ -38,7 +38,7 @@ export function evaluateStopManagement(
     ? currentPrice >= idea.tp1
     : currentPrice <= idea.tp1
 
-  const breakevenSet = (rec as { breakevenSet?: boolean }).breakevenSet ?? false
+  const breakevenSet = rec.breakevenSet ?? false
 
   if (tp1Reached && !breakevenSet) {
     const buffer = slDist * 0.1   // 10% of original SL distance as safety buffer
@@ -59,7 +59,7 @@ export function evaluateStopManagement(
     ? currentPrice >= idea.tp2
     : currentPrice <= idea.tp2
 
-  const trailing2Set = (rec as { trailing2Set?: boolean }).trailing2Set ?? false
+  const trailing2Set = rec.trailing2Set ?? false
 
   if (tp2Reached && !trailing2Set) {
     const newSL = idea.tp1
@@ -75,7 +75,7 @@ export function evaluateStopManagement(
   }
 
   // ── RULE 3: Structure-based trailing after 2R gain ────────────────────────
-  const trailingActive = (rec as { trailingActive?: boolean }).trailingActive ?? false
+  const trailingActive = rec.trailingActive ?? false
 
   if (currentMoveR >= 2.0 && trailingActive && klines.length >= 5) {
     const recentCandles = klines.slice(-5)

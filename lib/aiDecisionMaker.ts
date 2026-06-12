@@ -191,6 +191,14 @@ Sé DECISIVO. 3-4 confluencias = operar.`
     const decision: TradeDecision = JSON.parse(jsonMatch[1] ?? jsonMatch[0])
 
     if (!decision.action || !decision.reasoning) throw new Error('Invalid decision fields')
+    if (decision.action !== 'WAIT') {
+      if (!decision.entry || !decision.sl || !decision.tp1)
+        throw new Error('Missing numeric fields in trade decision')
+      if (typeof decision.entry !== 'number' || decision.entry <= 0)
+        throw new Error(`Invalid entry: ${decision.entry}`)
+      if (typeof decision.sl !== 'number' || decision.sl <= 0)
+        throw new Error(`Invalid sl: ${decision.sl}`)
+    }
 
     console.log(`[APEX AI] ${decision.action} | ${decision.confidence} | ${decision.urgency} | ${decision.reasoning.slice(0, 120)}`)
     return decision

@@ -122,7 +122,7 @@ export function updateSignalStatuses(
       }
       if (canTP3) {
         return { ...working, status: 'tp3_hit', exitPrice: wi.tp3, exitTs: kTs, closedAt: kTs,
-          pnl: pnlPct(idea.price, wi.tp3, isLong), pnlR: pnlR(idea.price, idea.sl, wi.tp3, isLong) }
+          pnl: pnlPct(idea.price, wi.tp3, isLong), pnlR: pnlR(idea.price, wi.sl, wi.tp3, isLong) }
       }
       // TP2 partial — move SL to TP1
       if (!working.tp2Hit && working.tp1Hit && canTP2) {
@@ -175,15 +175,19 @@ export interface SignalStats {
 }
 
 export function calcSignalStats(records: SignalRecord[]): SignalStats {
-  const resolved  = records.filter(r => r.status !== 'active' && r.status !== 'pending_confirmation')
-  const wins      = resolved.filter(r => r.status !== 'sl_hit')
-  const totalPnlR = resolved.reduce((s, r) => s + (r.pnlR ?? 0), 0)
+  // breakeven excluded from both wins and losses — it's a neutral outcome
+  const terminal  = records.filter(r =>
+    r.status === 'sl_hit' || r.status === 'tp1_hit' || r.status === 'tp2_hit' ||
+    r.status === 'tp3_hit' || r.status === 'closed_manual'
+  )
+  const wins      = terminal.filter(r => r.status !== 'sl_hit')
+  const totalPnlR = terminal.reduce((s, r) => s + (r.pnlR ?? 0), 0)
   return {
     total:    records.length,
-    resolved: resolved.length,
+    resolved: terminal.length,
     wins:     wins.length,
-    winRate:  resolved.length ? wins.length / resolved.length : 0,
+    winRate:  terminal.length ? wins.length / terminal.length : 0,
     totalPnlR,
-    avgPnlR:  resolved.length ? totalPnlR / resolved.length : 0,
+    avgPnlR:  terminal.length ? totalPnlR / terminal.length : 0,
   }
 }

@@ -222,11 +222,7 @@ export function scoreTradeIdea(
     'DayTrade'
 
   // ── FILTROS DE CALIDAD ───────────────────────────────────────────────────
-  // 1. Minimum confluence per type
-  if (maxSc < MIN_CONF[tradeType]) {
-    console.log(`[SCORE REJECT] ${side} ${tradeType} score=${maxSc} min=${MIN_CONF[tradeType]} bias4h=${i4?.bias ?? '?'} rsi4h=${i4?.rsi?.toFixed(0) ?? '?'}`)
-    return null
-  }
+  // 1. Minimum confluence per type — base check (unified with dynamic adj below)
 
   // 2. Extreme BB compression: return consolidation signal instead of null
   const bbExtreme = (i4.bb.width ?? 99) < 1 && (i1.bb.width ?? 99) < 1
@@ -263,13 +259,13 @@ export function scoreTradeIdea(
     coldStreak && rawConf === 'MEDIA' ? 'BAJA'  :
     rawConf
 
-  // 3c. Dynamic min-score threshold — tighten when recent WR < 40%, loosen when > 65%
-  // Hot streak relaxes by 1 extra, cold streak tightens by 1 extra
+  // 3c. Dynamic min-score threshold — tighten (+) or loosen (-) based on WR + permissive mode
   const minScoreAdj = (learnedWeights?.minScoreAdjustment ?? 0)
     + (coldStreak ? 1 : 0)
     - (hotStreak  ? 1 : 0)
-  if (minScoreAdj > 0 && maxSc < MIN_CONF[tradeType] + minScoreAdj) {
-    console.log(`[SCORE REJECT] ${side} ${tradeType} score=${maxSc} min=${MIN_CONF[tradeType]+minScoreAdj} (adj+${minScoreAdj}) cold=${coldStreak} hot=${hotStreak}`)
+  const effectiveMin = MIN_CONF[tradeType] + minScoreAdj
+  if (maxSc < effectiveMin) {
+    console.log(`[SCORE REJECT] ${side} ${tradeType} score=${maxSc} min=${effectiveMin} (adj${minScoreAdj >= 0 ? '+' : ''}${minScoreAdj}) cold=${coldStreak} hot=${hotStreak}`)
     return null
   }
 

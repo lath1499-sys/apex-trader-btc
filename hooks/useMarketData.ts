@@ -103,9 +103,8 @@ export function useMarketData() {
         pnl:        pnlPct(exitPrice),
       }
       pushScalpHistory(closed)
-      // Clear active signal
-      const cur = useApexStore.getState().scalpSignal
-      if (!cur || cur.status === 'active') setScalpSignal(null)
+      // Always clear — signal is fully closed regardless of prior partial status
+      setScalpSignal(null)
       // Persist close to Supabase so server agent doesn't re-open on next run
       const allSigs = useApexStore.getState().signalHistory ?? []
       const supaRec = allSigs.find(r =>

@@ -532,19 +532,22 @@ export async function GET(req: Request): Promise<NextResponse> {
       // and recovered to SL without the agent seeing it. Scan 1H candles first.
       const signalMs   = new Date(sig.createdAt).getTime()
       const k1hHistory = (klines['1h'] ?? []).filter(k => k.t > signalMs)
-      if (!sig.tp1Hit && !changed) {
+      if (!k1hHistory.length) {
+        console.warn(`[APEX] No 1H kline history for signal ${sig.id} — skipping retroactive scan`)
+      }
+      if (!sig.tp1Hit && !changed && k1hHistory.length) {
         const tp1InHistory = k1hHistory.some(k => isLong ? k.h >= sig.idea.tp1 : k.l <= sig.idea.tp1)
         if (tp1InHistory) {
           updated = await handleSignalEvent(sig, 'tp1', sig.idea.tp1, ntfyTopic, { reason: 'TP1 alcanzado (histórico — agente inactivo)' })
-          ;(updated as { breakevenSet?: boolean }).breakevenSet = true
+          updated = { ...updated, breakevenSet: true }
           await saveSignalToCloud(updated)
           changed = true
           results.updates.push({ id: sig.id, action: 'tp1_retroactive', newSL: sig.idea.price })
         }
       }
-      if (!sig.tp2Hit && !changed) {
+      if (!sig.tp2Hit && !changed && k1hHistory.length) {
         const tp2InHistory = k1hHistory.some(k => isLong ? k.h >= sig.idea.tp2 : k.l <= sig.idea.tp2)
-        if (tp2InHistory && sig.tp1Hit) {
+        if (tp2InHistory && updated.tp1Hit) {  // C1: use updated (may have tp1Hit set above)
           updated = await handleSignalEvent(updated, 'tp2', sig.idea.tp2, ntfyTopic, { reason: 'TP2 alcanzado (histórico — agente inactivo)' })
           await saveSignalToCloud(updated)
           changed = true
@@ -567,13 +570,13 @@ export async function GET(req: Request): Promise<NextResponse> {
       // ── TP1 ───────────────────────────────────────────────────────────────────
       else if (!changed && !sig.tp1Hit && (isLong ? price >= sig.idea.tp1 : price <= sig.idea.tp1)) {
         updated = await handleSignalEvent(updated, 'tp1', sig.idea.tp1, ntfyTopic, { reason: 'TP1 alcanzado' })
-        ;(updated as { breakevenSet?: boolean }).breakevenSet = true
+        updated = { ...updated, breakevenSet: true }
         await saveSignalToCloud(updated)   // persist BEFORE next check to prevent re-fire
         changed = true
       }
       // ── SL hit — checked LAST so a TP always wins over SL on same tick ────────
       else if (!changed && (isLong ? price <= updated.idea.sl : price >= updated.idea.sl)) {
-        const wasBreakeven = (updated as { breakevenSet?: boolean }).breakevenSet === true
+        const wasBreakeven = (updated.breakevenSet === true)
           || Math.abs((updated.idea.sl - updated.idea.price) / updated.idea.price * 100) < 0.15
         updated = await handleSignalEvent(updated, wasBreakeven ? 'breakeven_sl' : 'sl', updated.idea.sl, ntfyTopic, {
           reason: wasBreakeven
@@ -590,8 +593,9 @@ export async function GET(req: Request): Promise<NextResponse> {
         if (stopUpdate) {
           const isBreakeven   = stopUpdate.action === 'move_to_breakeven'
           const isTrail2      = stopUpdate.action === 'trail_to_tp1'
-          const alreadyBE     = (sig as { breakevenSet?: boolean }).breakevenSet  ?? false
-          const alreadyTrail2 = (sig as { trailing2Set?: boolean }).trailing2Set  ?? false
+          // A4: read from `updated` (may have breakevenSet=true from TP1 earlier this iteration)
+          const alreadyBE     = updated.breakevenSet  ?? false
+          const alreadyTrail2 = updated.trailing2Set  ?? false
           const shouldNotify  = (isBreakeven && !alreadyBE) || (isTrail2 && !alreadyTrail2) || (!isBreakeven && !isTrail2)
           const trailEvent: SignalEvent = isBreakeven ? 'breakeven' : 'trailing'
           if (shouldNotify) {
@@ -599,11 +603,14 @@ export async function GET(req: Request): Promise<NextResponse> {
               reason: stopUpdate.reason, newSL: stopUpdate.newSL,
             })
           } else {
-            updated = { ...updated, idea: { ...updated.idea, sl: stopUpdate.newSL } } as SignalRecord
+            updated = { ...updated, idea: { ...updated.idea, sl: stopUpdate.newSL } }
           }
-          ;(updated as { breakevenSet?: boolean }).breakevenSet    = isBreakeven ? true : alreadyBE
-          ;(updated as { trailing2Set?: boolean }).trailing2Set    = isTrail2    ? true : alreadyTrail2
-          ;(updated as { trailingActive?: boolean }).trailingActive = stopUpdate.pnlProtected > 0
+          updated = {
+            ...updated,
+            breakevenSet:   isBreakeven ? true : alreadyBE,
+            trailing2Set:   isTrail2    ? true : alreadyTrail2,
+            trailingActive: stopUpdate.pnlProtected > 0,
+          }
           results.updates.push({ id: sig.id, action: stopUpdate.action, newSL: stopUpdate.newSL })
           changed = true
         }
@@ -627,10 +634,9 @@ export async function GET(req: Request): Promise<NextResponse> {
       }
     }
 
-    // ── 3b. Macro event blocker — alert once when a block window starts ────────
+    // ── 3b. Macro event blocker — alert at :00 and :30 of each hour (not only :00)
     const macroBlock = getActiveBlockingEvent()
-    if (macroBlock && ntfyTopic && mins === 0) {
-      // Only notify at the top of each hour to avoid spam
+    if (macroBlock && ntfyTopic && mins % 30 < 5) {
       const minsToEvent = minutesUntilEvent(macroBlock)
       await ntfy(
         ntfyTopic,

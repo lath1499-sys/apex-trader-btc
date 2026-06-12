@@ -74,6 +74,10 @@ export function transformSignal(s: Record<string, unknown>): SignalRecord {
     slWarningFired:      Boolean(s.sl_warning_fired),
     expiryWarningFired:  Boolean(s.expiry_warning_fired),
     ntfySent:            Boolean(s.ntfy_sent),
+    // Stop management state — prevents re-firing NTFY after agent restarts
+    breakevenSet:        Boolean(s.breakeven_set),
+    trailing2Set:        Boolean(s.trailing2_set),
+    trailingActive:      Boolean(s.trailing_active),
     idea: {
       side:       String(s.side) as 'LONG' | 'SHORT',
       tradeType:  String(s.trade_type) as 'Scalp' | 'DayTrade' | 'Swing',
@@ -133,6 +137,10 @@ export async function saveSignalToCloud(signal: SignalRecord): Promise<void> {
     sl_warning_fired:      signal.slWarningFired       ?? false,
     expiry_warning_fired:  signal.expiryWarningFired   ?? false,
     ntfy_sent:             signal.ntfySent             ?? false,
+    // Stop management state
+    breakeven_set:         signal.breakevenSet         ?? false,
+    trailing2_set:         signal.trailing2Set         ?? false,
+    trailing_active:       signal.trailingActive       ?? false,
   }, { onConflict: 'id' })
 
   if (error) console.error('[Supabase] saveSignal error:', error.message)
