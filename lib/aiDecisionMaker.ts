@@ -13,12 +13,40 @@ export interface TradeDecision {
   tp1:           number
   tp2:           number
   tp3:           number
-  reasoning:     string       // Claude's full reasoning
-  keyFactors:    string[]     // top 3-5 factors
-  risks:         string[]     // what could go wrong
-  invalidation:  string       // what would change the decision
-  waitingFor?:   string       // if WAIT, what condition
+  reasoning:     string
+  keyFactors:    string[]
+  risks:         string[]
+  invalidation:  string
+  waitingFor?:   string
   urgency:       'NOW' | 'SOON' | 'LATER'
+  // Portfolio coherence
+  portfolioAssessment:  string
+  positionsToClose:     Array<{ signalId: string; reason: string }>
+  coexistenceReasoning: string | null
+}
+
+function buildPortfolioSummary(allActivePositions: any[], currentPrice: number): string {
+  if (!allActivePositions?.length) return 'Sin posiciones abiertas actualmente. Portafolio limpio.'
+
+  const longs  = allActivePositions.filter((s: any) => s.side === 'LONG')
+  const shorts = allActivePositions.filter((s: any) => s.side === 'SHORT')
+
+  const describePosition = (s: any) => {
+    const isLong = s.side === 'LONG'
+    const pnl    = isLong
+      ? (currentPrice - s.entry) / s.entry * 100
+      : (s.entry - currentPrice) / s.entry * 100
+    const hrs = Math.round((Date.now() - new Date(s.createdAt).getTime()) / 3_600_000)
+    return `  - [ID:${s.id}] ${s.side} ${s.tradeType} @$${Math.round(s.entry).toLocaleString()} | P&L:${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% | ${hrs}h abierto | TP1hit:${s.tp1Hit ? 'SI' : 'NO'}`
+  }
+
+  let summary = `EXPOSICIÓN ACTUAL: ${longs.length} LONG, ${shorts.length} SHORT activos.\n\n`
+  if (longs.length > 0)  summary += `POSICIONES LONG:\n${longs.map(describePosition).join('\n')}\n\n`
+  if (shorts.length > 0) summary += `POSICIONES SHORT:\n${shorts.map(describePosition).join('\n')}\n\n`
+  if (longs.length > 0 && shorts.length > 0)
+    summary += `⚠️ TIENES POSICIONES EN AMBAS DIRECCIONES SIMULTÁNEAMENTE.\n`
+
+  return summary
 }
 
 export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | null> {
@@ -68,12 +96,38 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
 
   const priceChangePct = prevPrice > 0 ? ((price - prevPrice) / prevPrice * 100).toFixed(2) : '0.00'
 
+  const portfolioSummary = buildPortfolioSummary(activeSignals ?? [], price)
+
   const prompt = `Eres APEX, un trader experto de Bitcoin con 15 años de experiencia en futuros Binance.
 Analiza el mercado y decide: ¿operar ahora, esperar, o cerrar una posición existente?
 
 Piensa como un trader profesional. Usa toda la información disponible.
 Sé DECISIVO — la parálisis es el mayor enemigo del trader.
 Si hay 3-4 confluencias claras, opera. No esperes condiciones perfectas.
+
+═══ TU PORTAFOLIO ACTUAL — LEE ESTO PRIMERO ═══
+${portfolioSummary}
+
+REGLA DE COHERENCIA DE PORTAFOLIO (OBLIGATORIA, sin excepciones):
+
+Si tu decisión de HOY es LONG y tienes SHORTs activos (o viceversa),
+ANTES de responder DEBES resolver la contradicción. Tienes 3 opciones:
+
+OPCIÓN A — CERRAR LAS POSICIONES EN CONFLICTO:
+Si tu nueva lectura invalida la tesis de las posiciones opuestas, lléna
+"positionsToClose" con los IDs exactos (de la lista de arriba) y la razón.
+
+OPCIÓN B — JUSTIFICAR LA COEXISTENCIA:
+Si AMBAS tienen sentido simultáneo (ej: shorts macro, este long es rebote técnico),
+llena "coexistenceReasoning" explicando ESPECÍFICAMENTE por qué un trader
+profesional mantendría ambas. Esto debe ser excepción justificada, NO el default.
+
+OPCIÓN C — ESPERAR:
+Si no puedes justificar B y no quieres ejecutar A, tu "action" debe ser "WAIT".
+Puedes incluir positionsToClose incluso si action="WAIT".
+
+DEFAULT: en caso de duda, OPCIÓN A es más coherente que posiciones abandonadas
+en direcciones opuestas. Es UN SOLO portafolio, un solo trader, una sola cuenta.
 
 ═══ MERCADO ACTUAL ═══
 Precio: $${Math.round(price).toLocaleString()} (${priceChangePct}% vs hace 30min)
@@ -134,9 +188,9 @@ ${perfStats ? `${perfStats.total} trades | Win rate: ${perfStats.winRate}% | P&L
 Analiza TODO y responde SOLO con este JSON (sin texto adicional, sin markdown):
 
 {
-  "action": "LONG" o "SHORT" o "WAIT" o "CLOSE_EXISTING",
-  "confidence": "ALTA" o "MEDIA" o "BAJA",
-  "tradeType": "Scalp" o "DayTrade" o "Swing",
+  "action": "LONG" | "SHORT" | "WAIT" | "CLOSE_EXISTING",
+  "confidence": "ALTA" | "MEDIA" | "BAJA",
+  "tradeType": "Scalp" | "DayTrade" | "Swing",
   "entry": <número>,
   "sl": <número>,
   "tp1": <número>,
@@ -147,15 +201,21 @@ Analiza TODO y responde SOLO con este JSON (sin texto adicional, sin markdown):
   "risks": ["<riesgo 1>", "<riesgo 2>"],
   "invalidation": "<qué cambiaría tu decisión>",
   "waitingFor": "<si es WAIT: qué condición esperas>",
-  "urgency": "NOW" o "SOON" o "LATER"
+  "urgency": "NOW" | "SOON" | "LATER",
+  "portfolioAssessment": "<tu lectura de la exposición actual en 1-2 oraciones>",
+  "positionsToClose": [
+    {"signalId": "<ID exacto de la lista de arriba>", "reason": "<por qué cierras esta>"}
+  ],
+  "coexistenceReasoning": "<null si no hay conflicto o si cierras todo; explicación si justificas coexistencia>"
 }
 
 REGLAS DE SL/TP:
 - SL basado en estructura (swing high/low). Buffer: 0.3-0.5% del precio. Mínimo 0.5%.
 - TP1: R:R ≥ 1.5:1 | TP2: R:R ≥ 2.5:1 | TP3: R:R ≥ 4:1
 - Para WAIT: calcula igual los niveles que esperarías
-- Si hay señal activa ya: considera si se debe cerrar primero
 - No operes contra la tendencia principal a menos que RSI < 25 o > 75 con confluencias fuertes
+- positionsToClose: array vacío [] si no hay nada que cerrar
+- Los signalId DEBEN ser exactamente los IDs mostrados en TU PORTAFOLIO ACTUAL
 
 Sé DECISIVO. 3-4 confluencias = operar.`
 
@@ -200,7 +260,12 @@ Sé DECISIVO. 3-4 confluencias = operar.`
         throw new Error(`Invalid sl: ${decision.sl}`)
     }
 
-    console.log(`[APEX AI] ${decision.action} | ${decision.confidence} | ${decision.urgency} | ${decision.reasoning.slice(0, 120)}`)
+    // Defaults for portfolio coherence fields (backward compat if Claude omits them)
+    decision.portfolioAssessment  = decision.portfolioAssessment  ?? ''
+    decision.positionsToClose     = Array.isArray(decision.positionsToClose) ? decision.positionsToClose : []
+    decision.coexistenceReasoning = decision.coexistenceReasoning ?? null
+
+    console.log(`[APEX AI] ${decision.action} | ${decision.confidence} | ${decision.urgency} | closes:${decision.positionsToClose.length} | ${decision.reasoning.slice(0, 100)}`)
     return decision
 
   } catch (err) {

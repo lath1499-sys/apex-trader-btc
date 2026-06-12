@@ -329,6 +329,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     waitReason?: string
     aiReasoning?: string
     aiDecision?: string
+    portfolioCloses?: Array<{ id: string; side: string; pnl: string; reason: string }>
   } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null, macro: null }
 
   try {
@@ -533,10 +534,17 @@ export async function GET(req: Request): Promise<NextResponse> {
     const ewMap      = { '4h': ew4hResult, '1d': ew1dResult }
     const fvgsMap    = { '4h': fvg4h, '15m': fvg15m }
     const activeSigData = active.map(s => ({
+      id:        s.id,
       side:      s.idea.side,
       entry:     s.idea.price,
       sl:        s.idea.sl,
+      tp1:       s.idea.tp1,
+      tp2:       s.idea.tp2,
+      tp3:       s.idea.tp3,
       tradeType: s.idea.tradeType,
+      tp1Hit:    s.tp1Hit ?? false,
+      createdAt: s.createdAt,
+      status:    s.status,
     }))
     let agentOpinionChange: string | null = null   // set inside generate-signal block if bias flips
     // prevStateForVoice already loaded in parallel Supabase batch above
@@ -761,6 +769,54 @@ export async function GET(req: Request): Promise<NextResponse> {
         })).catch(() => {})
       }
 
+      // ── Portfolio coherence: process positionsToClose from Claude ───────────
+      const closedIds = new Set<string>()
+      if (aiDecision?.positionsToClose?.length) {
+        results.portfolioCloses = results.portfolioCloses ?? []
+        for (const req of aiDecision.positionsToClose) {
+          const sig = active.find(s => s.id === req.signalId)
+          if (!sig) continue
+          if (!['active', 'tp1_hit', 'tp2_hit'].includes(sig.status)) continue
+          const isLong = sig.idea.side === 'LONG'
+          const pnlPct = isLong
+            ? (price - sig.idea.price) / sig.idea.price * 100
+            : (sig.idea.price - price) / sig.idea.price * 100
+          const pnlStr = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`
+          const closeSb = getDbClient()
+          if (closeSb) {
+            await Promise.resolve(closeSb.from('apex_signals').update({
+              status:      'closed_manual',
+              pnl:         parseFloat(pnlPct.toFixed(2)),
+              exit_price:  price,
+              close_reason: `Coherencia portafolio: ${req.reason}`,
+              closed_at:   new Date().toISOString(),
+              updated_at:  new Date().toISOString(),
+            }).eq('id', req.signalId)).catch(() => {})
+          }
+          if (ntfyTopic) {
+            await ntfy(
+              ntfyTopic,
+              sanitizeHdr(`APEX CIERRE COHERENCIA — ${sig.idea.side} ${pnlStr}`),
+              [
+                `🔄 Cambié de sesgo — cerrando posición que ya no encaja.`,
+                ``,
+                `${sig.idea.side} ${sig.idea.tradeType} desde $${Math.round(sig.idea.price).toLocaleString()}`,
+                `Cierre: $${Math.round(price).toLocaleString()} | P&L: ${pnlStr}`,
+                ``,
+                `Razón: ${req.reason}`,
+              ].join('\n'),
+              4,
+              'arrows_counterclockwise',
+            )
+          }
+          closedIds.add(req.signalId)
+          results.portfolioCloses.push({ id: req.signalId, side: sig.idea.side, pnl: pnlStr, reason: req.reason })
+          console.log(`[APEX Portfolio] Closed ${sig.idea.side} ${sig.id} — ${req.reason}`)
+        }
+      }
+      // Refresh active list excluding just-closed signals
+      const stillActive = active.filter(s => !closedIds.has(s.id))
+
       // ── Safety checks (apply to both AI and rule-based) ─────────────────────
       const signalSide = useAI ? aiDecision!.action as 'LONG' | 'SHORT' : fallbackSignal?.side
       const blockedByCorrelation = globalMarkets?.signalImpact === 'BLOCK_LONGS' && signalSide === 'LONG'
@@ -806,8 +862,8 @@ export async function GET(req: Request): Promise<NextResponse> {
             })
 
         // Dedup: skip if same-side active or recently notified
-        // Block new signal if same side is already open (any open status) or recently notified
-        const sameActive = active.some(s => s.idea.tradeType !== 'Scalp' && s.idea.side === recSide)
+        // Use stillActive (excludes just-closed portfolio-coherence signals)
+        const sameActive = stillActive.some(s => s.idea.tradeType !== 'Scalp' && s.idea.side === recSide)
         const alreadyNotified = allSignals.some(s =>
           (s.status === 'active' || s.status === 'tp1_hit' || s.status === 'tp2_hit') &&
           s.ntfySent === true && s.idea.side === recSide &&
@@ -848,6 +904,19 @@ export async function GET(req: Request): Promise<NextResponse> {
           } else {
             await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
             results.signals.push({ type: recType, side: recSide, confidence: recConf })
+            // Section 7: If Claude justified coexistence with opposite positions, say so
+            const coexist = aiDecision?.coexistenceReasoning
+            const oppositeStillOpen = stillActive.some(s => s.idea.tradeType !== 'Scalp' && s.idea.side !== recSide)
+            if (coexist && oppositeStillOpen && ntfyTopic) {
+              const oppSide = recSide === 'LONG' ? 'SHORT' : 'LONG'
+              await ntfy(
+                ntfyTopic,
+                sanitizeHdr(`APEX — Coexistencia ${recSide}+${oppSide} justificada`),
+                `⚖️ Mantengo posiciones en AMBAS direcciones.\n\n${coexist}`,
+                2,
+                'scales',
+              )
+            }
           }
         }
       }
