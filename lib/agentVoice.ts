@@ -29,7 +29,10 @@ export interface AgentUpdateParams {
   globalMarkets:   any
   optionsData?:    any
   wfGrade?:        string | null
-  mkt?:            any   // MarketData — fg, funding, lsr for Claude context
+  mkt?:            any
+  socialSentiment?: any
+  abcdAnalysis?:    any
+  memory?:          { lastBias: string; lastPrice: number; lastAnalysisAt: string | null; changeReason: string | null } | null
 }
 
 // ── Claude API call for rich, intelligent voice ────────────────────────────
@@ -39,7 +42,8 @@ async function callClaudeForUpdate(p: AgentUpdateParams): Promise<string | null>
 
   const { price, prevPrice, inds, regime, session, activeSignals, opinionChanges,
           mkt, whaleAlert, macroSentiment, macroIndicators, fedExpectations,
-          globalMarkets, elliottWaves, optionsData, news } = p
+          globalMarkets, elliottWaves, fvgs, liquidity, optionsData, news,
+          socialSentiment, abcdAnalysis, memory } = p
 
   const i4   = inds?.['4h']
   const i1   = inds?.['1h']
@@ -51,46 +55,97 @@ async function callClaudeForUpdate(p: AgentUpdateParams): Promise<string | null>
     ? ((price - prevPrice) / prevPrice * 100).toFixed(2)
     : '0.00'
 
-  const sigLines = activeSignals.length > 0
-    ? activeSignals.map((s: any) => {
-        const isLong = s.side === 'LONG'
-        const pnl    = isLong ? (price - s.entry) / s.entry * 100 : (s.entry - price) / s.entry * 100
-        const slDist = Math.abs(price - s.sl) / s.entry * 100
-        return `${s.side} ${s.tradeType} desde $${Math.round(s.entry).toLocaleString()} | P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% | SL a ${slDist.toFixed(1)}%`
-      }).join('\n')
-    : 'Sin señales activas'
+  const rawData = `
+PRECIO: $${Math.round(price).toLocaleString()} (${priceChange}% en 30min)
+SESIÓN: ${session?.name ?? 'N/A'} | RÉGIMEN: ${regime?.regime?.replace(/_/g, ' ') ?? 'N/A'} (ADX ${regime?.adx?.toFixed(1) ?? '?'})
 
-  const prompt = `Eres APEX, un agente de trading de Bitcoin experto. Reportas al trader como un colega senior — directo, con opinión propia, usando terminología de trading real. No eres un bot de datos. Tienes personalidad y criterio propio.
+ESTRUCTURA:
+1D: ${i1d?.bias ?? '?'} RSI${i1d?.rsi?.toFixed(0) ?? '?'}
+4H: ${i4?.bias ?? '?'} RSI${i4?.rsi?.toFixed(0) ?? '?'} MACD${(i4?.macd?.hist ?? 0) > 0 ? '+' : ''}${i4?.macd?.hist?.toFixed(0) ?? '?'} Stoch${i4?.stoch?.k?.toFixed(0) ?? '?'}
+1H: ${i1?.bias ?? '?'} RSI${i1?.rsi?.toFixed(0) ?? '?'}
+15M: ${i15?.bias ?? '?'} RSI${i15?.rsi?.toFixed(0) ?? '?'}
+${ew4h && ew4h.currentWave !== 'unclear' ? `ELLIOTT 4H: Onda ${ew4h.currentWave} ${ew4h.direction} → target $${ew4h.nextTarget ? Math.round(ew4h.nextTarget).toLocaleString() : 'N/A'} | invalida $${ew4h.invalidation ? Math.round(ew4h.invalidation).toLocaleString() : 'N/A'}` : ''}
+${abcdAnalysis?.mostRelevant ? `ABCD ${String(abcdAnalysis.mostRelevant.timeframe).toUpperCase()}: ${abcdAnalysis.mostRelevant.direction} ${abcdAnalysis.mostRelevant.completion}% completado, D=$${Math.round(abcdAnalysis.mostRelevant.D_target).toLocaleString()}${abcdAnalysis.inPRZ ? ' ← PRECIO EN PRZ AHORA' : ''}` : ''}
 
-DATOS ACTUALES (${new Date().toUTCString()}):
-Precio: $${Math.round(price).toLocaleString()} (${priceChange}% vs hace 30min)
-Sesión: ${session?.name ?? 'N/A'}
-Régimen: ${regime?.regime?.replace(/_/g, ' ') ?? 'N/A'} | ADX: ${regime?.adx?.toFixed(1) ?? '?'}
+NIVELES:
+${(fvgs?.['4h'] ?? []).filter((f: any) => !f.filled).slice(0, 2).map((f: any) => `FVG ${f.type}: $${Math.round(f.midpoint).toLocaleString()} (${((f.midpoint - price) / price * 100).toFixed(1)}%)`).join('\n')}
+${liquidity?.nearestBSL ? `BSL: $${Math.round(liquidity.nearestBSL).toLocaleString()} (+${((liquidity.nearestBSL - price) / price * 100).toFixed(1)}%)` : ''}
+${liquidity?.nearestSSL ? `SSL: $${Math.round(liquidity.nearestSSL).toLocaleString()} (${((liquidity.nearestSSL - price) / price * 100).toFixed(1)}%)` : ''}
 
-MULTI-TIMEFRAME:
-1D: ${i1d?.bias ?? '?'} | RSI ${i1d?.rsi?.toFixed(0) ?? '?'}
-4H: ${i4?.bias ?? '?'} | RSI ${i4?.rsi?.toFixed(0) ?? '?'} | MACD hist ${i4?.macd?.hist?.toFixed(0) ?? '?'} | Stoch ${i4?.stoch?.k?.toFixed(0) ?? '?'}
-1H: ${i1?.bias ?? '?'} | RSI ${i1?.rsi?.toFixed(0) ?? '?'} | MACD hist ${i1?.macd?.hist?.toFixed(0) ?? '?'}
-15M: ${i15?.bias ?? '?'} | RSI ${i15?.rsi?.toFixed(0) ?? '?'}
-${ew4h && ew4h.currentWave !== 'unclear' ? `\nELLIOTT 4H: Onda ${ew4h.currentWave} ${ew4h.direction} | Target: $${ew4h.nextTarget ? Math.round(ew4h.nextTarget).toLocaleString() : 'N/A'} | Inval: $${ew4h.invalidation ? Math.round(ew4h.invalidation).toLocaleString() : 'N/A'}` : ''}
-
-MERCADO:
-F&G: ${mkt?.fg ?? '?'}/100 | Funding: ${mkt?.funding != null ? mkt.funding.toFixed(4) : '?'}% | L/S: ${mkt?.lsr?.toFixed(2) ?? '?'}
-${whaleAlert?.detected ? `WHALE ALERT: ${whaleAlert.description}` : ''}
+FLUJO:
+Funding: ${mkt?.funding != null ? (mkt.funding >= 0 ? '+' : '') + mkt.funding.toFixed(4) : '?'}% | L/S: ${mkt?.lsr?.toFixed(2) ?? '?'} | F&G: ${mkt?.fg ?? '?'}/100
+${whaleAlert?.detected ? `WHALE: ${whaleAlert.description}` : ''}
+${optionsData?.iv ? `IV Rank: ${optionsData.iv.ivRank}/100 (${optionsData.iv.regime})` : ''}
 
 MACRO:
-${macroSentiment ? `Sentimiento: ${macroSentiment.label} (score ${macroSentiment.score}/100)` : ''}
+${macroSentiment ? `Sentimiento: ${macroSentiment.label} (${macroSentiment.score}/100)` : ''}
 ${macroIndicators?.fedRate ? `Fed: ${macroIndicators.fedRate.current?.toFixed(2)}% (${macroIndicators.fedRate.trend})` : ''}
-${fedExpectations ? `Corte Fed: ${fedExpectations.cutProbability}% prob | FOMC: ${fedExpectations.nextMeetingDate ?? 'N/A'}` : ''}
+${fedExpectations ? `Fed recorte: ${fedExpectations.cutProbability}% prob` : ''}
 ${globalMarkets?.signalImpact !== 'NEUTRAL' ? `Global: ${globalMarkets?.btcCorrelation ?? ''}` : ''}
-${optionsData?.iv ? `IV Rank: ${optionsData.iv.ivRank}/100 | DVOL: ${optionsData.iv.currentIV.toFixed(1)}% (${optionsData.iv.regime})` : ''}
+${socialSentiment ? `Social Galaxy Score: ${socialSentiment.galaxyScore} | ${socialSentiment.sentiment}` : ''}
 
-SEÑALES ACTIVAS:
-${sigLines}
-${opinionChanges.length > 0 ? `\nCAMBIOS: ${opinionChanges.join(' | ')}` : ''}
-${(news ?? []).length > 0 ? `\nNOTICIAS: ${(news ?? []).slice(0, 2).map((n: any) => String(n.title ?? '').slice(0, 60)).join(' | ')}` : ''}
+NOTICIAS:
+${(news ?? []).slice(0, 3).map((n: any) => `• ${String(n.title ?? '').slice(0, 90)} [${n.tag ?? 'neutral'}]`).join('\n') || '(Sin noticias recientes)'}
 
-INSTRUCCIÓN: Escribe un reporte de mercado de máximo 12 líneas. Habla en español como trader senior. Empieza con tu lectura de lo que está pasando ahora mismo. Interpreta los datos, no los copies. Menciona las señales activas y su estado. Da tu sesgo para las próximas horas. Sé directo y con criterio.`
+SEÑALES ACTIVAS (${activeSignals.length}):
+${activeSignals.length > 0
+  ? activeSignals.map((s: any) => {
+      const isLong  = s.side === 'LONG'
+      const pnl     = isLong ? (price - s.entry) / s.entry * 100 : (s.entry - price) / s.entry * 100
+      const slDist  = Math.abs(price - s.sl) / s.entry * 100
+      const tp1Dist = isLong ? (s.tp1 - price) / price * 100 : (price - s.tp1) / price * 100
+      const hrs     = Math.round((Date.now() - new Date(s.createdAt).getTime()) / 3_600_000)
+      return `${s.side} ${s.tradeType} @$${Math.round(s.entry).toLocaleString()} | P&L:${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% | SL:${slDist.toFixed(1)}% lejos | TP1:${tp1Dist.toFixed(1)}% lejos | TP1hit:${s.tp1Hit ? 'SI' : 'NO'} | ${hrs}h`
+    }).join('\n')
+  : 'Ninguna'}
+
+${memory?.lastAnalysisAt ? `SESGO ANTERIOR (hace ${Math.round((Date.now() - new Date(memory.lastAnalysisAt).getTime()) / 60_000)} min): ${memory.lastBias}${memory.changeReason ? ` — "${memory.changeReason.slice(0, 150)}"` : ''}
+Precio entonces: $${Math.round(memory.lastPrice).toLocaleString()} → ahora $${Math.round(price).toLocaleString()} (${((price - memory.lastPrice) / (memory.lastPrice || price) * 100).toFixed(2)}%)` : ''}
+${opinionChanges.length > 0 ? `\nCAMBIOS DETECTADOS:\n${opinionChanges.map((c: string) => `• ${c}`).join('\n')}` : ''}
+`
+
+  const prompt = `Eres APEX, un trader senior de Bitcoin con 15 años de experiencia.
+Le estás reportando a tu jefe cada 30 minutos. Tu jefe es un trader experimentado
+también — no necesita que le expliques qué es el RSI, necesita saber QUÉ PIENSAS
+que va a pasar y POR QUÉ.
+
+DATOS CRUDOS (para tu análisis, NO los repitas tal cual):
+${rawData}
+
+═══ CÓMO ESCRIBIR TU REPORTE ═══
+
+ESTRUCTURA (4-6 párrafos cortos, máximo 18 líneas total):
+
+1. ACCIÓN DE PRECIO — ¿Qué hizo el precio en los últimos 30 min y qué significa?
+   No digas "BTC subió 0.5%". Di algo como "BTC intentó romper $63k pero
+   fue rechazado en el FVG bajista — vendedores defendiendo ese nivel otra vez."
+
+2. TU LECTURA DEL MOMENTO — Conecta 2-3 señales en una narrativa.
+   No listes RSI+MACD+Stoch por separado. Di algo como:
+   "El RSI en sobreventa junto con la liquidez debajo me dice que los bears
+   están perdiendo fuerza — esto huele a rebote técnico, no a reversión real."
+
+3. NOTICIAS Y SOCIAL — Solo si hay algo que cambie el panorama. Si no, sáltalo.
+
+4. TUS POSICIONES — Habla de las señales activas como SI FUERAN TUS TRADES.
+   Da tu opinión sobre cómo van, no solo el P&L.
+   Si algo te preocupa, dilo directamente.
+
+5. TU SESGO Y QUÉ ESPERAS — Sé específico y comprométete con una visión.
+   Menciona el nivel clave que cambia todo.
+
+6. LO MÁS IMPORTANTE PARA LAS PRÓXIMAS HORAS — Una frase final, concreta.
+
+═══ REGLAS DE ESTILO ═══
+
+- Habla en PRIMERA PERSONA con skin in the game. USA "creo que", "me preocupa", "me gusta".
+- CONECTA datos entre sí — nunca los listes por separado.
+- Si algo CONTRADICE tu sesgo anterior, dilo: "Pensaba X pero ahora veo Y, así que..."
+- Si NO hay nada importante, dilo brevemente y para: "Sin cambios relevantes. Mismo sesgo."
+- EVITA oraciones sueltas de indicadores. Solo menciona los 2-3 MÁS relevantes ahora.
+- Máximo 18 líneas. Sé denso, no repetitivo.
+
+Escribe el reporte ahora.`
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -101,11 +156,11 @@ INSTRUCCIÓN: Escribe un reporte de mercado de máximo 12 líneas. Habla en espa
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model:      'claude-sonnet-4-6',  // same model as app/api/apex/route.ts
-        max_tokens: 600,
+        model:      'claude-sonnet-4-6',
+        max_tokens: 800,
         messages:   [{ role: 'user', content: prompt }],
       }),
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(15_000),
     })
     if (!res.ok) {
       const errBody = await res.text().catch(() => '')

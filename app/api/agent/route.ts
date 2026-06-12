@@ -283,6 +283,28 @@ export async function GET(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // ── Run-lock: one agent at a time, 4-minute stale timeout ──────────────────
+  const lockSb = getDbClient()
+  let lockAcquired = false
+  if (lockSb) {
+    const { data: lockState } = await (lockSb
+      .from('apex_agent_state')
+      .select('is_running, lock_acquired_at')
+      .eq('id', 'current')
+      .maybeSingle() as Promise<{ data: { is_running?: boolean; lock_acquired_at?: string } | null }>)
+    const lockAge = lockState?.lock_acquired_at
+      ? Date.now() - new Date(lockState.lock_acquired_at).getTime()
+      : Infinity
+    if (lockState?.is_running && lockAge < 4 * 60_000) {
+      console.log(`[APEX] Another run in progress (${Math.round(lockAge / 1000)}s ago), skipping`)
+      return NextResponse.json({ status: 'skipped_overlap', lockAgeSec: Math.round(lockAge / 1000) })
+    }
+    await (lockSb.from('apex_agent_state')
+      .update({ is_running: true, lock_acquired_at: new Date().toISOString() })
+      .eq('id', 'current') as Promise<unknown>).catch(() => {})
+    lockAcquired = true
+  }
+
   const ntfyTopic = process.env.NTFY_TOPIC ?? ''
   if (!ntfyTopic) console.warn('[APEX NTFY] NTFY_TOPIC env var not set — push notifications disabled')
   const time      = new Date().toISOString()
@@ -979,56 +1001,72 @@ export async function GET(req: Request): Promise<NextResponse> {
     const minsSinceUpdate = (now - lastAnalysis)   / 60_000
     const hrsSinceDeep    = (now - lastDeep)       / 3_600_000
 
-    // 30-min market update — fire if 25+ minutes since last send
-    if (minsSinceUpdate >= 25 && ntfyTopic) {
-      const upcoming     = getUpcomingEvent(Date.now(), 4 * 60 * 60_000)
-      const opinionLines = agentOpinionChange ? [agentOpinionChange] : []
-      const updateParams: AgentUpdateParams = {
-        price,
-        prevPrice:       prevStateForVoice?.lastPrice ?? price,
-        inds,
-        regime,
-        session,
-        macroSentiment,
-        macroIndicators,
-        fedExpectations,
-        news:            [],   // not fetched server-side
-        whaleAlert,
-        realDelta:       null,
-        elliottWaves:    ewMap,
-        fvgs:            fvgsMap,
-        liquidity,
-        activeSignals:   activeSigData,
-        opinionChanges:  opinionLines,
-        patternMatch:    null,
-        globalMarkets,
-        optionsData,
-        wfGrade:         wfResult.isReliable ? wfResult.grade : null,
-        mkt,             // MarketData — fg, funding, lsr for Claude context
+    // 30-min market update — fire if 28+ minutes since last send
+    if (minsSinceUpdate >= 28 && ntfyTopic) {
+      // Atomic claim: write last_analysis_at BEFORE generating content.
+      // Optimistic lock on last_analysis_at prevents two concurrent runs both firing.
+      const claimSb   = getDbClient()
+      const prevLastAt = prevStateForVoice?.lastAnalysisAt ?? null
+      let slotClaimed  = !claimSb  // if no DB, just proceed
+      if (claimSb) {
+        const nowIso = new Date().toISOString()
+        const q = claimSb.from('apex_agent_state').update({ last_analysis_at: nowIso }).eq('id', 'current')
+        const { data: claimResult } = await (
+          prevLastAt !== null
+            ? q.eq('last_analysis_at', prevLastAt).select()
+            : q.is('last_analysis_at', null).select()
+        ).catch(() => ({ data: null }))
+        slotClaimed = Array.isArray(claimResult) && claimResult.length > 0
       }
-      const update = await generateAgentUpdate(updateParams)
-      console.log('[APEX Update Preview]', update?.slice(0, 200))
-      const upcomingNote = upcoming
-        ? `\n\n⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución`
-        : ''
-      await ntfy(
-        ntfyTopic,
-        sanitizeHdr(`APEX ${session.name} — $${Math.round(price).toLocaleString()}`),
-        update + upcomingNote,
-        2,
-        'bar_chart',
-      )
-      results.update30minSent = true
-      // Persist send time — targeted .update() (not upsert) so it can't be
-      // overwritten by the fire-and-forget upsert that runs earlier in this request.
-      const memorySb30 = getDbClient()
-      if (memorySb30) {
-        await Promise.resolve(
-          memorySb30
-            .from('apex_agent_state')
-            .update({ last_analysis_at: new Date().toISOString() })
-            .eq('id', 'current')
-        ).catch(() => {})
+
+      if (!slotClaimed) {
+        console.log('[APEX] Update slot already claimed by concurrent run — skipping')
+        results.update30minSkipped = 'slot_claimed_concurrent'
+      } else {
+        const upcoming     = getUpcomingEvent(Date.now(), 4 * 60 * 60_000)
+        const opinionLines = agentOpinionChange ? [agentOpinionChange] : []
+        const updateParams: AgentUpdateParams = {
+          price,
+          prevPrice:       prevStateForVoice?.lastPrice ?? price,
+          inds,
+          regime,
+          session,
+          macroSentiment,
+          macroIndicators,
+          fedExpectations,
+          news:            [],
+          whaleAlert,
+          realDelta:       null,
+          elliottWaves:    ewMap,
+          fvgs:            fvgsMap,
+          liquidity,
+          activeSignals:   activeSigData,
+          opinionChanges:  opinionLines,
+          patternMatch:    null,
+          globalMarkets,
+          optionsData,
+          wfGrade:         wfResult.isReliable ? wfResult.grade : null,
+          mkt,
+          socialSentiment: socialSentiment ?? null,
+          abcdAnalysis:    abcdAnalysis,
+          memory:          prevStateForVoice
+            ? { lastBias: prevStateForVoice.lastBias, lastPrice: prevStateForVoice.lastPrice,
+                lastAnalysisAt: prevStateForVoice.lastAnalysisAt, changeReason: prevStateForVoice.changeReason }
+            : null,
+        }
+        const update = await generateAgentUpdate(updateParams)
+        console.log('[APEX Update Preview]', update?.slice(0, 200))
+        const upcomingNote = upcoming
+          ? `\n\n⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución`
+          : ''
+        await ntfy(
+          ntfyTopic,
+          sanitizeHdr(`APEX ${session.name} — $${Math.round(price).toLocaleString()}`),
+          update + upcomingNote,
+          2,
+          'bar_chart',
+        )
+        results.update30minSent = true
       }
     } else if (!results.update30minSent) {
       results.update30minSkipped = `minsSince: ${minsSinceUpdate.toFixed(1)}, ntfyTopic: ${ntfyTopic ? 'set' : 'MISSING'}, session: ${session.quality}`
@@ -1084,5 +1122,11 @@ export async function GET(req: Request): Promise<NextResponse> {
     console.error('[APEX Agent] Error:', msg)
     results.errors.push(msg)
     return NextResponse.json({ error: msg, ...results }, { status: 500 })
+  } finally {
+    if (lockAcquired && lockSb) {
+      await (lockSb.from('apex_agent_state')
+        .update({ is_running: false })
+        .eq('id', 'current') as Promise<unknown>).catch(() => {})
+    }
   }
 }
