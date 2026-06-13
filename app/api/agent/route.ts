@@ -1032,10 +1032,9 @@ export async function GET(req: Request): Promise<NextResponse> {
     const harmonicCandidates: HarmonicSignalCandidate[] = generateHarmonicSignals(abcdAnalysis, price, przCount)
 
     for (const cand of harmonicCandidates) {
-      const existingH = allSignals.find(s =>
-        s.id === cand.id &&
-        (s.status === 'active' || s.status === 'tp1_hit' || s.status === 'tp2_hit'),
-      )
+      // Skip if ANY record with this ID already exists — the pattern's lifecycle is bound
+      // to one trade. Re-tests of the same PRZ form at a new D_target and get a new ID.
+      const existingH = allSignals.find(s => s.id === cand.id)
       if (existingH) continue
 
       const rec: SignalRecord = {
