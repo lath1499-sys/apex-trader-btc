@@ -13,7 +13,7 @@ const TABS: [TabName, string][] = [
   ['heatmap',    '🔥 Heatmap'],
   ['onchain',    '⛓ OnChain'],
   ['news',       '📰 News'],
-  ['tradeideas', '🚨 Ideas'],
+  ['tradeideas', '🚨 Agente APEX BTC'],
   ['backtest',   '🔬 Backtest'],
   ['calc',       '🧮 Calc'],
   ['alerts',     '🔔 Alertas'],

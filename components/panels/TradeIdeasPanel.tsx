@@ -18,6 +18,7 @@ import { analyzeMacroSentiment } from '@/lib/macroSentiment'
 import type { MacroSentiment }   from '@/lib/macroSentiment'
 import { calcPositionSize, loadCapitalConfig, DEFAULT_CONFIG } from '@/lib/capitalManagement'
 import type { CapitalConfig, PositionSize } from '@/lib/capitalManagement'
+import PerformanceCalendar from './PerformanceCalendar'
 
 const STATUS_COLOR: Record<string, string> = {
   active: '#a78bfa', pending_confirmation: '#fbbf24',
@@ -1281,7 +1282,7 @@ function HistorialTabView({ sigH, hFilter, setHFilter, onClose }: {
   )
 }
 
-const TABS = ['Actual', 'Historial', 'Performance', 'Análisis', 'Alertas'] as const
+const TABS = ['Actual', 'Historial', 'Performance', 'Calendario', 'Análisis', 'Alertas'] as const
 type SubTab = typeof TABS[number]
 
 function TabBtn({ t, currentTab, onSetTab }: { t: SubTab; currentTab: SubTab; onSetTab: (t: SubTab) => void }) {
@@ -1305,6 +1306,12 @@ export default function TradeIdeasPanel() {
   const tradeIdea      = useApexStore(s => s.tradeIdea)
   const sigH           = useApexStore(s => s.signalHistory)
   const setSignalHistory = useApexStore(s => s.setSignalHistory)
+  const calendarSigs   = useMemo(() => sigH.map(s => ({
+    id: s.id, side: s.idea.side, tradeType: s.idea.tradeType,
+    status: s.status as string, pnl: s.pnl,
+    entry: s.idea.price, closePrice: s.exitPrice,
+    closeReason: s.closeReason, createdAt: s.createdAt, closedAt: s.closedAt,
+  })), [sigH])
   const mkt            = useApexStore(s => s.mkt)
   const inds           = useApexStore(s => s.inds)
   const fvgs           = useApexStore(s => s.fvgs)
@@ -1558,6 +1565,7 @@ export default function TradeIdeasPanel() {
       {tab === 'Historial' && <HistorialTabView sigH={sigH} hFilter={hFilter} setHFilter={setHFilter} onClose={handleClose} />}
 
       {tab === 'Performance' && <PerformanceTab />}
+      {tab === 'Calendario' && <PerformanceCalendar signalHistory={calendarSigs} T={T} />}
       {tab === 'Alertas' && <AlertasTab />}
 
       {tab === 'Análisis' && (
