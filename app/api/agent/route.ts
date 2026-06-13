@@ -299,9 +299,11 @@ export async function GET(req: Request): Promise<NextResponse> {
       console.log(`[APEX] Another run in progress (${Math.round(lockAge / 1000)}s ago), skipping`)
       return NextResponse.json({ status: 'skipped_overlap', lockAgeSec: Math.round(lockAge / 1000) })
     }
-    await (lockSb.from('apex_agent_state')
-      .update({ is_running: true, lock_acquired_at: new Date().toISOString() })
-      .eq('id', 'current') as Promise<unknown>).catch(() => {})
+    try {
+      await lockSb.from('apex_agent_state')
+        .update({ is_running: true, lock_acquired_at: new Date().toISOString() })
+        .eq('id', 'current')
+    } catch {}
     lockAcquired = true
   }
 
@@ -1226,9 +1228,11 @@ export async function GET(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: msg, ...results }, { status: 500 })
   } finally {
     if (lockAcquired && lockSb) {
-      await (lockSb.from('apex_agent_state')
-        .update({ is_running: false })
-        .eq('id', 'current') as Promise<unknown>).catch(() => {})
+      try {
+        await lockSb.from('apex_agent_state')
+          .update({ is_running: false })
+          .eq('id', 'current')
+      } catch {}
     }
   }
 }
