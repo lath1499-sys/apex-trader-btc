@@ -1088,7 +1088,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       if (claimSb) {
         const nowIso = new Date().toISOString()
         const q = claimSb.from('apex_agent_state').update({ last_analysis_at: nowIso }).eq('id', 'current')
-        const { data: claimResult } = await (
+        const { data: claimResult } = await Promise.resolve(
           prevLastAt !== null
             ? q.eq('last_analysis_at', prevLastAt).select()
             : q.is('last_analysis_at', null).select()
