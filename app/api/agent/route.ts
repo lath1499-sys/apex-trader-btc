@@ -707,7 +707,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       ? { ...learnedWeights, minScoreAdjustment: Math.min(0, (learnedWeights?.minScoreAdjustment ?? 0) - 1) }
       : learnedWeights
 
-    if (activeCount < 3) {
+    if (activeCount < 5) {
       // ── PRIMARY: Ask Claude AI for trading decision ─────────────────────────
       const aiDecision: TradeDecision | null = await askClaudeForDecision({
         price,
@@ -1058,7 +1058,7 @@ export async function GET(req: Request): Promise<NextResponse> {
           updated_at: new Date().toISOString(), ntfy_sent: true,
           pnl: null, pnl_r: null, closed_at: null, exit_price: null, close_reason: null,
           tp1_hit: false, tp2_hit: false, sl_warning_fired: false,
-          expiry_warning_fired: false, max_lev: rec.idea.maxLev,
+          expiry_warning_fired: false,
         }, { onConflict: 'id' })
       ).catch((e: Error) => ({ error: e }))
 
