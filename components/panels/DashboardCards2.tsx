@@ -182,21 +182,22 @@ export function PersonalStatsCard() {
   const history = useApexStore(s => s.signalHistory) as SignalRecord[]
   const card    = { background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: 14 }
 
-  const closed  = history.filter(r => r.pnlR != null)
-  const wins    = closed.filter(r => r.status !== 'sl_hit')
-  const losses  = closed.filter(r => r.status === 'sl_hit')
-  const wr      = closed.length > 0 ? (wins.length / closed.length) * 100 : 0
-  const pnls    = closed.map(r => r.pnlR ?? 0)
-  const totPnl  = pnls.reduce((a, v) => a + v, 0)
-  const bestPnl = pnls.length ? Math.max(...pnls) : null
-  const worstPnl= pnls.length ? Math.min(...pnls) : null
+  const closed   = history.filter(r => r.pnlR != null)
+  // Win = pnlR > 0 regardless of how it closed (handles manual closes, breakeven, wrong-SL bugs)
+  const wins     = closed.filter(r => (r.pnlR ?? 0) > 0)
+  const wr       = closed.length > 0 ? (wins.length / closed.length) * 100 : 0
+  const pnls     = closed.map(r => r.pnlR ?? 0)
+  const totPnl   = pnls.reduce((a, v) => a + v, 0)
+  const bestPnl  = pnls.length ? Math.max(...pnls) : null
+  const worstPnl = pnls.length ? Math.min(...pnls) : null
 
-  // Current streak
+  // Streak: any terminal status counts (including closed_manual)
+  const TERMINAL = new Set(['sl_hit', 'tp1_hit', 'tp2_hit', 'tp3_hit', 'closed_manual', 'breakeven'])
   let streak = 0, streakType = ''
   for (let i = history.length - 1; i >= 0; i--) {
     const r = history[i]
-    if (r.status !== 'sl_hit' && r.status !== 'tp1_hit' && r.status !== 'tp2_hit' && r.status !== 'tp3_hit') break
-    const isWin = r.status !== 'sl_hit'
+    if (!TERMINAL.has(r.status)) break
+    const isWin = (r.pnlR ?? 0) > 0
     if (i === history.length - 1) streakType = isWin ? 'win' : 'loss'
     if ((isWin && streakType === 'win') || (!isWin && streakType === 'loss')) streak++
     else break
@@ -204,12 +205,12 @@ export function PersonalStatsCard() {
 
   const rows = [
     ['Total señales', String(history.length)],
-    ['Cerradas', String(closed.length)],
-    ['Win Rate', closed.length > 0 ? `${wr.toFixed(1)}%` : '—'],
+    ['Cerradas',      String(closed.length)],
+    ['Win Rate',      closed.length > 0 ? `${wr.toFixed(1)}%` : '—'],
     ['P&L total (R)', closed.length > 0 ? `${totPnl > 0 ? '+' : ''}${totPnl.toFixed(2)}R` : '—'],
-    ['Mejor trade', bestPnl != null ? `+${bestPnl.toFixed(2)}R` : '—'],
-    ['Peor trade', worstPnl != null ? `${worstPnl.toFixed(2)}R` : '—'],
-    ['Racha actual', streak > 0 ? `${streak} ${streakType}s seguidos` : '—'],
+    ['Mejor trade',   bestPnl  != null ? `${bestPnl  > 0 ? '+' : ''}${bestPnl.toFixed(2)}R`  : '—'],
+    ['Peor trade',    worstPnl != null ? `${worstPnl > 0 ? '+' : ''}${worstPnl.toFixed(2)}R` : '—'],
+    ['Racha actual',  streak > 0 ? `${streak} ${streakType === 'win' ? 'wins' : 'losses'}` : '—'],
   ]
 
   return (
