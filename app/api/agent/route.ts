@@ -4,7 +4,7 @@
 
 import { NextResponse }            from 'next/server'
 import { runInds }                 from '@/lib/indicators'
-import { scoreTradeIdea }          from '@/lib/tradeScoring'
+import { scoreTradeIdea, validateAndFixSL } from '@/lib/tradeScoring'
 import { detectFVGs }              from '@/lib/fvg'
 import { detectLiquidity }         from '@/lib/liquidity'
 import { detectMarketRegime }      from '@/lib/marketRegime'
@@ -846,7 +846,8 @@ export async function GET(req: Request): Promise<NextResponse> {
         const recType       = (useAI ? aiDecision!.tradeType : fallbackSignal!.tradeType)  as 'Scalp' | 'DayTrade' | 'Swing'
         const recConf       = (useAI ? aiDecision!.confidence: fallbackSignal!.confidence) as 'ALTA' | 'MEDIA' | 'BAJA'
         const recEntry      = useAI ? aiDecision!.entry  : fallbackSignal!.price
-        const recSL         = useAI ? aiDecision!.sl     : fallbackSignal!.sl
+        const rawSL         = useAI ? aiDecision!.sl     : fallbackSignal!.sl
+        const recSL         = validateAndFixSL(recSide, recEntry, rawSL, useAI ? 'Claude-AI' : 'Fallback')
         const recTP1        = useAI ? aiDecision!.tp1    : fallbackSignal!.tp1
         const recTP2        = useAI ? aiDecision!.tp2    : fallbackSignal!.tp2
         const recTP3        = useAI ? aiDecision!.tp3    : fallbackSignal!.tp3

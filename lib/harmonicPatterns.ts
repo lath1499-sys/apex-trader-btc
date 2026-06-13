@@ -226,7 +226,10 @@ export function detectABCDPatterns(
     const target1      = isBearish ? D_target + CD_range * 0.382 : D_target - CD_range * 0.382
     const target2      = isBearish ? D_target + CD_range * 0.618 : D_target - CD_range * 0.618
     const target3      = C.price
-    const invalidation = isBearish ? A.price + AB * 0.05 : A.price - AB * 0.05
+    // SL is placed 1.5% on the far side of D_target:
+    // BEARISH pattern → LONG trade: SL below D (isBearish true)
+    // BULLISH pattern → SHORT trade: SL above D (isBearish false)
+    const invalidation = isBearish ? D_target * (1 - 0.015) : D_target * (1 + 0.015)
 
     patterns.push({
       A, B, C,
@@ -450,13 +453,20 @@ export function generateHarmonicSignals(
         multiTFCount > 1 ? `⚡ ${multiTFCount} timeframes confirman la señal simultáneamente.` : '',
       ].filter(Boolean).join('\n')
 
+      // Belt-and-suspenders: ensure SL is on the correct side of entry
+      const isLongSide = side === 'LONG'
+      const rawSL = p.invalidation
+      const safeSL = (isLongSide ? rawSL < currentPrice : rawSL > currentPrice)
+        ? rawSL
+        : (isLongSide ? currentPrice * (1 - 0.015) : currentPrice * (1 + 0.015))
+
       candidates.push({
         id: uid,
         pattern: p,
         side,
         tradeType,
         entry: currentPrice,
-        sl:    p.invalidation,
+        sl:    safeSL,
         tp1:   p.target1,
         tp2:   p.target2,
         tp3:   p.target3,

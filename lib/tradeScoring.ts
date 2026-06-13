@@ -523,3 +523,20 @@ export function scoreTradeIdea(
                     (regime?.regime === 'STRONG_TREND_UP'   && side === 'SHORT'),
   }
 }
+
+// Universal SL-side guard — call before saving any signal from any source.
+// If SL is on the wrong side of entry, mirrors the distance to the correct side
+// and logs an error so the root-cause can be identified.
+export function validateAndFixSL(
+  side: 'LONG' | 'SHORT',
+  entry: number,
+  sl: number,
+  source: string,
+): number {
+  const isLong = side === 'LONG'
+  if (isLong ? sl < entry : sl > entry) return sl
+  const distance = Math.abs(entry - sl)
+  const corrected = isLong ? entry - distance : entry + distance
+  console.error(`[APEX] SL VALIDATION FAILED (${source}): ${side} entry=${entry} sl=${sl} on wrong side — corrected to ${corrected}`)
+  return corrected
+}
