@@ -770,49 +770,55 @@ export async function GET(req: Request): Promise<NextResponse> {
       }
 
       // ── Portfolio coherence: process positionsToClose from Claude ───────────
+      // Wrapped in try/catch — a failure here must NEVER kill core monitoring
       const closedIds = new Set<string>()
-      if (aiDecision?.positionsToClose?.length) {
-        results.portfolioCloses = results.portfolioCloses ?? []
-        for (const req of aiDecision.positionsToClose) {
-          const sig = active.find(s => s.id === req.signalId)
-          if (!sig) continue
-          if (!['active', 'tp1_hit', 'tp2_hit'].includes(sig.status)) continue
-          const isLong = sig.idea.side === 'LONG'
-          const pnlPct = isLong
-            ? (price - sig.idea.price) / sig.idea.price * 100
-            : (sig.idea.price - price) / sig.idea.price * 100
-          const pnlStr = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`
-          const closeSb = getDbClient()
-          if (closeSb) {
-            await Promise.resolve(closeSb.from('apex_signals').update({
-              status:      'closed_manual',
-              pnl:         parseFloat(pnlPct.toFixed(2)),
-              exit_price:  price,
-              close_reason: `Coherencia portafolio: ${req.reason}`,
-              closed_at:   new Date().toISOString(),
-              updated_at:  new Date().toISOString(),
-            }).eq('id', req.signalId)).catch(() => {})
+      try {
+        if (aiDecision?.positionsToClose?.length) {
+          results.portfolioCloses = results.portfolioCloses ?? []
+          for (const req of aiDecision.positionsToClose) {
+            const sig = active.find(s => s.id === req.signalId)
+            if (!sig) continue
+            if (!['active', 'tp1_hit', 'tp2_hit'].includes(sig.status)) continue
+            const isLong = sig.idea.side === 'LONG'
+            const pnlPct = isLong
+              ? (price - sig.idea.price) / sig.idea.price * 100
+              : (sig.idea.price - price) / sig.idea.price * 100
+            const pnlStr = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`
+            const closeSb = getDbClient()
+            if (closeSb) {
+              await Promise.resolve(closeSb.from('apex_signals').update({
+                status:      'closed_manual',
+                pnl:         parseFloat(pnlPct.toFixed(2)),
+                exit_price:  price,
+                close_reason: `Coherencia portafolio: ${req.reason}`,
+                closed_at:   new Date().toISOString(),
+                updated_at:  new Date().toISOString(),
+              }).eq('id', req.signalId)).catch(() => {})
+            }
+            if (ntfyTopic) {
+              await ntfy(
+                ntfyTopic,
+                sanitizeHdr(`APEX CIERRE COHERENCIA — ${sig.idea.side} ${pnlStr}`),
+                [
+                  `🔄 Cambié de sesgo — cerrando posición que ya no encaja.`,
+                  ``,
+                  `${sig.idea.side} ${sig.idea.tradeType} desde $${Math.round(sig.idea.price).toLocaleString()}`,
+                  `Cierre: $${Math.round(price).toLocaleString()} | P&L: ${pnlStr}`,
+                  ``,
+                  `Razón: ${req.reason}`,
+                ].join('\n'),
+                4,
+                'arrows_counterclockwise',
+              )
+            }
+            closedIds.add(req.signalId)
+            results.portfolioCloses!.push({ id: req.signalId, side: sig.idea.side, pnl: pnlStr, reason: req.reason })
+            console.log(`[APEX Portfolio] Closed ${sig.idea.side} ${sig.id} — ${req.reason}`)
           }
-          if (ntfyTopic) {
-            await ntfy(
-              ntfyTopic,
-              sanitizeHdr(`APEX CIERRE COHERENCIA — ${sig.idea.side} ${pnlStr}`),
-              [
-                `🔄 Cambié de sesgo — cerrando posición que ya no encaja.`,
-                ``,
-                `${sig.idea.side} ${sig.idea.tradeType} desde $${Math.round(sig.idea.price).toLocaleString()}`,
-                `Cierre: $${Math.round(price).toLocaleString()} | P&L: ${pnlStr}`,
-                ``,
-                `Razón: ${req.reason}`,
-              ].join('\n'),
-              4,
-              'arrows_counterclockwise',
-            )
-          }
-          closedIds.add(req.signalId)
-          results.portfolioCloses.push({ id: req.signalId, side: sig.idea.side, pnl: pnlStr, reason: req.reason })
-          console.log(`[APEX Portfolio] Closed ${sig.idea.side} ${sig.id} — ${req.reason}`)
         }
+      } catch (portfolioErr) {
+        console.error('[APEX] Portfolio coherence block failed (non-fatal):', portfolioErr)
+        results.errors.push(`[Portfolio] ${portfolioErr instanceof Error ? portfolioErr.message : String(portfolioErr)}`)
       }
       // Refresh active list excluding just-closed signals
       const stillActive = active.filter(s => !closedIds.has(s.id))
@@ -1188,8 +1194,35 @@ export async function GET(req: Request): Promise<NextResponse> {
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error('[APEX Agent] Error:', msg)
+    console.error('[APEX Agent] Fatal error:', msg)
     results.errors.push(msg)
+    // NTFY on crash — max once per 30min to avoid spam if crash-looping
+    if (ntfyTopic) {
+      try {
+        const errSb = getDbClient()
+        const lastErrData = errSb
+          ? await Promise.resolve(errSb.from('apex_agent_state')
+              .select('last_error_alert_at').eq('id', 'current').maybeSingle()
+            ).catch(() => ({ data: null }))
+          : { data: null }
+        const lastErrAt = (lastErrData as { data: { last_error_alert_at?: string } | null }).data?.last_error_alert_at
+        const minsSince = lastErrAt ? (Date.now() - new Date(lastErrAt).getTime()) / 60_000 : Infinity
+        if (minsSince >= 30) {
+          await ntfy(
+            ntfyTopic,
+            sanitizeHdr('APEX AGENTE ERROR CRITICO'),
+            `El agente falló y no completó este ciclo.\n\nError: ${msg.slice(0, 300)}\n\nRevisa los logs de Vercel.`,
+            5,
+            'warning,rotating_light',
+          )
+          if (errSb) {
+            await Promise.resolve(errSb.from('apex_agent_state')
+              .update({ last_error_alert_at: new Date().toISOString() })
+              .eq('id', 'current')).catch(() => {})
+          }
+        }
+      } catch { /* best-effort — don't let error NTFY crash the catch block */ }
+    }
     return NextResponse.json({ error: msg, ...results }, { status: 500 })
   } finally {
     if (lockAcquired && lockSb) {
