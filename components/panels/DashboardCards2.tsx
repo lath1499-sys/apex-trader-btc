@@ -257,3 +257,85 @@ export function MacroCorrelCard() {
     </div>
   )
 }
+
+// ─── Equity Curve ─────────────────────────────────────────────────────────────
+export function EquityCurveCard() {
+  const T       = useTheme()
+  const history = useApexStore(s => s.signalHistory) as SignalRecord[]
+  const card    = { background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: 14, gridColumn: 'span 2' as const }
+
+  const closed = [...history]
+    .filter(r => r.pnlR != null)
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+
+  let cum = 0
+  const pts: number[] = [0, ...closed.map(r => { cum += r.pnlR ?? 0; return cum })]
+
+  const totalR = pts[pts.length - 1] ?? 0
+  const wins   = closed.filter(r => (r.pnlR ?? 0) > 0).length
+  const wr     = closed.length ? Math.round(wins / closed.length * 100) : 0
+
+  let peak = 0, maxDD = 0
+  for (const p of pts) {
+    if (p > peak) peak = p
+    const dd = peak - p
+    if (dd > maxDD) maxDD = dd
+  }
+
+  const W = 360, H = 68
+  const minV = Math.min(...pts), maxV = Math.max(...pts)
+  const range = (maxV - minV) || 1
+  const n = pts.length
+  const toX = (i: number) => (i / Math.max(n - 1, 1)) * W
+  const toY = (v: number)  => H - ((v - minV) / range) * (H - 8) - 4
+
+  const lineStr = pts.map((v, i) => `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ')
+  const zeroY   = toY(0)
+  const areaD   = n >= 2
+    ? `M${toX(0).toFixed(1)},${toY(pts[0]).toFixed(1)} ` +
+      pts.slice(1).map((v, i) => `L${toX(i + 1).toFixed(1)},${toY(v).toFixed(1)}`).join(' ') +
+      ` L${toX(n - 1).toFixed(1)},${zeroY.toFixed(1)} L${toX(0).toFixed(1)},${zeroY.toFixed(1)}Z`
+    : ''
+
+  const C = totalR >= 0 ? T.bull : T.danger
+
+  if (closed.length === 0) return (
+    <div style={card}>
+      <div style={{ fontSize: 8, color: T.muted, letterSpacing: '.14em' }}>📈 CURVA DE EQUITY</div>
+      <div style={{ fontSize: 11, color: T.muted, textAlign: 'center', padding: '20px 0' }}>Sin trades cerrados aún</div>
+    </div>
+  )
+
+  return (
+    <div style={card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+        <div>
+          <div style={{ fontSize: 8, color: T.muted, letterSpacing: '.14em', marginBottom: 3 }}>📈 CURVA DE EQUITY</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: C }}>{totalR >= 0 ? '+' : ''}{totalR.toFixed(2)}R</div>
+        </div>
+        <div style={{ display: 'flex', gap: 18, fontSize: 9, textAlign: 'right' }}>
+          {([
+            ['Win Rate',  wr + '%',                              T.bull  ],
+            ['Max DD',    maxDD > 0 ? `-${maxDD.toFixed(2)}R` : '—', T.danger],
+            ['Cerradas',  String(closed.length),                 T.text  ],
+          ] as [string, string, string][]).map(([l, v, c]) => (
+            <div key={l}>
+              <div style={{ color: T.muted, marginBottom: 2 }}>{l}</div>
+              <div style={{ color: c, fontWeight: 700 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', overflow: 'visible' }}>
+        <line x1={0} y1={zeroY} x2={W} y2={zeroY} stroke={T.border} strokeWidth={0.5} strokeDasharray="3 3" />
+        {areaD && <path d={areaD} fill={C} fillOpacity={0.1} />}
+        {n >= 2 && <polyline points={lineStr} fill="none" stroke={C} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />}
+        {pts.slice(1).map((v, i) => (
+          <circle key={i} cx={toX(i + 1).toFixed(1)} cy={toY(v).toFixed(1)} r={2.5}
+            fill={v > pts[i] ? T.bull : T.danger} stroke={T.card} strokeWidth={1} />
+        ))}
+      </svg>
+    </div>
+  )
+}

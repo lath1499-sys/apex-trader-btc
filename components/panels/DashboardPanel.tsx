@@ -3,7 +3,7 @@ import { useApexStore } from '@/store/apexStore'
 import { useTheme } from '@/hooks/useTheme'
 import { fmt, fmtB } from '@/lib/buildContext'
 import { DominanceCard, CapitalFlowCard, SpreadCard, OIAnalysisCard, LiquidationsCard } from './DashboardCards1'
-import { SentimentCard, AlertHeatmapCard, EventsCard, PersonalStatsCard, MacroCorrelCard } from './DashboardCards2'
+import { SentimentCard, AlertHeatmapCard, EventsCard, PersonalStatsCard, MacroCorrelCard, EquityCurveCard } from './DashboardCards2'
 
 export default function DashboardPanel() {
   const T      = useTheme()
@@ -83,6 +83,7 @@ export default function DashboardPanel() {
       <EventsCard />
       <PersonalStatsCard />
       <MacroCorrelCard />
+      <EquityCurveCard />
 
       {/* ── Legacy alerts strip (if any, small) ──────────────────────────── */}
       {alerts.length > 0 && (
