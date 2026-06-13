@@ -152,10 +152,13 @@ ${liquidity?.nearestSSL ? `SSL (venta): $${Math.round(liquidity.nearestSSL).toLo
 ${ew1d && ew1d.currentWave !== 'unclear' ? `1D: Onda ${ew1d.currentWave} ${ew1d.direction ?? ''} | Target $${ew1d.nextTarget ? Math.round(ew1d.nextTarget).toLocaleString() : 'N/A'} | Inval $${ew1d.invalidation ? Math.round(ew1d.invalidation).toLocaleString() : 'N/A'}` : '1D: sin onda clara'}
 ${ew4h && ew4h.currentWave !== 'unclear' ? `4H: Onda ${ew4h.currentWave} ${ew4h.direction ?? ''} | Target $${ew4h.nextTarget ? Math.round(ew4h.nextTarget).toLocaleString() : 'N/A'} | Inval $${ew4h.invalidation ? Math.round(ew4h.invalidation).toLocaleString() : 'N/A'}` : '4H: sin onda clara'}
 
-═══ PATRONES ABCD HARMÓNICOS ═══
+═══ PATRONES ABCD HARMÓNICOS (multi-TF) ═══
 ${abcdAnalysis?.analysis ?? 'Sin patrones activos'}
-${abcdAnalysis?.inPRZ ? '⚡ PRECIO ACTUALMENTE EN PRZ — ZONA DE REVERSIÓN' : ''}
-${abcdAnalysis?.mostRelevant ? `Dirección ABCD: ${abcdAnalysis.mostRelevant.direction} | Calidad: ${abcdAnalysis.mostRelevant.quality} | D target: $${Math.round(abcdAnalysis.mostRelevant.D_target).toLocaleString()}` : ''}
+${abcdAnalysis?.inPRZ ? '⚡ PRECIO ACTUALMENTE EN PRZ — ZONA DE REVERSIÓN ACTIVA' : ''}
+${abcdAnalysis?.mostRelevant ? `Principal: ${abcdAnalysis.mostRelevant.direction} | ${abcdAnalysis.mostRelevant.timeframe.toUpperCase()} | Calidad: ${abcdAnalysis.mostRelevant.quality} | Fib: ${abcdAnalysis.mostRelevant.fibConfirmed ? `CONFIRMADO (${abcdAnalysis.mostRelevant.fibConfluence?.label})` : 'NO confirmado'} | D: $${Math.round(abcdAnalysis.mostRelevant.D_target).toLocaleString()}` : ''}
+${(abcdAnalysis?.fibConfirmedCount ?? 0) > 0 ? `Fib confirmado en ${abcdAnalysis!.fibConfirmedCount} TF(s)` : ''}
+REGLA ABCD→TRADE: 15M+Fib en PRZ → Scalp | 4H+Fib en PRZ → DayTrade | 1D+Fib en PRZ → Swing
+Si el patrón tiene Fib confirmado y estás en PRZ, ese setup ES una confluencia válida para entrar.
 
 ═══ FLUJO DE MERCADO ═══
 Funding: ${mkt?.funding != null ? (mkt.funding >= 0 ? '+' : '') + mkt.funding.toFixed(4) + '%' : 'N/A'}

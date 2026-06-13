@@ -30,8 +30,8 @@ import { checkCircuitBreaker }         from '@/lib/circuitBreaker'
 import { loadCapitalConfig, DEFAULT_CONFIG } from '@/lib/capitalManagement'
 import { fetchOptionsData }             from '@/lib/deribitFetch'
 import { runWalkForward }               from '@/lib/walkForwardBacktest'
-import { analyzeAllABCD, getABCDScoreImpact } from '@/lib/harmonicPatterns'
-import type { MultiTFABCD } from '@/lib/harmonicPatterns'
+import { analyzeAllABCD, getABCDScoreImpact, generateHarmonicSignals } from '@/lib/harmonicPatterns'
+import type { MultiTFABCD, HarmonicSignalCandidate } from '@/lib/harmonicPatterns'
 import { askClaudeForDecision } from '@/lib/aiDecisionMaker'
 import type { TradeDecision }   from '@/lib/aiDecisionMaker'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
@@ -1024,41 +1024,74 @@ export async function GET(req: Request): Promise<NextResponse> {
       }
     }
 
-    // ── 5b. ABCD PRZ alert — fires when price enters a Potential Reversal Zone ──
-    if (abcdAnalysis.inPRZ && ntfyTopic) {
+    // ── 5b. ABCD Harmonic Signals — PRZ + Fibonacci confirmed → real trades ─────
+    // Bypass activeCount < 3 gate: pattern-driven, not Claude-driven.
+    // Requirements: at_prz + fibConfirmed + GOOD/PERFECT quality.
+    const przCount          = abcdAnalysis.patterns.flatMap(x => x.patterns).filter(p => p.at_prz).length
+    const harmonicCandidates: HarmonicSignalCandidate[] = generateHarmonicSignals(abcdAnalysis, price, przCount)
+
+    for (const cand of harmonicCandidates) {
+      const existingH = allSignals.find(s =>
+        s.id === cand.id &&
+        (s.status === 'active' || s.status === 'tp1_hit' || s.status === 'tp2_hit'),
+      )
+      if (existingH) continue
+
+      const rec: SignalRecord = {
+        id: cand.id, createdAt: time, status: 'active', ntfySent: true,
+        exitPrice: null, exitTs: null, pnl: null, pnlR: null, closedAt: null, closeReason: null,
+        idea: {
+          side: cand.side, tradeType: cand.tradeType, confidence: cand.confidence,
+          price: cand.entry, sl: cand.sl, tp1: cand.tp1, tp2: cand.tp2, tp3: cand.tp3,
+          maxLev: cand.maxLev, bull: 0, bear: 0, maxSc: 10,
+          reasons: cand.reasons, analysis: cand.analysis, ts: new Date(time),
+        },
+      }
+
+      const hSb = getDbClient()
+      const { error: hErr } = await Promise.resolve(
+        hSb.from('apex_signals').upsert({
+          id: rec.id, side: rec.idea.side, trade_type: rec.idea.tradeType,
+          entry: rec.idea.price, sl: rec.idea.sl, tp1: rec.idea.tp1,
+          tp2: rec.idea.tp2, tp3: rec.idea.tp3, confidence: rec.idea.confidence,
+          status: rec.status, reasons: rec.idea.reasons, created_at: rec.createdAt,
+          updated_at: new Date().toISOString(), ntfy_sent: true,
+          pnl: null, pnl_r: null, closed_at: null, exit_price: null, close_reason: null,
+          tp1_hit: false, tp2_hit: false, sl_warning_fired: false,
+          expiry_warning_fired: false, max_lev: rec.idea.maxLev,
+        }, { onConflict: 'id' })
+      ).catch((e: Error) => ({ error: e }))
+
+      if (hErr) {
+        results.errors.push(`[HarmonicSave] ${(hErr as { message?: string }).message ?? hErr}`)
+      } else {
+        await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
+        results.signals.push({ type: cand.tradeType, side: cand.side, confidence: cand.confidence })
+      }
+    }
+
+    // PRZ alert for non-Fib patterns — lightweight notification only, no signal
+    if (abcdAnalysis.inPRZ && harmonicCandidates.length === 0 && ntfyTopic) {
       const p = abcdAnalysis.mostRelevant!
       const action = p.direction === 'BEARISH' ? 'LONG' : 'SHORT'
-      const emoji  = p.direction === 'BEARISH' ? '▲' : '▼'
-      // Spam guard: max one PRZ alert per 2 hours (tracked via agent state)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const lastPRZAlert    = (prevStateForVoice as any)?.lastPrzAlertAt
+      const lastPRZAt = (prevStateForVoice as any)?.lastPrzAlertAt
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ? new Date(String((prevStateForVoice as any).lastPrzAlertAt)).getTime() : 0
-      const hoursSincePRZAlert = (Date.now() - lastPRZAlert) / 3_600_000
-      if (hoursSincePRZAlert > 2) {
+      if ((Date.now() - lastPRZAt) / 3_600_000 > 2) {
         await ntfy(
           ntfyTopic,
-          sanitizeHdr(`APEX ABCD ${action} — Precio en PRZ (patrón ${p.direction.toLowerCase()})`),
+          sanitizeHdr(`APEX ABCD ${action} — PRZ sin Fib (${p.timeframe.toUpperCase()})`),
           [
-            `${emoji} PATRÓN ABCD ${p.direction} COMPLETADO`,
-            `El patrón se movió ${p.direction === 'BEARISH' ? 'hacia abajo' : 'hacia arriba'} hasta D.`,
-            `El trade es ${action} — reversión esperada ${p.direction === 'BEARISH' ? 'hacia arriba' : 'hacia abajo'}.`,
-            ``,
+            `⚠️ Precio en PRZ del patrón ABCD ${p.direction} (sin confluencia Fibonacci)`,
             `TF: ${p.timeframe.toUpperCase()} | Calidad: ${p.quality}`,
-            ``,
             `PRZ: $${Math.round(p.prz_low).toLocaleString()}–$${Math.round(p.prz_high).toLocaleString()}`,
             `Punto D: $${Math.round(p.D_target).toLocaleString()}`,
-            `BC retroceso: ${(p.BC_retrace * 100).toFixed(0)}% | CD: ${p.CD_extension}x`,
-            ``,
-            `TP1: $${Math.round(p.target1).toLocaleString()}`,
-            `TP2: $${Math.round(p.target2).toLocaleString()}`,
-            `TP3: $${Math.round(p.target3).toLocaleString()} (vuelta a C)`,
-            `Invalidación: $${Math.round(p.invalidation).toLocaleString()}`,
+            `Sin señal generada — esperar confirmación Fibonacci.`,
           ].join('\n'),
-          5,
-          'rotating_light',
+          3,
+          'chart_with_upwards_trend',
         )
-        // Mark PRZ alert time
         const przSb = getDbClient()
         if (przSb) {
           await Promise.resolve(

@@ -1,8 +1,11 @@
 // APEX — Harmonic ABCD Pattern Detection
-// Detects on 15M, 1H, 4H, 12H, 1D, 2D timeframes.
-// Results flow into signal scoring, NTFY alerts, Trade Ideas analysis.
+// Multi-TF: 15M, 1H, 4H, 12H, 1D, 2D
+// Fib confirmation: D point must align with a Fibonacci level (±1.5%)
+// Signal generation: PRZ + Fib + GOOD/PERFECT quality → tradeable signal
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+import type { TradeReason } from './types'
 
 export interface SwingPoint {
   price: number
@@ -34,8 +37,62 @@ export interface ABCDPattern {
   target2:      number
   target3:      number
 
+  fibConfluence: { level: number; label: string; price: number } | null
+  fibConfirmed:  boolean
+
   timeframe:    string
   detectedAt:   number
+}
+
+export interface HarmonicSignalCandidate {
+  id:         string
+  pattern:    ABCDPattern
+  side:       'LONG' | 'SHORT'
+  tradeType:  'Scalp' | 'DayTrade' | 'Swing'
+  entry:      number
+  sl:         number
+  tp1:        number
+  tp2:        number
+  tp3:        number
+  maxLev:     number
+  confidence: 'ALTA' | 'MEDIA' | 'BAJA'
+  reasons:    TradeReason[]
+  analysis:   string
+}
+
+// ── Fibonacci Helpers ────────────────────────────────────────────────────────
+
+const FIB_LEVELS = [0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.414, 1.618]
+
+function computeFibLevels(klines: any[]): Array<{ level: number; price: number; label: string }> {
+  const n      = Math.min(60, klines.length)
+  const slice  = klines.slice(-n)
+  const highs  = slice.map((k: any) => parseFloat(k.h ?? k[2]))
+  const lows   = slice.map((k: any) => parseFloat(k.l ?? k[3]))
+  const closes = slice.map((k: any) => parseFloat(k.c ?? k[4]))
+  const sh     = Math.max(...highs)
+  const sl     = Math.min(...lows)
+  const price  = closes[closes.length - 1]
+  const up     = price > (sh + sl) / 2
+  const rng    = sh - sl
+  return FIB_LEVELS.map(lv => ({
+    level: lv,
+    price: up ? sh - rng * lv : sl + rng * lv,
+    label: lv === 1.0 ? 'Ext 100%' : lv > 1.0 ? `Ext ${(lv * 100).toFixed(1)}%` : `${(lv * 100).toFixed(1)}%`,
+  }))
+}
+
+function checkFibConfluence(
+  D_target:  number,
+  fibLevels: Array<{ level: number; price: number; label: string }>,
+  tolerance  = 0.015,
+): { level: number; label: string; price: number } | null {
+  for (const fib of fibLevels) {
+    if (Math.abs(D_target - fib.price) / Math.max(D_target, fib.price) < tolerance) {
+      return fib
+    }
+  }
+  return null
 }
 
 // ── Swing Point Detection ────────────────────────────────────────────────────
@@ -64,7 +121,7 @@ function detectSwingPoints(klines: any[], lookback = 5): SwingPoint[] {
       points.push({ price: currHigh, index: i, time: parseInt(curr.t ?? curr[0]), type: 'HIGH' })
     }
     if (isSwingLow) {
-      points.push({ price: currLow,  index: i, time: parseInt(curr.t ?? curr[0]), type: 'LOW' })
+      points.push({ price: currLow, index: i, time: parseInt(curr.t ?? curr[0]), type: 'LOW' })
     }
   }
 
@@ -116,6 +173,7 @@ export function detectABCDPatterns(
 ): ABCDPattern[] {
   if (!klines || klines.length < 50) return []
 
+  const fibLevels = computeFibLevels(klines)
   const patterns: ABCDPattern[] = []
   const swings = detectSwingPoints(klines, lookback)
   if (swings.length < 4) return []
@@ -139,17 +197,20 @@ export function detectABCDPatterns(
     const BC = Math.abs(B.price - C.price)
     if (BC > AB * 1.0) continue
 
-    const bc_ratio    = BC / AB
+    const bc_ratio     = BC / AB
     const cd_extension = bc_ratio >= 0.84 ? 1.618 : 1.272
-    const D_target    = isBearish ? C.price - AB * cd_extension : C.price + AB * cd_extension
+    const D_target     = isBearish ? C.price - AB * cd_extension : C.price + AB * cd_extension
 
-    const D_swing = swings[i + 3]
+    const D_swing  = swings[i + 3]
     let validation = { valid: true, type: 'CLASSIC' as ABCDPattern['type'], quality: 'GOOD' as ABCDPattern['quality'], bc_ratio, cd_ratio: 0 }
 
     if (D_swing) {
       validation = validateABCD(A.price, B.price, C.price, D_swing.price)
       if (!validation.valid) continue
     }
+
+    const fibConfluence = checkFibConfluence(D_target, fibLevels)
+    const fibConfirmed  = fibConfluence !== null
 
     const prz_range  = D_target * 0.012
     const prz_low    = D_target - prz_range
@@ -161,10 +222,10 @@ export function detectABCDPatterns(
       ? Math.min(100, Math.round(Math.abs(C.price - currentPrice) / total_move * 100))
       : 0
 
-    const CD_range   = Math.abs(C.price - D_target)
-    const target1    = isBearish ? D_target + CD_range * 0.382 : D_target - CD_range * 0.382
-    const target2    = isBearish ? D_target + CD_range * 0.618 : D_target - CD_range * 0.618
-    const target3    = C.price
+    const CD_range     = Math.abs(C.price - D_target)
+    const target1      = isBearish ? D_target + CD_range * 0.382 : D_target - CD_range * 0.382
+    const target2      = isBearish ? D_target + CD_range * 0.618 : D_target - CD_range * 0.618
+    const target3      = C.price
     const invalidation = isBearish ? A.price + AB * 0.05 : A.price - AB * 0.05
 
     patterns.push({
@@ -184,6 +245,8 @@ export function detectABCDPatterns(
       target1:      parseFloat(target1.toFixed(2)),
       target2:      parseFloat(target2.toFixed(2)),
       target3:      parseFloat(target3.toFixed(2)),
+      fibConfluence,
+      fibConfirmed,
       timeframe,
       detectedAt:   Date.now(),
     })
@@ -193,7 +256,10 @@ export function detectABCDPatterns(
     .filter(p => p.quality !== 'ACCEPTABLE' || p.at_prz)
     .sort((a, b) => {
       const q = { PERFECT: 3, GOOD: 2, ACCEPTABLE: 1 }
-      return q[b.quality] - q[a.quality]
+      // Prioritize: PRZ > Fib confirmed > quality
+      const aScore = (a.at_prz ? 100 : 0) + (a.fibConfirmed ? 50 : 0) + q[a.quality] * 10
+      const bScore = (b.at_prz ? 100 : 0) + (b.fibConfirmed ? 50 : 0) + q[b.quality] * 10
+      return bScore - aScore
     })
     .slice(0, 3)
 }
@@ -201,13 +267,14 @@ export function detectABCDPatterns(
 // ── Multi-Timeframe ABCD Analysis ────────────────────────────────────────────
 
 export interface MultiTFABCD {
-  patterns:       { tf: string; patterns: ABCDPattern[] }[]
-  mostRelevant:   ABCDPattern | null
-  inPRZ:          boolean
-  przDetails:     string
-  tradingSignal:  'LONG_AT_D' | 'SHORT_AT_D' | 'WAIT' | 'NONE'
-  signalStrength: number
-  analysis:       string
+  patterns:          { tf: string; patterns: ABCDPattern[] }[]
+  mostRelevant:      ABCDPattern | null
+  inPRZ:             boolean
+  przDetails:        string
+  tradingSignal:     'LONG_AT_D' | 'SHORT_AT_D' | 'WAIT' | 'NONE'
+  signalStrength:    number
+  fibConfirmedCount: number
+  analysis:          string
 }
 
 export function analyzeAllABCD(
@@ -230,10 +297,15 @@ export function analyzeAllABCD(
   const qScore       = { PERFECT: 3, GOOD: 2, ACCEPTABLE: 1 }
 
   const mostRelevant = atPRZ.length > 0
-    ? [...atPRZ].sort((a, b) => qScore[b.quality] - qScore[a.quality])[0]
+    ? [...atPRZ].sort((a, b) => {
+        const aS = (a.fibConfirmed ? 50 : 0) + qScore[a.quality] * 10
+        const bS = (b.fibConfirmed ? 50 : 0) + qScore[b.quality] * 10
+        return bS - aS
+      })[0]
     : [...allFlat].sort((a, b) => b.completion - a.completion)[0] ?? null
 
-  const inPRZ = atPRZ.length > 0
+  const inPRZ            = atPRZ.length > 0
+  const fibConfirmedCount = allFlat.filter(p => p.fibConfirmed).length
 
   let signalStrength = 0
   if (mostRelevant) {
@@ -241,6 +313,8 @@ export function analyzeAllABCD(
     signalStrength += mostRelevant.at_prz ? 30 : mostRelevant.completion > 80 ? 15 : 5
     signalStrength += atPRZ.length > 1 ? 20 : 0
     signalStrength += ['4h', '1d'].includes(mostRelevant.timeframe) ? 10 : 5
+    signalStrength += mostRelevant.fibConfirmed ? 15 : 0
+    signalStrength += fibConfirmedCount > 1 ? 10 : 0
   }
 
   let tradingSignal: MultiTFABCD['tradingSignal'] = 'NONE'
@@ -254,9 +328,10 @@ export function analyzeAllABCD(
   if (mostRelevant) {
     const dir  = mostRelevant.direction === 'BEARISH' ? 'LONG' : 'SHORT'
     const dist = ((Math.abs(currentPrice - mostRelevant.D_target) / currentPrice) * 100).toFixed(1)
+    const fib  = mostRelevant.fibConfluence ? ` | Fib ${mostRelevant.fibConfluence.label}` : ' | Sin Fib'
     przDetails = inPRZ
-      ? `✅ Precio EN PRZ del ABCD ${dir} (${mostRelevant.timeframe.toUpperCase()}) — D=$${Math.round(mostRelevant.D_target).toLocaleString()}. Buscar entrada ${dir}.`
-      : `⏳ ABCD ${dir} (${mostRelevant.timeframe.toUpperCase()}) ${mostRelevant.completion}% completado — D en $${Math.round(mostRelevant.D_target).toLocaleString()} (${dist}% de distancia)`
+      ? `✅ Precio EN PRZ del ABCD ${dir} (${mostRelevant.timeframe.toUpperCase()})${fib} — D=$${Math.round(mostRelevant.D_target).toLocaleString()}.`
+      : `⏳ ABCD ${dir} (${mostRelevant.timeframe.toUpperCase()}) ${mostRelevant.completion}% completado — D en $${Math.round(mostRelevant.D_target).toLocaleString()} (${dist}%)${fib}`
   }
 
   let analysis = ''
@@ -268,21 +343,33 @@ export function analyzeAllABCD(
     const action = mostRelevant.direction === 'BEARISH' ? 'LONG' : 'SHORT'
     const bc     = (mostRelevant.BC_retrace * 100).toFixed(0)
     const cd     = mostRelevant.CD_extension.toFixed(3)
+    const fibStr = mostRelevant.fibConfluence
+      ? ` Confirmado con Fibonacci ${mostRelevant.fibConfluence.label} ($${Math.round(mostRelevant.fibConfluence.price).toLocaleString()}).`
+      : ' Sin confluencia Fibonacci.'
 
     if (inPRZ) {
-      analysis = `ABCD harmónico ${dir} (${tf}) completado en PRZ. BC retrocedió ${bc}% de AB, CD extiende ${cd}x. ` +
-        `Precio en zona de reversión — setup ${action} con R:R favorable. ` +
-        `T1: $${Math.round(mostRelevant.target1).toLocaleString()} | T2: $${Math.round(mostRelevant.target2).toLocaleString()} | ` +
+      analysis = `ABCD harmónico ${dir} (${tf}) completado en PRZ.${fibStr} BC retrocedió ${bc}% de AB, CD extiende ${cd}x. ` +
+        `Setup ${action} activo — T1: $${Math.round(mostRelevant.target1).toLocaleString()} | T2: $${Math.round(mostRelevant.target2).toLocaleString()} | ` +
         `Inv: $${Math.round(mostRelevant.invalidation).toLocaleString()}.`
     } else if (mostRelevant.completion > 85) {
-      analysis = `ABCD ${dir} (${tf}) ${mostRelevant.completion}% completado. ` +
-        `Aproximándose a D ($${Math.round(mostRelevant.D_target).toLocaleString()}). ` +
-        `Preparar ${action} en $${Math.round(mostRelevant.prz_low).toLocaleString()}–$${Math.round(mostRelevant.prz_high).toLocaleString()}.`
+      analysis = `ABCD ${dir} (${tf}) ${mostRelevant.completion}% completado.${fibStr} ` +
+        `Aproximándose a D ($${Math.round(mostRelevant.D_target).toLocaleString()}).`
     } else {
-      analysis = `ABCD ${dir} en formación (${tf}), ${mostRelevant.completion}% completado. ` +
-        `D proyectado en $${Math.round(mostRelevant.D_target).toLocaleString()}.`
+      analysis = `ABCD ${dir} en formación (${tf}), ${mostRelevant.completion}% completado.${fibStr} ` +
+        `D proyectado: $${Math.round(mostRelevant.D_target).toLocaleString()}.`
     }
-    if (atPRZ.length > 1) analysis += ` ⚡ CONFLUENCIA MULTI-TF: ${atPRZ.length} timeframes confirman.`
+
+    // Multi-TF details
+    const perTF = allPatterns.map(({ tf: t, patterns: ps }) => {
+      const best = ps[0]
+      const fib  = best.fibConfirmed ? `✓Fib(${best.fibConfluence!.label})` : '✗Fib'
+      const prz  = best.at_prz ? 'PRZ✓' : `${best.completion}%`
+      return `${t.toUpperCase()}: ${best.direction === 'BEARISH' ? '▲LONG' : '▼SHORT'} ${prz} ${best.quality} ${fib}`
+    }).join(' | ')
+    if (perTF) analysis += `\nTF activos: ${perTF}`
+
+    if (atPRZ.length > 1) analysis += ` ⚡ CONFLUENCIA MULTI-TF: ${atPRZ.length} timeframes en PRZ.`
+    if (fibConfirmedCount > 1) analysis += ` 📊 ${fibConfirmedCount} TFs con Fib confirmado.`
   }
 
   return {
@@ -292,8 +379,96 @@ export function analyzeAllABCD(
     przDetails,
     tradingSignal,
     signalStrength: Math.min(100, signalStrength),
+    fibConfirmedCount,
     analysis,
   }
+}
+
+// ── Signal Generation ────────────────────────────────────────────────────────
+
+function tfToTradeType(tf: string): 'Scalp' | 'DayTrade' | 'Swing' {
+  if (tf === '15m') return 'Scalp'
+  if (tf === '1h' || tf === '4h') return 'DayTrade'
+  return 'Swing'
+}
+
+function tfToMaxLev(tf: string): number {
+  if (tf === '15m') return 8
+  if (tf === '1h' || tf === '4h') return 5
+  return 3
+}
+
+// Returns signal candidates for patterns that satisfy:
+// 1) Price is in PRZ
+// 2) Fibonacci level confirmed at D
+// 3) Quality is GOOD or PERFECT
+// These bypass the normal activeCount < 3 gate.
+export function generateHarmonicSignals(
+  abcd:         MultiTFABCD,
+  currentPrice: number,
+  multiTFCount: number,   // how many TFs in PRZ (for confidence boost)
+): HarmonicSignalCandidate[] {
+  const candidates: HarmonicSignalCandidate[] = []
+  const seen = new Set<string>()
+
+  for (const { tf, patterns } of abcd.patterns) {
+    for (const p of patterns) {
+      if (!p.at_prz)        continue
+      if (!p.fibConfirmed)  continue
+      if (p.quality === 'ACCEPTABLE') continue
+
+      const side      = p.direction === 'BEARISH' ? 'LONG' : 'SHORT'
+      const tradeType = tfToTradeType(tf)
+      const maxLev    = tfToMaxLev(tf)
+
+      // Dedup per TF+direction+D level
+      const uid = `h_${tf}_${side}_${Math.round(p.D_target)}`
+      if (seen.has(uid)) continue
+      seen.add(uid)
+
+      const baseConf: 'ALTA' | 'MEDIA' | 'BAJA' = p.quality === 'PERFECT' ? 'ALTA' : 'MEDIA'
+      const confidence = (multiTFCount > 1 && baseConf === 'MEDIA') ? 'ALTA' : baseConf
+
+      const sDir: 'bull' | 'bear' = side === 'LONG' ? 'bull' : 'bear'
+      const dirStr = p.direction === 'BEARISH' ? 'bajista' : 'alcista'
+
+      const reasons: TradeReason[] = [
+        { s: sDir, txt: `📐 ABCD ${dirStr} ${tf.toUpperCase()} completado en PRZ` },
+        { s: sDir, txt: `📊 Fibonacci ${p.fibConfluence!.label} confirmado en $${Math.round(p.fibConfluence!.price).toLocaleString()}` },
+        { s: sDir, txt: `BC: ${(p.BC_retrace * 100).toFixed(0)}% | CD: ${p.CD_extension}x | Calidad: ${p.quality}` },
+        ...(multiTFCount > 1 ? [{ s: sDir, txt: `⚡ Confluencia multi-TF: ${multiTFCount} timeframes confirman` } as TradeReason] : []),
+      ]
+
+      const analysis = [
+        `📐 PATRÓN ABCD HARMÓNICO ${dirStr.toUpperCase()} — ${tf.toUpperCase()}`,
+        ``,
+        `El precio completó el movimiento CD y se encuentra en la Potential Reversal Zone (PRZ).`,
+        `El punto D coincide con Fibonacci ${p.fibConfluence!.label} — confluencia técnica confirmada.`,
+        ``,
+        `BC retroceso: ${(p.BC_retrace * 100).toFixed(0)}% de AB | CD extensión: ${p.CD_extension}x`,
+        `PRZ: $${Math.round(p.prz_low).toLocaleString()}–$${Math.round(p.prz_high).toLocaleString()}`,
+        multiTFCount > 1 ? `⚡ ${multiTFCount} timeframes confirman la señal simultáneamente.` : '',
+      ].filter(Boolean).join('\n')
+
+      candidates.push({
+        id: uid,
+        pattern: p,
+        side,
+        tradeType,
+        entry: currentPrice,
+        sl:    p.invalidation,
+        tp1:   p.target1,
+        tp2:   p.target2,
+        tp3:   p.target3,
+        maxLev,
+        confidence,
+        reasons,
+        analysis,
+      })
+    }
+  }
+
+  return candidates
 }
 
 // ── Score Impact ─────────────────────────────────────────────────────────────
@@ -310,31 +485,37 @@ export function getABCDScoreImpact(
 
   if (p.at_prz) {
     const boost = p.quality === 'PERFECT' ? 4 : p.quality === 'GOOD' ? 3 : 2
+    const fibBonus = p.fibConfirmed ? 1 : 0
     if (p.direction === 'BEARISH' && side === 'LONG') {
-      bull += boost
-      reasons.push(`📐 ABCD bajista PRZ (${p.timeframe.toUpperCase()}, ${p.quality}) — reversión LONG en $${Math.round(p.D_target).toLocaleString()}`)
+      bull += boost + fibBonus
+      const fibStr = p.fibConfluence ? ` + Fib ${p.fibConfluence.label}` : ''
+      reasons.push(`📐 ABCD bajista PRZ (${p.timeframe.toUpperCase()}, ${p.quality}${fibStr}) — reversión LONG en $${Math.round(p.D_target).toLocaleString()}`)
     }
     if (p.direction === 'BULLISH' && side === 'SHORT') {
-      bear += boost
-      reasons.push(`📐 ABCD alcista PRZ (${p.timeframe.toUpperCase()}, ${p.quality}) — reversión SHORT en $${Math.round(p.D_target).toLocaleString()}`)
+      bear += boost + fibBonus
+      const fibStr = p.fibConfluence ? ` + Fib ${p.fibConfluence.label}` : ''
+      reasons.push(`📐 ABCD alcista PRZ (${p.timeframe.toUpperCase()}, ${p.quality}${fibStr}) — reversión SHORT en $${Math.round(p.D_target).toLocaleString()}`)
     }
     if (p.direction === 'BEARISH' && side === 'SHORT') {
       bear -= 2
-      reasons.push(`⚠️ ABCD bajista en PRZ — SHORT contra reversión esperada, riesgo elevado`)
+      reasons.push(`⚠️ ABCD bajista en PRZ — SHORT contra reversión esperada`)
     }
     if (p.direction === 'BULLISH' && side === 'LONG') {
       bull -= 2
-      reasons.push(`⚠️ ABCD alcista en PRZ — LONG contra reversión esperada, riesgo elevado`)
+      reasons.push(`⚠️ ABCD alcista en PRZ — LONG contra reversión esperada`)
     }
-    // Multi-TF confluence bonus
     const multiPRZ = abcd.patterns.flatMap(x => x.patterns).filter(x => x.at_prz).length
     if (multiPRZ > 1) {
       if (p.direction === 'BEARISH' && side === 'LONG')  { bull += 2; reasons.push(`⚡ Confluencia ABCD multi-TF en PRZ`) }
       if (p.direction === 'BULLISH' && side === 'SHORT') { bear += 2; reasons.push(`⚡ Confluencia ABCD multi-TF en PRZ`) }
     }
+    if (abcd.fibConfirmedCount > 1) {
+      if (p.direction === 'BEARISH' && side === 'LONG')  { bull += 1; reasons.push(`📊 ${abcd.fibConfirmedCount} TFs con Fib confirmado`) }
+      if (p.direction === 'BULLISH' && side === 'SHORT') { bear += 1; reasons.push(`📊 ${abcd.fibConfirmedCount} TFs con Fib confirmado`) }
+    }
   } else if (p.completion > 85) {
-    if (p.direction === 'BEARISH' && side === 'LONG')  { bull += 1; reasons.push(`📐 ABCD bajista ${p.completion}% — reversión LONG próxima en $${Math.round(p.D_target).toLocaleString()}`) }
-    if (p.direction === 'BULLISH' && side === 'SHORT') { bear += 1; reasons.push(`📐 ABCD alcista ${p.completion}% — reversión SHORT próxima en $${Math.round(p.D_target).toLocaleString()}`) }
+    if (p.direction === 'BEARISH' && side === 'LONG')  { bull += 1; reasons.push(`📐 ABCD bajista ${p.completion}% — reversión LONG próxima`) }
+    if (p.direction === 'BULLISH' && side === 'SHORT') { bear += 1; reasons.push(`📐 ABCD alcista ${p.completion}% — reversión SHORT próxima`) }
   }
 
   return { bull, bear, reasons }
