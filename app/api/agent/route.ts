@@ -146,7 +146,7 @@ async function handleSignalEvent(
     } : {}),
     ...(event === 'tp1' ? {
       tp1Hit:          true,
-      idea:            { ...idea, sl: entry },
+      idea:            { ...idea, sl: parseFloat((isLong ? entry * (1 - 0.0015) : entry * (1 + 0.0015)).toFixed(2)) },
       tp1BankedPnl:    parseFloat(((sig.tp1ClosePct ?? 40) / 100 * rawPnl).toFixed(2)),
       remainingSizePct: 100 - (sig.tp1ClosePct ?? 40),
       totalBankedPnl:  parseFloat(((sig.tp1ClosePct ?? 40) / 100 * rawPnl).toFixed(2)),
@@ -560,6 +560,23 @@ export async function GET(req: Request): Promise<NextResponse> {
     results.signalsLoaded = allSignals.length
     results.signalsActive = active.length
     console.log(`[APEX] Signals loaded: ${allSignals.length} total, ${active.length} active`)
+
+    // ── NTFY recovery: signals saved with ntfySent=false get a second chance ──
+    if (ntfyTopic) {
+      for (const sig of active.filter(s => s.ntfySent === false)) {
+        await handleSignalEvent(sig, 'new', sig.idea.price, ntfyTopic)
+        const rcvSb = getDbClient()
+        if (rcvSb) {
+          await Promise.resolve(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (rcvSb.from('apex_signals') as any)
+              .update({ ntfy_sent: true, updated_at: new Date().toISOString() })
+              .eq('id', sig.id),
+          ).catch(() => {})
+        }
+        console.log(`[APEX] Recovered missed NTFY for ${sig.id}`)
+      }
+    }
     // Supabase reads in parallel — each is independent
     const [learnedWeights, capitalConfig, prevStateForVoice] = await Promise.all([
       calcLearnedWeights(getDbClient()),

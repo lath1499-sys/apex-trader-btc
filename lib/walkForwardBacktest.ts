@@ -38,8 +38,8 @@ export interface WalkForwardResult {
   consistency:  number   // % of test windows where WR > 50%
   overfitScore: number   // avg trainWR - testWR
   sampleSize:   number   // total resolved signals
-  isReliable:   boolean  // needs >= 15 resolved signals
-  grade:        'A' | 'B' | 'C' | 'D' | 'F'
+  isReliable:   boolean  // needs >= 30 resolved signals
+  grade:        'A' | 'B' | 'C' | 'D' | 'F' | 'N/A'
   recommendation: string
   // Breakdown by dimension
   byType:       Record<string, WFBreakdown>
@@ -104,14 +104,14 @@ export function runWalkForward(signals: SignalRecord[]): WalkForwardResult {
   const empty: WalkForwardResult = {
     windows: [], avgTrainWR: 0, avgTestWR: 0, avgTestPnl: 0,
     totalTestPF: 1, consistency: 0, overfitScore: 0, sampleSize: n,
-    isReliable: false, grade: 'F',
-    recommendation: n < 15
-      ? `Datos insuficientes (${n} señales). Necesitas ≥15 señales cerradas para análisis confiable.`
+    isReliable: false, grade: 'N/A',
+    recommendation: n < 30
+      ? `Datos insuficientes — mínimo 30 trades para validación (actuales: ${n})`
       : 'Sin datos',
     byType: {}, bySide: {}, byConfidence: {}, bySession: {},
   }
 
-  if (n < 15) return empty
+  if (n < 30) return empty
 
   // 2. Build walk-forward windows (expand train, fix test size)
   const TEST_SIZE  = Math.max(3, Math.floor(n * 0.15))  // 15% per test window
@@ -218,7 +218,7 @@ export function runWalkForward(signals: SignalRecord[]): WalkForwardResult {
     totalTestPF: parseFloat(totalTestPF.toFixed(2)),
     consistency: parseFloat(consistency.toFixed(2)),
     overfitScore: parseFloat(overfitScore.toFixed(3)),
-    sampleSize: n, isReliable: n >= 15,
+    sampleSize: n, isReliable: n >= 30,
     grade, recommendation: rec.join('\n'),
     byType, bySide, byConfidence, bySession,
   }

@@ -71,7 +71,8 @@ function calcADX(highs: number[], lows: number[], closes: number[], period = 14)
   })
 
   const adxValues = wilderSmooth(dx, period)
-  return adxValues[adxValues.length - 1] ?? 25
+  const raw = (adxValues[adxValues.length - 1] ?? 25 * period) / period
+  return Math.min(100, Math.max(0, raw))
 }
 
 // ── Main export ─────────────────────────────────────────────────────────────
