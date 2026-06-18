@@ -67,6 +67,22 @@ async function ntfy(topic: string, title: string, body: string, priority = 3, ta
   }
 }
 
+// ── Partial close configuration per trade type ────────────────────────────────
+
+function getPartialCloseConfig(
+  tradeType: 'Scalp' | 'DayTrade' | 'Swing',
+  tp1RR: number,
+  _tp2RR: number,
+): { tp1Pct: number; tp2Pct: number; tp3Pct: number } {
+  if (tradeType === 'Scalp')     return { tp1Pct: 50, tp2Pct: 30, tp3Pct: 20 }
+  if (tradeType === 'DayTrade') {
+    if (tp1RR >= 2)              return { tp1Pct: 30, tp2Pct: 40, tp3Pct: 30 }
+    return                              { tp1Pct: 40, tp2Pct: 35, tp3Pct: 25 }
+  }
+  // Swing: let the winner run — biggest chunk at TP3
+  return                                { tp1Pct: 25, tp2Pct: 35, tp3Pct: 40 }
+}
+
 // ── Central signal event handler — sends NTFY for EVERY event ────────────────
 
 type SignalEvent = 'new' | 'tp1' | 'tp2' | 'tp3' | 'sl' | 'breakeven' | 'breakeven_sl' | 'trailing' | 'manual_close'
@@ -96,6 +112,11 @@ async function handleSignalEvent(
   const TERMINAL: SignalEvent[] = ['tp3', 'sl', 'breakeven_sl', 'manual_close']
   const isClosed = TERMINAL.includes(event)
 
+  // Final P&L = already-banked partial profits + remaining size at exit price
+  const totalBanked = sig.totalBankedPnl ?? 0
+  const remainPct   = (sig.remainingSizePct ?? 100) / 100
+  const finalPnl    = isClosed ? parseFloat((totalBanked + remainPct * rawPnl).toFixed(2)) : 0
+
   const newStatus: SignalRecord['status'] = (
     event === 'tp3'          ? 'tp3_hit'      :
     event === 'tp2'          ? 'tp2_hit'      :
@@ -111,10 +132,10 @@ async function handleSignalEvent(
     ...sig,
     status:  newStatus,
     ...(isClosed ? {
-      pnl:        parseFloat(rawPnl.toFixed(2)),
-      closedAt:   new Date().toISOString(),
-      exitPrice:  eventPrice,
-      exitTs:     new Date().toISOString(),
+      pnl:         finalPnl,
+      closedAt:    new Date().toISOString(),
+      exitPrice:   eventPrice,
+      exitTs:      new Date().toISOString(),
       closeReason: extra?.reason ?? event,
     } : {}),
     ...(event === 'trailing' ? {
@@ -124,12 +145,18 @@ async function handleSignalEvent(
       idea: { ...idea, sl: entry },
     } : {}),
     ...(event === 'tp1' ? {
-      tp1Hit: true,
-      idea:   { ...idea, sl: entry },  // move SL to entry
+      tp1Hit:          true,
+      idea:            { ...idea, sl: entry },
+      tp1BankedPnl:    parseFloat(((sig.tp1ClosePct ?? 40) / 100 * rawPnl).toFixed(2)),
+      remainingSizePct: 100 - (sig.tp1ClosePct ?? 40),
+      totalBankedPnl:  parseFloat(((sig.tp1ClosePct ?? 40) / 100 * rawPnl).toFixed(2)),
     } : {}),
     ...(event === 'tp2' ? {
-      tp2Hit: true,
-      idea:   { ...idea, sl: idea.tp1 },  // move SL to TP1
+      tp2Hit:          true,
+      idea:            { ...idea, sl: idea.tp1 },
+      tp2BankedPnl:    parseFloat(((sig.tp2ClosePct ?? 35) / 100 * rawPnl).toFixed(2)),
+      remainingSizePct: 100 - (sig.tp1ClosePct ?? 40) - (sig.tp2ClosePct ?? 35),
+      totalBankedPnl:  parseFloat(((sig.tp1BankedPnl ?? 0) + (sig.tp2ClosePct ?? 35) / 100 * rawPnl).toFixed(2)),
     } : {}),
   }
 
@@ -158,9 +185,14 @@ async function handleSignalEvent(
       ``,
       `Entrada: ${P(entry)}`,
       `SL:  ${P(idea.sl)}`,
-      `TP1: ${P(idea.tp1)}`,
-      `TP2: ${P(idea.tp2)}`,
-      `TP3: ${P(idea.tp3)}`,
+      ``,
+      `PLAN DE SALIDA PARCIAL:`,
+      `TP1: ${P(idea.tp1)} → Cerrar ${sig.tp1ClosePct ?? 40}% | R:R ${sig.tp1RR ?? '?'}:1`,
+      `TP2: ${P(idea.tp2)} → Cerrar ${sig.tp2ClosePct ?? 35}% | R:R ${sig.tp2RR ?? '?'}:1`,
+      `TP3: ${P(idea.tp3)} → Cerrar ${sig.tp3ClosePct ?? 25}% restante`,
+      ``,
+      `Si TP1 tocado → SL a breakeven (trade gratuito)`,
+      `Si TP2 tocado → SL a TP1 (profit garantizado)`,
       ``,
       ...idea.reasons.slice(0, 3).map(r => r.txt),
       `Score: ${idea.bull + idea.bear}/12 | Leverage: ${idea.maxLev}x`,
@@ -171,10 +203,14 @@ async function handleSignalEvent(
       `${side} BTC desde ${P(entry)}`,
       ``,
       `TP1: ${P(idea.tp1)} ✓`,
-      `P&L parcial: ${pnlStr}`,
       ``,
-      `SL movido a breakeven (${P(entry)}).`,
-      `Esperando TP2: ${P(idea.tp2)}`,
+      `Cierre parcial: ${sig.tp1ClosePct ?? 40}% de la posicion`,
+      `Ganancia banqueada: +${(updated.tp1BankedPnl ?? 0).toFixed(2)}%`,
+      `Posicion restante: ${updated.remainingSizePct ?? 60}%`,
+      `SL movido a: BREAKEVEN (${P(entry)})`,
+      `Trade ya no puede terminar en perdida.`,
+      ``,
+      `Siguiente: TP2 ${P(idea.tp2)}`,
     ].join('\n'),
 
     tp2: [
@@ -182,9 +218,16 @@ async function handleSignalEvent(
       `${side} BTC desde ${P(entry)}`,
       ``,
       `TP2: ${P(idea.tp2)} ✓`,
-      `P&L parcial: ${pnlStr}`,
       ``,
-      `SL en TP1 (${P(idea.tp1)}). Esperando TP3: ${P(idea.tp3)}`,
+      `Cierre parcial: ${sig.tp2ClosePct ?? 35}% de la posicion`,
+      `Banqueado TP1: +${(sig.tp1BankedPnl ?? 0).toFixed(2)}%`,
+      `Banqueado TP2: +${(updated.tp2BankedPnl ?? 0).toFixed(2)}%`,
+      `Total asegurado: +${(updated.totalBankedPnl ?? 0).toFixed(2)}%`,
+      ``,
+      `Posicion restante: ${updated.remainingSizePct ?? 25}%`,
+      `SL en TP1 (${P(idea.tp1)}) — profit garantizado`,
+      ``,
+      `Siguiente: TP3 ${P(idea.tp3)}`,
     ].join('\n'),
 
     tp3: [
@@ -218,13 +261,21 @@ async function handleSignalEvent(
 
     breakeven_sl: [
       `🛡️ SL BREAKEVEN TOCADO`,
-      `${side} BTC cerrado sin perdida`,
+      `${side} BTC cerrado`,
       ``,
       `Entrada: ${P(entry)}`,
       `Cierre: ${P(eventPrice)}`,
-      `P&L: ${pnlStr} (breakeven)`,
-      ``,
-      `TP1 fue alcanzado. Capital devuelto integro.`,
+      ...(sig.tp1BankedPnl && sig.tp1BankedPnl > 0 ? [
+        ``,
+        `TP1 banqueado: +${sig.tp1BankedPnl.toFixed(2)}% (${sig.tp1ClosePct ?? 40}% cerrado)`,
+        `Restante: cerrado en breakeven`,
+        `P&L TOTAL: +${finalPnl.toFixed(2)}%`,
+        `El sistema de parciales funciono.`,
+      ] : [
+        `P&L: ${pnlStr} (breakeven)`,
+        ``,
+        `TP1 fue alcanzado. Capital devuelto integro.`,
+      ]),
     ].join('\n'),
 
     trailing: [
@@ -524,10 +575,39 @@ export async function GET(req: Request): Promise<NextResponse> {
     const resolved   = allSignals.filter(s => s.pnl != null)
     const perfWins   = resolved.filter(s => (s.pnl ?? 0) > 0.1)
     const perfLosses = resolved.filter(s => (s.pnl ?? 0) < -0.1 && s.status !== 'breakeven')
-    const perfStats  = resolved.length >= 5 ? {
+
+    // Per-type / per-side breakdown for adaptive learning
+    type PerfGroup = { n: number; wr: number; avgR: number }
+    function perfGroup(sigs: typeof resolved, pred: (s: typeof resolved[0]) => boolean): PerfGroup | null {
+      const g = sigs.filter(pred)
+      if (g.length < 3) return null
+      // pnlR can be null even for closed trades — fall back to pnl sign, then status
+      const isWin = (s: typeof g[0]) =>
+        s.pnlR != null ? s.pnlR > 0 :
+        s.pnl  != null ? s.pnl  > 0 :
+        (s.status === 'tp1_hit' || s.status === 'tp2_hit' || s.status === 'tp3_hit')
+      const w = g.filter(isWin).length
+      const avgR = g.reduce((a, s) => a + (s.pnlR ?? (isWin(s) ? 1 : -1)), 0) / g.length
+      return { n: g.length, wr: Math.round(w / g.length * 100), avgR: +avgR.toFixed(2) }
+    }
+    const perfStats = resolved.length >= 5 ? {
       total:    resolved.length,
       winRate:  Math.round(perfWins.length / Math.max(perfWins.length + perfLosses.length, 1) * 100),
       totalPnl: parseFloat(resolved.reduce((acc, r) => acc + (r.pnl ?? 0), 0).toFixed(2)),
+      totalR:   +(resolved.reduce((a, r) => a + (r.pnlR ?? 0), 0).toFixed(2)),
+      byType: {
+        Scalp:     perfGroup(resolved, s => s.idea.tradeType === 'Scalp'),
+        DayTrade:  perfGroup(resolved, s => s.idea.tradeType === 'DayTrade'),
+        Swing:     perfGroup(resolved, s => s.idea.tradeType === 'Swing'),
+      },
+      bySide: {
+        LONG:  perfGroup(resolved, s => s.idea.side === 'LONG'),
+        SHORT: perfGroup(resolved, s => s.idea.side === 'SHORT'),
+      },
+      recent5: [...resolved]
+        .sort((a, b) => new Date(b.closedAt ?? b.createdAt).getTime() - new Date(a.closedAt ?? a.createdAt).getTime())
+        .slice(0, 5)
+        .map(s => ({ type: s.idea.tradeType, side: s.idea.side, pnlR: +(s.pnlR ?? 0).toFixed(2) })),
     } : null
 
     // ── Agent voice helpers — computed once, used in 30min + 4H blocks ────────
@@ -881,9 +961,23 @@ export async function GET(req: Request): Promise<NextResponse> {
         if (sameActive || alreadyNotified) {
           console.log(`[APEX] Signal deduped — sameActive=${sameActive} alreadyNotified=${alreadyNotified}`)
         } else {
+          // R:R validation — reject if TP1 R:R < 1.5
+          const slDist  = Math.abs(recEntry - recSL)
+          const tp1RR   = slDist > 0 ? +(Math.abs(recTP1 - recEntry) / slDist).toFixed(2) : 0
+          const tp2RR   = slDist > 0 ? +(Math.abs(recTP2 - recEntry) / slDist).toFixed(2) : 0
+          const tp3RR   = slDist > 0 ? +(Math.abs(recTP3 - recEntry) / slDist).toFixed(2) : 0
+          if (tp1RR < 1.5) {
+            console.log(`[APEX] Signal rejected — TP1 R:R ${tp1RR}:1 below minimum 1.5:1`)
+            results.errors.push(`[RRCheck] Rejected — TP1 R:R ${tp1RR}:1 < 1.5`)
+          } else {
+          const partialCfg = getPartialCloseConfig(recType, tp1RR, tp2RR)
+
           const rec: SignalRecord = {
             id: recId, createdAt: time, status: 'active', ntfySent: true,
             exitPrice: null, exitTs: null, pnl: null, pnlR: null, closedAt: null, closeReason: null,
+            tp1ClosePct: partialCfg.tp1Pct, tp2ClosePct: partialCfg.tp2Pct, tp3ClosePct: partialCfg.tp3Pct,
+            tp1BankedPnl: 0, tp2BankedPnl: 0, totalBankedPnl: 0, remainingSizePct: 100,
+            tp1RR, tp2RR, tp3RR,
             idea: {
               side: recSide, tradeType: recType, confidence: recConf,
               price: recEntry, sl: recSL, tp1: recTP1, tp2: recTP2, tp3: recTP3,
@@ -905,6 +999,9 @@ export async function GET(req: Request): Promise<NextResponse> {
               pnl: null, pnl_r: null, closed_at: null, exit_price: null, close_reason: null,
               tp1_hit: false, tp2_hit: false, sl_warning_fired: false,
               expiry_warning_fired: false,
+              tp1_close_pct: partialCfg.tp1Pct, tp2_close_pct: partialCfg.tp2Pct, tp3_close_pct: partialCfg.tp3Pct,
+              tp1_banked_pnl: 0, tp2_banked_pnl: 0, total_banked_pnl: 0, remaining_size_pct: 100,
+              tp1_rr: tp1RR, tp2_rr: tp2RR, tp3_rr: tp3RR,
             }, { onConflict: 'id' })
           ).catch((e: Error) => ({ error: e }))
 
@@ -927,6 +1024,7 @@ export async function GET(req: Request): Promise<NextResponse> {
               )
             }
           }
+          } // end tp1RR >= 1.5
         }
       }
     }
@@ -974,17 +1072,21 @@ export async function GET(req: Request): Promise<NextResponse> {
         if (duplicate || recentlyNotified) {
           results.scalpSkipped = duplicate ? 'duplicate' : 'ntfy_sent_recently'
         } else {
+          const sSlDist  = Math.abs(scalpSig.entry - scalpSig.sl)
+          const sTP1RR   = sSlDist > 0 ? +(Math.abs(scalpSig.tp1 - scalpSig.entry) / sSlDist).toFixed(2) : 0
+          const sTP2RR   = sSlDist > 0 ? +(Math.abs(scalpSig.tp2 - scalpSig.entry) / sSlDist).toFixed(2) : 0
+          const sTP3RR   = sSlDist > 0 ? +(Math.abs(scalpSig.tp3 - scalpSig.entry) / sSlDist).toFixed(2) : 0
+          const sCfg     = getPartialCloseConfig('Scalp', sTP1RR, sTP2RR)
           const rec: SignalRecord = {
-            id:          String(Date.now()),   // numeric-only — bigint compatible
+            id:          String(Date.now()),
             createdAt:   time,
             status:      'active',
-            exitPrice:   null,
-            exitTs:      null,
-            pnl:         null,
-            pnlR:        null,
-            closedAt:    null,
-            closeReason: null,
-            ntfySent:    true,                 // mark before saving to prevent re-fire
+            exitPrice:   null, exitTs: null, pnl: null, pnlR: null,
+            closedAt:    null, closeReason: null,
+            ntfySent:    true,
+            tp1ClosePct: sCfg.tp1Pct, tp2ClosePct: sCfg.tp2Pct, tp3ClosePct: sCfg.tp3Pct,
+            tp1BankedPnl: 0, tp2BankedPnl: 0, totalBankedPnl: 0, remainingSizePct: 100,
+            tp1RR: sTP1RR, tp2RR: sTP2RR, tp3RR: sTP3RR,
             idea: {
               side:       scalpSig.side,
               tradeType:  'Scalp',
@@ -1001,7 +1103,6 @@ export async function GET(req: Request): Promise<NextResponse> {
               ts:         new Date(time),
             },
           }
-          // Save via direct service-key client (bypasses RLS + avoids anon-key singleton issues)
           const saveSb = getDbClient()
           const { error: saveErr } = await Promise.resolve(
             saveSb.from('apex_signals').upsert({
@@ -1013,6 +1114,9 @@ export async function GET(req: Request): Promise<NextResponse> {
               pnl: null, pnl_r: null, closed_at: null, exit_price: null, close_reason: null,
               tp1_hit: false, tp2_hit: false, sl_warning_fired: false,
               expiry_warning_fired: false, max_lev: rec.idea.maxLev ?? 5,
+              tp1_close_pct: sCfg.tp1Pct, tp2_close_pct: sCfg.tp2Pct, tp3_close_pct: sCfg.tp3Pct,
+              tp1_banked_pnl: 0, tp2_banked_pnl: 0, total_banked_pnl: 0, remaining_size_pct: 100,
+              tp1_rr: sTP1RR, tp2_rr: sTP2RR, tp3_rr: sTP3RR,
             }, { onConflict: 'id' })
           ).catch((e: Error) => ({ error: e }))
           if (saveErr) {
@@ -1037,9 +1141,18 @@ export async function GET(req: Request): Promise<NextResponse> {
       const existingH = allSignals.find(s => s.id === cand.id)
       if (existingH) continue
 
+      const hSlDist = Math.abs(cand.entry - cand.sl)
+      const hTP1RR  = hSlDist > 0 ? +(Math.abs(cand.tp1 - cand.entry) / hSlDist).toFixed(2) : 0
+      const hTP2RR  = hSlDist > 0 ? +(Math.abs(cand.tp2 - cand.entry) / hSlDist).toFixed(2) : 0
+      const hTP3RR  = hSlDist > 0 ? +(Math.abs(cand.tp3 - cand.entry) / hSlDist).toFixed(2) : 0
+      const hCfg    = getPartialCloseConfig(cand.tradeType, hTP1RR, hTP2RR)
+
       const rec: SignalRecord = {
         id: cand.id, createdAt: time, status: 'active', ntfySent: true,
         exitPrice: null, exitTs: null, pnl: null, pnlR: null, closedAt: null, closeReason: null,
+        tp1ClosePct: hCfg.tp1Pct, tp2ClosePct: hCfg.tp2Pct, tp3ClosePct: hCfg.tp3Pct,
+        tp1BankedPnl: 0, tp2BankedPnl: 0, totalBankedPnl: 0, remainingSizePct: 100,
+        tp1RR: hTP1RR, tp2RR: hTP2RR, tp3RR: hTP3RR,
         idea: {
           side: cand.side, tradeType: cand.tradeType, confidence: cand.confidence,
           price: cand.entry, sl: cand.sl, tp1: cand.tp1, tp2: cand.tp2, tp3: cand.tp3,
@@ -1059,6 +1172,9 @@ export async function GET(req: Request): Promise<NextResponse> {
           pnl: null, pnl_r: null, closed_at: null, exit_price: null, close_reason: null,
           tp1_hit: false, tp2_hit: false, sl_warning_fired: false,
           expiry_warning_fired: false,
+          tp1_close_pct: hCfg.tp1Pct, tp2_close_pct: hCfg.tp2Pct, tp3_close_pct: hCfg.tp3Pct,
+          tp1_banked_pnl: 0, tp2_banked_pnl: 0, total_banked_pnl: 0, remaining_size_pct: 100,
+          tp1_rr: hTP1RR, tp2_rr: hTP2RR, tp3_rr: hTP3RR,
         }, { onConflict: 'id' })
       ).catch((e: Error) => ({ error: e }))
 

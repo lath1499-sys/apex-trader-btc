@@ -187,6 +187,17 @@ export interface SignalRecord {
   breakevenSet?:   boolean
   trailing2Set?:   boolean
   trailingActive?: boolean
+  // Partial close tracking — banked profits per TP level
+  tp1ClosePct?:     number
+  tp2ClosePct?:     number
+  tp3ClosePct?:     number
+  tp1BankedPnl?:    number
+  tp2BankedPnl?:    number
+  totalBankedPnl?:  number
+  remainingSizePct?: number
+  tp1RR?:           number
+  tp2RR?:           number
+  tp3RR?:           number
 }
 
 export interface ChatMessage { role: 'user' | 'assistant'; text: string }

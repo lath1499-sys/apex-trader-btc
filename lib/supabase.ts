@@ -78,6 +78,17 @@ export function transformSignal(s: Record<string, unknown>): SignalRecord {
     breakevenSet:        Boolean(s.breakeven_set),
     trailing2Set:        Boolean(s.trailing2_set),
     trailingActive:      Boolean(s.trailing_active),
+    // Partial close tracking
+    tp1ClosePct:      (s.tp1_close_pct     as number | null) ?? 40,
+    tp2ClosePct:      (s.tp2_close_pct     as number | null) ?? 35,
+    tp3ClosePct:      (s.tp3_close_pct     as number | null) ?? 25,
+    tp1BankedPnl:     (s.tp1_banked_pnl   as number | null) ?? 0,
+    tp2BankedPnl:     (s.tp2_banked_pnl   as number | null) ?? 0,
+    totalBankedPnl:   (s.total_banked_pnl  as number | null) ?? 0,
+    remainingSizePct: (s.remaining_size_pct as number | null) ?? 100,
+    tp1RR:            (s.tp1_rr            as number | null) ?? 0,
+    tp2RR:            (s.tp2_rr            as number | null) ?? 0,
+    tp3RR:            (s.tp3_rr            as number | null) ?? 0,
     idea: {
       side:       String(s.side) as 'LONG' | 'SHORT',
       tradeType:  String(s.trade_type) as 'Scalp' | 'DayTrade' | 'Swing',
@@ -141,6 +152,17 @@ export async function saveSignalToCloud(signal: SignalRecord): Promise<void> {
     breakeven_set:         signal.breakevenSet         ?? false,
     trailing2_set:         signal.trailing2Set         ?? false,
     trailing_active:       signal.trailingActive       ?? false,
+    // Partial close tracking
+    tp1_close_pct:         signal.tp1ClosePct          ?? null,
+    tp2_close_pct:         signal.tp2ClosePct          ?? null,
+    tp3_close_pct:         signal.tp3ClosePct          ?? null,
+    tp1_banked_pnl:        signal.tp1BankedPnl         ?? null,
+    tp2_banked_pnl:        signal.tp2BankedPnl         ?? null,
+    total_banked_pnl:      signal.totalBankedPnl       ?? null,
+    remaining_size_pct:    signal.remainingSizePct      ?? null,
+    tp1_rr:                signal.tp1RR                ?? null,
+    tp2_rr:                signal.tp2RR                ?? null,
+    tp3_rr:                signal.tp3RR                ?? null,
   }, { onConflict: 'id' })
 
   if (error) console.error('[Supabase] saveSignal error:', error.message)

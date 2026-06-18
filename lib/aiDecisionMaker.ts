@@ -49,6 +49,48 @@ function buildPortfolioSummary(allActivePositions: any[], currentPrice: number):
   return summary
 }
 
+function buildPerfFeedback(p: any): string {
+  const lines: string[] = []
+  lines.push(`Global: ${p.total} trades | WR ${p.winRate}% | Total R: ${p.totalR >= 0 ? '+' : ''}${p.totalR}R`)
+
+  // Per-type breakdown with adaptive instruction
+  const typeLines: string[] = []
+  for (const [tp, g] of Object.entries(p.byType ?? {}) as [string, any][]) {
+    if (!g) continue
+    const icon = g.wr >= 60 ? '✅' : g.wr >= 45 ? '⚠️' : '❌'
+    const note = g.wr >= 60 ? 'FAVORITO — busca este primero' : g.wr < 40 ? 'bajo rendimiento — sé más selectivo en el entry' : 'rendimiento normal'
+    typeLines.push(`  ${tp.padEnd(9)}: ${g.n} trades | WR ${g.wr}% | avgR ${g.avgR >= 0 ? '+' : ''}${g.avgR}R ${icon} ${note}`)
+  }
+  if (typeLines.length) lines.push('Por tipo:\n' + typeLines.join('\n'))
+
+  // Per-side breakdown
+  const sideLines: string[] = []
+  for (const [sd, g] of Object.entries(p.bySide ?? {}) as [string, any][]) {
+    if (!g) continue
+    const icon = g.wr >= 60 ? '✅' : g.wr >= 45 ? '⚠️' : '❌'
+    sideLines.push(`  ${sd.padEnd(6)}: ${g.n} trades | WR ${g.wr}% | avgR ${g.avgR >= 0 ? '+' : ''}${g.avgR}R ${icon}`)
+  }
+  if (sideLines.length) lines.push('Por dirección:\n' + sideLines.join('\n'))
+
+  // Recent 5 trades
+  if (p.recent5?.length) {
+    const r5 = p.recent5.map((t: any) => `${t.pnlR >= 0 ? '✅' : '❌'} ${t.side} ${t.type} (${t.pnlR >= 0 ? '+' : ''}${t.pnlR}R)`).join(' → ')
+    lines.push(`Últimos ${p.recent5.length}: ${r5}`)
+  }
+
+  // Adaptive instruction summary
+  const worst = Object.entries(p.byType ?? {}).filter(([, g]: any) => g && g.wr < 40).map(([k]) => k)
+  const best  = Object.entries(p.byType ?? {}).filter(([, g]: any) => g && g.wr >= 60).map(([k]) => k)
+  if (best.length || worst.length) {
+    const parts: string[] = []
+    if (best.length)  parts.push(`cuando el mercado lo permita, prioriza ${best.join('/')}`)
+    if (worst.length) parts.push(`en ${worst.join('/')}, afina más el entry — pero 2 confluencias claras siguen siendo suficientes para operar`)
+    lines.push('AJUSTE ADAPTATIVO: ' + parts.join('; ') + '. No te paralices — la acción correcta imperfecta supera la inacción perfecta.')
+  }
+
+  return lines.join('\n')
+}
+
 export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return null
@@ -103,7 +145,16 @@ Analiza el mercado y decide: ¿operar ahora, esperar, o cerrar una posición exi
 
 Piensa como un trader profesional. Usa toda la información disponible.
 Sé DECISIVO — la parálisis es el mayor enemigo del trader.
-Si hay 3-4 confluencias claras, opera. No esperes condiciones perfectas.
+2-3 confluencias claras = operar. No esperes condiciones perfectas — no existen.
+
+═══ JERARQUÍA DE SETUPS APEX ═══
+Evalúa SIEMPRE en este orden de prioridad:
+1. SWING     (4H/1D alineados, días de duración, R:R 3:1, max 3x) — Mayor R, más tiempo. Busca esto primero.
+2. DAYTRADE  (1H/4H confirmados, 2-24h, R:R 2:1, max 5x) — Equilibrio ideal precisión/timing.
+3. SCALP     (15M+1H, <2h, R:R 1.5:1, max 10x) — Solo si el mercado no da Swing/DayTrade claro.
+
+REGLA: Si ves Swing Y Scalp disponibles al mismo tiempo → el Swing GANA siempre.
+Un Scalp brillante es inferior a un DayTrade sólido. Si no hay Swing ni DayTrade claro, un Scalp bien filtrado es válido.
 
 ═══ TU PORTAFOLIO ACTUAL — LEE ESTO PRIMERO ═══
 ${portfolioSummary}
@@ -184,8 +235,8 @@ ${(news ?? []).slice(0, 4).map((n: any) => `• ${String(n.title ?? '').slice(0,
 ═══ SEÑALES ACTIVAS ═══
 ${activeSigLines}
 
-═══ RENDIMIENTO HISTÓRICO ═══
-${perfStats ? `${perfStats.total} trades | Win rate: ${perfStats.winRate}% | P&L total: ${perfStats.totalPnl?.toFixed(1)}%` : 'Sin historial suficiente aún'}
+═══ RENDIMIENTO HISTÓRICO — APRENDE DE ESTO ═══
+${perfStats ? buildPerfFeedback(perfStats) : 'Sin historial suficiente aún (mínimo 5 trades cerrados).'}
 
 ═══ TU TAREA ═══
 Analiza TODO y responde SOLO con este JSON (sin texto adicional, sin markdown):

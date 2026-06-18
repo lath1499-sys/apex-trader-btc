@@ -340,6 +340,22 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
           <div style={{ fontSize: 9, color: T.textSec }}>
             📍 ${fmt(idea.price, 0)} · 🔴 SL ${fmt(idea.sl, 0)} · TP1 ${fmt(idea.tp1, 0)} · TP2 ${fmt(idea.tp2, 0)} · TP3 ${fmt(idea.tp3, 0)} · R:R {rrRaw.toFixed(1)} · {idea.maxLev}x
           </div>
+          {rec && (rec.tp1ClosePct ?? 0) > 0 && (
+            <div style={{ fontSize: 8, color: T.muted, marginTop: 2 }}>
+              {rec.tp1Hit && rec.tp2Hit
+                ? <span style={{ color: T.bull }}>
+                    💰 Banqueado: +{(rec.tp1BankedPnl ?? 0).toFixed(2)}% TP1 · +{(rec.tp2BankedPnl ?? 0).toFixed(2)}% TP2 = +{(rec.totalBankedPnl ?? 0).toFixed(2)}% asegurado · {rec.remainingSizePct ?? 25}% resta (SL→TP1)
+                  </span>
+                : rec.tp1Hit
+                ? <span style={{ color: T.bull }}>
+                    💰 Banqueado: +{(rec.tp1BankedPnl ?? 0).toFixed(2)}% (TP1 {rec.tp1ClosePct}% cerrado) · {rec.remainingSizePct ?? 60}% resta · SL→breakeven
+                  </span>
+                : <span>
+                    Parciales: TP1 {rec.tp1ClosePct}% · TP2 {rec.tp2ClosePct}% · TP3 {rec.tp3ClosePct}% | R:R {rec.tp1RR}:{rec.tp2RR}:{rec.tp3RR}
+                  </span>
+              }
+            </div>
+          )}
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <div style={{ fontSize: 8, color: T.muted }}>{ts?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
