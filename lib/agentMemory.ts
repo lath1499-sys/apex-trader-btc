@@ -21,6 +21,26 @@ export interface AgentState {
   updatedAt:            string
   lastAnalysisAt:       string | null  // ISO — last 30min market update
   lastDeepAnalysisAt:   string | null  // ISO — last 4H deep analysis
+  lastLevelAlerts:      Record<string, number>  // price→epochMs last alert
+}
+
+// ── Persistent trader thesis — set by user, respected by every agent run ─────
+
+export interface WatchingLevel {
+  price:  number
+  reason: string
+  action: 'SHORT_ENTRY' | 'LONG_ENTRY' | 'EXIT' | 'ALERT'
+}
+
+export interface AgentMemory {
+  id:                 string   // always 'current'
+  currentThesis:      string | null
+  currentBias:        string | null
+  thesisSetAt:        string | null
+  thesisInvalidation: string | null
+  watchingLevels:     WatchingLevel[]
+  netDirectionalBias: string | null
+  updatedAt:          string
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -50,6 +70,29 @@ export async function loadAgentState(sb: SbClient): Promise<AgentState | null> {
       updatedAt:            data.updated_at            ?? new Date().toISOString(),
       lastAnalysisAt:       data.last_analysis_at      ?? null,
       lastDeepAnalysisAt:   data.last_deep_analysis_at ?? null,
+      lastLevelAlerts:      (data.last_level_alerts as Record<string, number> | null) ?? {},
+    }
+  } catch { return null }
+}
+
+export async function loadAgentMemory(sb: SbClient): Promise<AgentMemory | null> {
+  if (!sb) return null
+  try {
+    const { data, error } = await sb
+      .from('apex_agent_memory')
+      .select('*')
+      .eq('id', 'current')
+      .maybeSingle()
+    if (error || !data) return null
+    return {
+      id:                 String(data.id),
+      currentThesis:      (data.current_thesis      as string | null) ?? null,
+      currentBias:        (data.current_bias        as string | null) ?? null,
+      thesisSetAt:        (data.thesis_set_at       as string | null) ?? null,
+      thesisInvalidation: (data.thesis_invalidation as string | null) ?? null,
+      watchingLevels:     Array.isArray(data.watching_levels) ? (data.watching_levels as WatchingLevel[]) : [],
+      netDirectionalBias: (data.net_directional_bias as string | null) ?? null,
+      updatedAt:          (data.updated_at          as string | null) ?? new Date().toISOString(),
     }
   } catch { return null }
 }
@@ -68,6 +111,7 @@ export async function saveAgentState(sb: SbClient, state: AgentState): Promise<v
       updated_at:            new Date().toISOString(),
       last_analysis_at:      state.lastAnalysisAt      ?? null,
       last_deep_analysis_at: state.lastDeepAnalysisAt  ?? null,
+      last_level_alerts:     state.lastLevelAlerts     ?? {},
     })
   } catch { /* non-critical */ }
 }
