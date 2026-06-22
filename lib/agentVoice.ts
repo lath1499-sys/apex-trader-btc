@@ -33,7 +33,6 @@ export interface AgentUpdateParams {
   socialSentiment?: any
   abcdAnalysis?:    any
   memory?:          { lastBias: string; lastPrice: number; lastAnalysisAt: string | null; changeReason: string | null } | null
-  agentMemory?:     { currentThesis: string | null; thesisInvalidation: string | null; watchingLevels: Array<{ price: number; reason: string; action: string }> } | null
 }
 
 // ── Claude API call for rich, intelligent voice ────────────────────────────
@@ -44,7 +43,7 @@ async function callClaudeForUpdate(p: AgentUpdateParams): Promise<string | null>
   const { price, prevPrice, inds, regime, session, activeSignals, opinionChanges,
           mkt, whaleAlert, macroSentiment, macroIndicators, fedExpectations,
           globalMarkets, elliottWaves, fvgs, liquidity, optionsData, news,
-          socialSentiment, abcdAnalysis, memory, agentMemory } = p
+          socialSentiment, abcdAnalysis, memory } = p
 
   const i4   = inds?.['4h']
   const i1   = inds?.['1h']
@@ -103,16 +102,6 @@ ${activeSignals.length > 0
 ${memory?.lastAnalysisAt ? `SESGO ANTERIOR (hace ${Math.round((Date.now() - new Date(memory.lastAnalysisAt).getTime()) / 60_000)} min): ${memory.lastBias}${memory.changeReason ? ` — "${memory.changeReason.slice(0, 150)}"` : ''}
 Precio entonces: $${Math.round(memory.lastPrice).toLocaleString()} → ahora $${Math.round(price).toLocaleString()} (${((price - memory.lastPrice) / (memory.lastPrice || price) * 100).toFixed(2)}%)` : ''}
 ${opinionChanges.length > 0 ? `\nCAMBIOS DETECTADOS:\n${opinionChanges.map((c: string) => `• ${c}`).join('\n')}` : ''}
-${agentMemory?.watchingLevels && agentMemory.watchingLevels.length > 0 ? `
-PLAN ACTIVO — NIVELES A VIGILAR:
-${agentMemory.watchingLevels
-  .sort((a: any, b: any) => Math.abs(a.price - price) - Math.abs(b.price - price))
-  .slice(0, 4)
-  .map((l: any) => {
-    const dist = (l.price - price) / price * 100
-    const dir  = dist > 0 ? `↑ ${dist.toFixed(1)}%` : `↓ ${Math.abs(dist).toFixed(1)}%`
-    return `$${Math.round(l.price).toLocaleString()} (${dir}) — ${l.reason} → ${l.action}`
-  }).join('\n')}` : ''}
 `
 
   const prompt = `Eres APEX, un trader senior de Bitcoin con 15 años de experiencia.

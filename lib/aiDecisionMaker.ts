@@ -103,7 +103,6 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
     globalMarkets, socialSentiment,
     abcdAnalysis, optionsData,
     perfStats, klines4h,
-    agentMemory,
   } = ctx
 
   const i15 = inds?.['15m']
@@ -238,23 +237,6 @@ ${activeSigLines}
 
 ═══ RENDIMIENTO HISTÓRICO — APRENDE DE ESTO ═══
 ${perfStats ? buildPerfFeedback(perfStats) : 'Sin historial suficiente aún (mínimo 5 trades cerrados).'}
-${agentMemory?.currentThesis ? `
-═══ PLAN DE TRADING ACTIVO DEL USUARIO — RESPETA ESTO ═══
-${agentMemory.currentThesis}
-
-Invalidación del plan: ${agentMemory.thesisInvalidation ?? 'No definida'}
-${agentMemory.watchingLevels?.length > 0 ? `
-NIVELES VIGILADOS:
-${agentMemory.watchingLevels.map((l: any) =>
-  `• $${Math.round(l.price).toLocaleString()} — ${l.reason} → ${l.action}`
-).join('\n')}` : ''}
-
-IMPORTANTE: Este plan fue definido por el trader. Antes de generar
-cualquier señal, verifica que sea COHERENTE con este plan.
-Si el plan dice esperar $71k para SHORT y el precio está en $64k,
-NO abrir un SHORT aquí a menos que haya razón técnica MUY fuerte.
-Cualquier desviación debe ser justificada en tu "reasoning".
-` : ''}
 ═══ TU TAREA ═══
 Analiza TODO y responde SOLO con este JSON (sin texto adicional, sin markdown):
 

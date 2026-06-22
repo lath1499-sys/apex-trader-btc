@@ -21,7 +21,7 @@ import { writeTradeAnalysis }                            from '@/lib/analysisWri
 import { analyzeMacroSentiment }                         from '@/lib/macroSentiment'
 import { fetchGlobalMarkets }                            from '@/lib/marketCorrelation'
 import { ntfyBBSqueeze }                                 from '@/lib/ntfy'
-import { loadAgentState, saveAgentState, detectOpinionChange, loadAgentMemory, type AgentMemory } from '@/lib/agentMemory'
+import { loadAgentState, saveAgentState, detectOpinionChange } from '@/lib/agentMemory'
 import { fetchSocialSentiment }       from '@/lib/socialSentiment'
 import { generateAgentUpdate, generateDeepAnalysis, type AgentUpdateParams } from '@/lib/agentVoice'
 import { detectElliottWaves }          from '@/lib/elliottWaves'
@@ -578,57 +578,12 @@ export async function GET(req: Request): Promise<NextResponse> {
       }
     }
     // Supabase reads in parallel — each is independent
-    const [learnedWeights, capitalConfig, prevStateForVoice, agentMemory] = await Promise.all([
+    const [learnedWeights, capitalConfig, prevStateForVoice] = await Promise.all([
       calcLearnedWeights(getDbClient()),
       loadCapitalConfig(getDbClient() as any).catch(() => DEFAULT_CONFIG),
       loadAgentState(getDbClient()),
-      loadAgentMemory(getDbClient()),
     ])
     // optionsData already fetched in the parallel API batch above (line ~345)
-
-    // ── 3b-ii. Watching level alerts — fire NTFY when price is within 0.3% ───
-    if (agentMemory?.watchingLevels?.length && ntfyTopic) {
-      const stateSb  = getDbClient()
-      const lastAlerts: Record<string, number> = prevStateForVoice?.lastLevelAlerts ?? {}
-      let   alertsUpdated = false
-      for (const level of agentMemory.watchingLevels) {
-        const dist      = Math.abs(price - level.price) / price
-        if (dist >= 0.003) continue                                       // > 0.3% away — skip
-        const minsSince = (Date.now() - (lastAlerts[String(level.price)] ?? 0)) / 60_000
-        if (minsSince < 60) continue                                      // already alerted < 1h ago
-        const emoji = level.action === 'SHORT_ENTRY' ? '▼'
-                    : level.action === 'LONG_ENTRY'  ? '▲'
-                    : level.action === 'EXIT'        ? '🚪'
-                    : '🔔'
-        await ntfy(
-          ntfyTopic,
-          sanitizeHdr(`APEX NIVEL: $${Math.round(level.price).toLocaleString()} — ${level.action}`),
-          [
-            `${emoji} PRECIO EN NIVEL VIGILADO`,
-            ``,
-            `Nivel:   $${Math.round(level.price).toLocaleString()}`,
-            `Actual:  $${Math.round(price).toLocaleString()}`,
-            `Dist:    ${(dist * 100).toFixed(2)}%`,
-            ``,
-            `Razón:   ${level.reason}`,
-            `Acción:  ${level.action}`,
-            ``,
-            `Revisar condiciones técnicas para ejecutar.`,
-          ].join('\n'),
-          4,
-          emoji === '▼' ? 'chart_with_downwards_trend' : 'chart_with_upwards_trend',
-        )
-        lastAlerts[String(level.price)] = Date.now()
-        alertsUpdated = true
-      }
-      if (alertsUpdated && stateSb) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        void Promise.resolve((stateSb.from('apex_agent_state') as any)
-          .update({ last_level_alerts: lastAlerts, updated_at: new Date().toISOString() })
-          .eq('id', 'current'),
-        ).catch(() => {})
-      }
-    }
 
     // ── 3c. Walk-Forward validation on real closed signals ───────────────────
     const wfResult = runWalkForward(allSignals)
@@ -871,7 +826,6 @@ export async function GET(req: Request): Promise<NextResponse> {
         optionsData,
         perfStats,
         klines4h:        klines['4h'],
-        agentMemory:     agentMemory as AgentMemory | null,
       })
 
       if (aiDecision) {
@@ -1341,9 +1295,6 @@ export async function GET(req: Request): Promise<NextResponse> {
           memory:          prevStateForVoice
             ? { lastBias: prevStateForVoice.lastBias, lastPrice: prevStateForVoice.lastPrice,
                 lastAnalysisAt: prevStateForVoice.lastAnalysisAt, changeReason: prevStateForVoice.changeReason }
-            : null,
-          agentMemory:     agentMemory
-            ? { currentThesis: agentMemory.currentThesis, thesisInvalidation: agentMemory.thesisInvalidation, watchingLevels: agentMemory.watchingLevels }
             : null,
         }
         const update = await generateAgentUpdate(updateParams)
