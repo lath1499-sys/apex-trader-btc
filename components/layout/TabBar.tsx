@@ -16,6 +16,7 @@ const TABS: [TabName, string][] = [
   ['tradeideas', '🚨 Agente APEX BTC'],
   ['backtest',   '🔬 Backtest'],
   ['calc',       '🧮 Calc'],
+  ['compound',   '📈 Compuesto'],
   ['alerts',     '🔔 Alertas'],
   ['journal',    '📓 Diario'],
   ['sessions',   '🕐 Sesiones'],

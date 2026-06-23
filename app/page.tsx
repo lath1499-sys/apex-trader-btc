@@ -25,7 +25,8 @@ import TradeIdeasPanel  from '@/components/panels/TradeIdeasPanel'
 import CyclePanel       from '@/components/panels/CyclePanel'
 import OrderBookPanel   from '@/components/panels/OrderBookPanel'
 import BacktestPanel    from '@/components/panels/BacktestPanel'
-import CalculatorPanel  from '@/components/panels/CalculatorPanel'
+import CalculatorPanel      from '@/components/panels/CalculatorPanel'
+import CompoundCalculator   from '@/components/panels/CompoundCalculator'
 import PriceAlertPanel  from '@/components/panels/PriceAlertPanel'
 import TradeJournal     from '@/components/panels/TradeJournal'
 import SessionsPanel    from '@/components/panels/SessionsPanel'
@@ -46,6 +47,7 @@ function TabContent({ tab }: { tab: TabName }) {
     case 'orderbook':  return <OrderBookPanel />
     case 'backtest':   return <BacktestPanel />
     case 'calc':       return <CalculatorPanel />
+    case 'compound':   return <CompoundCalculator />
     case 'alerts':     return <PriceAlertPanel />
     case 'journal':    return <TradeJournal />
     case 'sessions':   return <SessionsPanel />
