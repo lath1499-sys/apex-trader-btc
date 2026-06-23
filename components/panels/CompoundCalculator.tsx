@@ -1,13 +1,12 @@
 'use client'
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import {
   ComposedChart, Area, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import { useTheme } from '@/hooks/useTheme'
 
-const fmtFull = (n: number) => '$' + Math.round(n).toLocaleString('en-US')
-
+const fmtFull    = (n: number) => '$' + Math.round(n).toLocaleString('en-US')
 const fmtCompact = (n: number) => {
   const abs = Math.abs(n)
   if (abs >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2) + 'M'
@@ -15,63 +14,42 @@ const fmtCompact = (n: number) => {
   return '$' + Math.round(n)
 }
 
-const FREQS = [
-  { label: 'Mensual',    ppy: 12 },
-  { label: 'Trimestral', ppy: 4  },
-  { label: 'Anual',      ppy: 1  },
-]
-
-const RATE_TYPES = [
-  { label: 'Anual',      mult: 1     },
-  { label: 'Mensual',    mult: 12    },
-  { label: 'Trimestral', mult: 4     },
-]
-
-const TFS = [1, 3, 5, 10, 20]
+const FREQS      = [{ label: 'Mensual', ppy: 12 }, { label: 'Trimestral', ppy: 4 }, { label: 'Anual', ppy: 1 }]
+const RATE_TYPES = [{ label: 'Anual', mult: 1 }, { label: 'Mensual', mult: 12 }, { label: 'Trimestral', mult: 4 }]
+const TFS        = [1, 3, 5, 10, 20]
 
 type RateTypeIdx = 0 | 1 | 2
 
-interface CalcParams {
-  principal: number; contribution: number; withdrawal: number
-  annualRate: number; years: number; ppy: number
-}
+interface CalcParams { principal: number; contribution: number; withdrawal: number; annualRate: number; years: number; ppy: number }
+interface Row { year: number; compound: number; contributed: number; simple: number; withdrawn: number }
+interface SimResult { rows: Row[]; depletionYear: number | null }
 
-interface Row {
-  year: number; compound: number; contributed: number; simple: number; withdrawn: number
-}
-
-function simulate(p: CalcParams): Row[] {
+function simulate(p: CalcParams): SimResult {
   const { principal, contribution, withdrawal, annualRate, years, ppy } = p
-  const r        = annualRate / 100 / ppy
-  const contribP = contribution * (12 / ppy)
-  const wdP      = withdrawal   * (12 / ppy)
-  const periods  = Math.round(years * ppy)
+  const r         = annualRate / 100 / ppy
+  const contribP  = contribution * (12 / ppy)
+  const wdP       = withdrawal   * (12 / ppy)
+  const periods   = Math.round(years * ppy)
   let bal = principal, totalContrib = principal, totalWd = 0
+  let depletionYear: number | null = null
   const rows: Row[] = [{ year: 0, compound: principal, contributed: principal, simple: principal, withdrawn: 0 }]
+
   for (let i = 1; i <= periods; i++) {
     bal = bal * (1 + r) + contribP - wdP
-    if (bal < 0) bal = 0
+    if (bal <= 0 && depletionYear === null) depletionYear = parseFloat((i / ppy).toFixed(1))
+    bal = Math.max(0, bal)
     totalContrib += contribP
     totalWd      += wdP
     if (i % ppy === 0) {
       const yr  = i / ppy
       const sim = principal * (1 + (annualRate / 100) * yr) + (totalContrib - principal - totalWd)
-      rows.push({
-        year:        yr,
-        compound:    Math.round(Math.max(0, bal)),
-        contributed: Math.round(totalContrib),
-        simple:      Math.round(Math.max(0, sim)),
-        withdrawn:   Math.round(totalWd),
-      })
+      rows.push({ year: yr, compound: Math.round(bal), contributed: Math.round(totalContrib), simple: Math.round(Math.max(0, sim)), withdrawn: Math.round(totalWd) })
     }
   }
-  return rows
+  return { rows, depletionYear }
 }
 
-interface Palette {
-  bgCard: string; bgCard2: string; border: string; text: string
-  textSec: string; accent: string; accent2: string; orange: string; purple: string; blue: string
-}
+interface Palette { bgCard: string; bgCard2: string; border: string; text: string; textSec: string; accent: string; accent2: string; orange: string; purple: string; blue: string; danger: string }
 
 function ApexTooltip({ active, payload, label, s }: { active?: boolean; payload?: { payload: Row }[]; label?: number; s: Palette }) {
   if (!active || !payload?.length) return null
@@ -94,22 +72,19 @@ function ApexTooltip({ active, payload, label, s }: { active?: boolean; payload?
   )
 }
 
-interface FieldProps {
+// Reusable slider+input field — commits on blur/Enter, slider updates live
+function Field({ label, value, onChange, min, max, step, prefix = '', suffix = '', s }: {
   label: string; value: number; onChange: (v: number) => void
-  min: number; max: number; step: number
-  prefix?: string; suffix?: string; s: Palette
-}
-
-function Field({ label, value, onChange, min, max, step, prefix = '', suffix = '', s }: FieldProps) {
+  min: number; max: number; step: number; prefix?: string; suffix?: string; s: Palette
+}) {
   const [raw, setRaw] = useState(String(value))
   useEffect(() => { setRaw(String(value)) }, [value])
-  const pct = Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100))
+  const pct    = Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100))
   const commit = () => {
     let n = parseFloat(raw.replace(/[^0-9.\-]/g, ''))
     if (isNaN(n)) n = value
     n = Math.min(max, Math.max(min, n))
-    onChange(n)
-    setRaw(String(n))
+    onChange(n); setRaw(String(n))
   }
   return (
     <div style={{ marginBottom: 18 }}>
@@ -122,67 +97,98 @@ function Field({ label, value, onChange, min, max, step, prefix = '', suffix = '
             onChange={e => setRaw(e.target.value)}
             onBlur={commit}
             onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-            style={{
-              width: 80, textAlign: 'right', background: s.bgCard2,
-              border: `1px solid ${s.border}`, borderRadius: 5, color: s.accent,
-              fontWeight: 700, fontSize: 13, padding: '3px 8px', outline: 'none', fontFamily: 'monospace',
-            }}
+            style={{ width: 80, textAlign: 'right', background: s.bgCard2, border: `1px solid ${s.border}`, borderRadius: 5, color: s.accent, fontWeight: 700, fontSize: 13, padding: '3px 8px', outline: 'none', fontFamily: 'monospace' }}
           />
           {suffix && <span style={{ fontSize: 11, color: s.textSec, marginLeft: 3 }}>{suffix}</span>}
         </div>
       </div>
       <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center' }}>
         <div style={{ position: 'absolute', left: 0, right: 0, height: 3, borderRadius: 2, background: s.bgCard2, border: `1px solid ${s.border}` }} />
-        <div style={{ position: 'absolute', left: 0, height: 3, borderRadius: 2, width: `${pct}%`, background: `linear-gradient(90deg, ${s.accent2}, ${s.accent})`, pointerEvents: 'none' }} />
-        <input
-          type="range" min={min} max={max} step={step} value={value}
+        <div style={{ position: 'absolute', left: 0, height: 3, borderRadius: 2, width: `${pct}%`, background: `linear-gradient(90deg,${s.accent2},${s.accent})`, pointerEvents: 'none' }} />
+        <input type="range" min={min} max={max} step={step} value={value}
           onChange={e => onChange(parseFloat(e.target.value))}
           style={{ position: 'relative', width: '100%', height: 20, WebkitAppearance: 'none', appearance: 'none', background: 'transparent', outline: 'none', cursor: 'pointer', zIndex: 1 }}
-          className="apex-calc-range"
-        />
+          className="apex-calc-range" />
       </div>
     </div>
   )
 }
 
-const INITIAL: CalcParams = { principal: 1890, contribution: 200, withdrawal: 500, annualRate: 35, years: 5, ppy: 12 }
+// Rate field — same pattern as Field but with local raw state
+function RateField({ value, onChange, s }: { value: number; onChange: (v: number) => void; s: Palette }) {
+  const [raw, setRaw] = useState(String(value))
+  useEffect(() => { setRaw(String(value)) }, [value])
+  const commit = () => {
+    let n = parseFloat(raw.replace(/[^0-9.\-]/g, ''))
+    if (isNaN(n)) n = value
+    n = Math.min(500, Math.max(0, n))
+    onChange(n); setRaw(String(n))
+  }
+  const pct = Math.min(100, Math.max(0, (value / 500) * 100))
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+        <span style={{ fontSize: 10, color: s.textSec, textTransform: 'uppercase', letterSpacing: 0.6 }}>Tasa de interés</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <input type="text" inputMode="decimal" value={raw}
+            onChange={e => setRaw(e.target.value)}
+            onBlur={commit}
+            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            style={{ width: 68, textAlign: 'right', background: s.bgCard2, border: `1px solid ${s.border}`, borderRadius: 5, color: s.accent, fontWeight: 700, fontSize: 13, padding: '3px 8px', outline: 'none', fontFamily: 'monospace' }}
+          />
+          <span style={{ fontSize: 11, color: s.textSec, marginLeft: 3 }}>%</span>
+        </div>
+      </div>
+      <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ position: 'absolute', left: 0, right: 0, height: 3, borderRadius: 2, background: s.bgCard2, border: `1px solid ${s.border}` }} />
+        <div style={{ position: 'absolute', left: 0, height: 3, borderRadius: 2, width: `${pct}%`, background: `linear-gradient(90deg,${s.accent2},${s.accent})`, pointerEvents: 'none' }} />
+        <input type="range" min={0} max={500} step={1} value={value}
+          onChange={e => { const n = parseFloat(e.target.value); onChange(n); setRaw(String(n)) }}
+          style={{ position: 'relative', width: '100%', height: 20, WebkitAppearance: 'none', appearance: 'none', background: 'transparent', outline: 'none', cursor: 'pointer', zIndex: 1 }}
+          className="apex-calc-range" />
+      </div>
+    </>
+  )
+}
+
+// ── Defaults that produce visible growth ───────────────────────────────────
+const INIT = { principal: 5000, contribution: 500, withdrawal: 0, rate: 35, years: 10, freqIdx: 0, rateTypeIdx: 0 as RateTypeIdx }
 
 export default function CompoundCalculator() {
   const T = useTheme()
 
-  // Editing state
-  const [principal,    setPrincipal]    = useState(INITIAL.principal)
-  const [contribution, setContribution] = useState(INITIAL.contribution)
-  const [withdrawal,   setWithdrawal]   = useState(INITIAL.withdrawal)
-  const [rate,         setRate]         = useState(35)
-  const [years,        setYears]        = useState(INITIAL.years)
-  const [freqIdx,      setFreqIdx]      = useState(0)
-  const [rateTypeIdx,  setRateTypeIdx]  = useState<RateTypeIdx>(0)
+  const [principal,    setPrincipal]    = useState(INIT.principal)
+  const [contribution, setContribution] = useState(INIT.contribution)
+  const [withdrawal,   setWithdrawal]   = useState(INIT.withdrawal)
+  const [rate,         setRate]         = useState(INIT.rate)
+  const [years,        setYears]        = useState(INIT.years)
+  const [freqIdx,      setFreqIdx]      = useState(INIT.freqIdx)
+  const [rateTypeIdx,  setRateTypeIdx]  = useState<RateTypeIdx>(INIT.rateTypeIdx)
   const [dirty,        setDirty]        = useState(false)
+  const [flash,        setFlash]        = useState(false)  // button press feedback
 
-  // Committed snapshot — simulation only runs on this
-  const [committed, setCommitted] = useState<CalcParams>(INITIAL)
+  // Committed snapshot — only updated on CALCULAR click
+  const [committed, setCommitted] = useState<CalcParams>({
+    principal: INIT.principal, contribution: INIT.contribution, withdrawal: INIT.withdrawal,
+    annualRate: INIT.rate, years: INIT.years, ppy: FREQS[INIT.freqIdx].ppy,
+  })
 
-  const ppy = FREQS[freqIdx].ppy
+  const ppy        = FREQS[freqIdx].ppy
+  const annualRate = rate * RATE_TYPES[rateTypeIdx].mult
 
-  function toAnnual(r: number, idx: RateTypeIdx) {
-    return r * RATE_TYPES[idx].mult
-  }
+  const mark = () => setDirty(true)
 
   function doCalc(overrideYears?: number) {
-    setCommitted({
-      principal, contribution, withdrawal,
-      annualRate: toAnnual(rate, rateTypeIdx),
-      years: overrideYears ?? years,
-      ppy,
-    })
-    if (overrideYears !== undefined) setYears(overrideYears)
+    const newYears = overrideYears ?? years
+    setCommitted({ principal, contribution, withdrawal, annualRate, years: newYears, ppy })
+    if (overrideYears !== undefined) setYears(newYears)
     setDirty(false)
+    // Flash feedback
+    setFlash(true)
+    setTimeout(() => setFlash(false), 600)
   }
 
-  function markDirty() { setDirty(true) }
-
-  const data = useMemo(() => simulate(committed), [committed])
+  const { rows: data, depletionYear } = useMemo(() => simulate(committed), [committed])
 
   const final        = data[data.length - 1]
   const totalContrib = final.contributed
@@ -191,7 +197,7 @@ export default function CompoundCalculator() {
   const compAdv      = final.compound - final.simple
 
   const tfResults = useMemo(
-    () => TFS.map(y => ({ y, val: simulate({ ...committed, years: y }).slice(-1)[0].compound })),
+    () => TFS.map(y => ({ y, val: simulate({ ...committed, years: y }).rows.slice(-1)[0].compound })),
     [committed],
   )
 
@@ -201,8 +207,8 @@ export default function CompoundCalculator() {
     const st = document.createElement('style')
     st.id = id
     st.textContent = `
-      .apex-calc-range::-webkit-slider-thumb { -webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:50%;background:#00ff88;cursor:pointer;margin-top:-6px;box-shadow:0 0 0 3px rgba(0,0,0,0.5),0 0 8px #00ff8866; }
-      .apex-calc-range::-moz-range-thumb { width:15px;height:15px;border-radius:50%;border:none;background:#00ff88;cursor:pointer;box-shadow:0 0 0 3px rgba(0,0,0,0.5); }
+      .apex-calc-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:50%;background:#00ff88;cursor:pointer;margin-top:-6px;box-shadow:0 0 0 3px rgba(0,0,0,.5),0 0 8px #00ff8866}
+      .apex-calc-range::-moz-range-thumb{width:15px;height:15px;border-radius:50%;border:none;background:#00ff88;cursor:pointer;box-shadow:0 0 0 3px rgba(0,0,0,.5)}
     `
     document.head.appendChild(st)
   }, [])
@@ -210,10 +216,10 @@ export default function CompoundCalculator() {
   const s: Palette = {
     bgCard: T.card, bgCard2: T.bg, border: T.border, text: T.text,
     textSec: T.textSec, accent: T.accent, accent2: T.bull,
-    orange: T.price, purple: T.warn, blue: T.danger,
+    orange: T.price, purple: T.warn, blue: T.danger, danger: T.danger,
   }
 
-  const btnStyle = (active: boolean) => ({
+  const pillBtn = (active: boolean) => ({
     flex: 1, padding: '7px 0',
     background: active ? `${s.accent}18` : s.bgCard2,
     border: `1px solid ${active ? s.accent + '66' : s.border}`,
@@ -227,19 +233,30 @@ export default function CompoundCalculator() {
 
       {/* Hero */}
       <div style={{ background: s.bgCard, border: `1px solid ${s.border}`, borderRadius: 12, padding: '20px', marginBottom: 14, position: 'relative', overflow: 'hidden' }}>
-        <div style={{ position: 'absolute', top: -30, right: -30, width: 130, height: 130, borderRadius: '50%', background: `radial-gradient(circle, ${s.accent}14, transparent 70%)`, pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', top: -30, right: -30, width: 130, height: 130, borderRadius: '50%', background: `radial-gradient(circle,${s.accent}14,transparent 70%)`, pointerEvents: 'none' }} />
         <div style={{ fontSize: 10, color: s.textSec, letterSpacing: 0.8, marginBottom: 5 }}>
           VALOR PROYECTADO EN {committed.years} {committed.years === 1 ? 'AÑO' : 'AÑOS'}
         </div>
-        <div style={{ fontSize: 36, fontWeight: 800, color: s.accent, fontFamily: 'monospace', letterSpacing: -1, lineHeight: 1, marginBottom: 8 }}>
+        <div style={{ fontSize: 36, fontWeight: 800, color: depletionYear ? s.danger : s.accent, fontFamily: 'monospace', letterSpacing: -1, lineHeight: 1, marginBottom: 8 }}>
           {fmtFull(final.compound)}
         </div>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 11, color: s.textSec }}>
           <span><span style={{ color: s.orange, fontWeight: 700 }}>{multiplier.toFixed(2)}×</span> capital inicial</span>
-          <span><span style={{ color: s.purple, fontWeight: 700 }}>+{fmtCompact(compAdv)}</span> vs interés simple</span>
-          <span style={{ color: s.textSec }}>Tasa {RATE_TYPES[rateTypeIdx].label.toLowerCase()}: <span style={{ color: s.accent }}>{rate}%</span> → anual: <span style={{ color: s.accent }}>{toAnnual(rate, rateTypeIdx)}%</span></span>
+          <span><span style={{ color: s.purple, fontWeight: 700 }}>+{fmtCompact(compAdv)}</span> vs simple</span>
+          <span style={{ color: s.textSec }}>
+            Tasa {RATE_TYPES[rateTypeIdx].label.toLowerCase()}: <span style={{ color: s.accent }}>{rate}%</span>
+            {rateTypeIdx !== 0 && <> → anual: <span style={{ color: s.accent }}>{annualRate}%</span></>}
+          </span>
         </div>
       </div>
+
+      {/* Depletion warning */}
+      {depletionYear !== null && (
+        <div style={{ background: `${s.danger}15`, border: `1px solid ${s.danger}55`, borderRadius: 10, padding: '11px 14px', marginBottom: 14, fontSize: 11, color: s.danger }}>
+          ⚠️ El saldo se agota en el año {depletionYear} — los retiros superan el interés generado.
+          Reduce el retiro mensual o aumenta el capital inicial.
+        </div>
+      )}
 
       {/* Stats */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
@@ -297,17 +314,12 @@ export default function CompoundCalculator() {
 
       {/* Timeframe row */}
       <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 10, color: s.textSec, letterSpacing: 0.5, marginBottom: 7 }}>PROYECCIÓN POR PERIODO</div>
+        <div style={{ fontSize: 10, color: s.textSec, letterSpacing: 0.5, marginBottom: 7 }}>PROYECCIÓN POR PERIODO — click para recalcular</div>
         <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 3 }}>
           {tfResults.map(({ y, val }) => {
             const active = committed.years === y
             return (
-              <button key={y} onClick={() => doCalc(y)} style={{
-                flex: '0 0 auto', minWidth: 80,
-                background: active ? `${s.accent}14` : s.bgCard,
-                border: `1px solid ${active ? s.accent + '66' : s.border}`,
-                borderRadius: 9, padding: '9px 11px', cursor: 'pointer', textAlign: 'left',
-              }}>
+              <button key={y} onClick={() => doCalc(y)} style={{ flex: '0 0 auto', minWidth: 80, background: active ? `${s.accent}14` : s.bgCard, border: `1px solid ${active ? s.accent + '66' : s.border}`, borderRadius: 9, padding: '9px 11px', cursor: 'pointer', textAlign: 'left' }}>
                 <div style={{ fontSize: 9, color: active ? s.accent : s.textSec, fontFamily: 'monospace', marginBottom: 3 }}>{y} AÑO{y > 1 ? 'S' : ''}</div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: active ? s.text : s.textSec, fontFamily: 'monospace' }}>{fmtCompact(val)}</div>
               </button>
@@ -317,80 +329,57 @@ export default function CompoundCalculator() {
       </div>
 
       {/* Controls */}
-      <div style={{ background: s.bgCard, border: `1px solid ${dirty ? s.accent + '55' : s.border}`, borderRadius: 12, padding: '16px 15px', transition: 'border-color .3s' }}>
-        <div style={{ fontSize: 10, color: s.textSec, letterSpacing: 0.5, marginBottom: 16 }}>
-          PARÁMETROS — modifica y presiona CALCULAR
+      <div style={{ background: s.bgCard, border: `1px solid ${dirty ? s.accent + '66' : s.border}`, borderRadius: 12, padding: '16px 15px', transition: 'border-color .3s' }}>
+        <div style={{ fontSize: 10, color: dirty ? s.accent : s.textSec, letterSpacing: 0.5, marginBottom: 16, transition: 'color .3s' }}>
+          {dirty ? '● PARÁMETROS MODIFICADOS — presiona CALCULAR' : 'PARÁMETROS'}
         </div>
 
-        <Field s={s} label="Capital inicial"  value={principal}    onChange={v => { setPrincipal(v);    markDirty() }} min={0} max={500000} step={100} prefix="$" />
-        <Field s={s} label="Aporte mensual"   value={contribution} onChange={v => { setContribution(v); markDirty() }} min={0} max={20000}  step={50}  prefix="$" />
-        <Field s={s} label="Retiro mensual"   value={withdrawal}   onChange={v => { setWithdrawal(v);   markDirty() }} min={0} max={20000}  step={50}  prefix="$" />
+        <Field s={s} label="Capital inicial"  value={principal}    onChange={v => { setPrincipal(v);    mark() }} min={0} max={500000} step={100} prefix="$" />
+        <Field s={s} label="Aporte mensual"   value={contribution} onChange={v => { setContribution(v); mark() }} min={0} max={20000}  step={50}  prefix="$" />
+        <Field s={s} label="Retiro mensual"   value={withdrawal}   onChange={v => { setWithdrawal(v);   mark() }} min={0} max={20000}  step={50}  prefix="$" />
 
-        {/* Rate row with type selector */}
+        {/* Rate + type */}
         <div style={{ marginBottom: 18 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
-            <span style={{ fontSize: 10, color: s.textSec, textTransform: 'uppercase', letterSpacing: 0.6 }}>Tasa de interés</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <input
-                type="text" inputMode="decimal"
-                value={rate}
-                onChange={e => { const n = parseFloat(e.target.value); if (!isNaN(n)) { setRate(Math.min(500, Math.max(0, n))); markDirty() } }}
-                style={{ width: 68, textAlign: 'right', background: s.bgCard2, border: `1px solid ${s.border}`, borderRadius: 5, color: s.accent, fontWeight: 700, fontSize: 13, padding: '3px 8px', outline: 'none', fontFamily: 'monospace' }}
-              />
-              <span style={{ fontSize: 11, color: s.textSec, marginLeft: 3 }}>%</span>
-            </div>
-          </div>
-          {/* Rate type buttons */}
-          <div style={{ display: 'flex', gap: 5, marginBottom: 10 }}>
+          <RateField value={rate} onChange={v => { setRate(v); mark() }} s={s} />
+          <div style={{ display: 'flex', gap: 5, marginBottom: 6 }}>
             {RATE_TYPES.map((rt, i) => (
-              <button key={rt.label} onClick={() => { setRateTypeIdx(i as RateTypeIdx); markDirty() }} style={btnStyle(rateTypeIdx === i)}>
-                {rt.label}
-              </button>
+              <button key={rt.label} onClick={() => { setRateTypeIdx(i as RateTypeIdx); mark() }} style={pillBtn(rateTypeIdx === i)}>{rt.label}</button>
             ))}
           </div>
-          {/* Slider */}
-          <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center' }}>
-            <div style={{ position: 'absolute', left: 0, right: 0, height: 3, borderRadius: 2, background: s.bgCard2, border: `1px solid ${s.border}` }} />
-            <div style={{ position: 'absolute', left: 0, height: 3, borderRadius: 2, width: `${Math.min(100, (rate / 500) * 100)}%`, background: `linear-gradient(90deg, ${s.accent2}, ${s.accent})`, pointerEvents: 'none' }} />
-            <input
-              type="range" min={0} max={500} step={1} value={rate}
-              onChange={e => { setRate(parseFloat(e.target.value)); markDirty() }}
-              style={{ position: 'relative', width: '100%', height: 20, WebkitAppearance: 'none', appearance: 'none', background: 'transparent', outline: 'none', cursor: 'pointer', zIndex: 1 }}
-              className="apex-calc-range"
-            />
-          </div>
-          <div style={{ fontSize: 9, color: s.textSec, marginTop: 5 }}>
-            Equivalente anual: <span style={{ color: s.accent, fontWeight: 700 }}>{toAnnual(rate, rateTypeIdx)}%</span>
-          </div>
+          {rateTypeIdx !== 0 && (
+            <div style={{ fontSize: 9, color: s.textSec }}>
+              Equivalente anual: <span style={{ color: s.accent, fontWeight: 700 }}>{annualRate}%</span>
+            </div>
+          )}
         </div>
 
-        <Field s={s} label="Periodo" value={years} onChange={v => { setYears(v); markDirty() }} min={1} max={30} step={1} suffix=" años" />
+        <Field s={s} label="Periodo" value={years} onChange={v => { setYears(v); mark() }} min={1} max={30} step={1} suffix=" años" />
 
-        {/* Compounding frequency */}
-        <div style={{ marginTop: 4, marginBottom: 18 }}>
+        {/* Compounding freq */}
+        <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 10, color: s.textSec, marginBottom: 8 }}>FRECUENCIA DE CAPITALIZACIÓN</div>
           <div style={{ display: 'flex', gap: 6 }}>
             {FREQS.map((f, i) => (
-              <button key={f.label} onClick={() => { setFreqIdx(i); markDirty() }} style={btnStyle(freqIdx === i)}>{f.label}</button>
+              <button key={f.label} onClick={() => { setFreqIdx(i); mark() }} style={pillBtn(freqIdx === i)}>{f.label}</button>
             ))}
           </div>
         </div>
 
-        {/* CALCULAR button */}
+        {/* CALCULAR */}
         <button
           onClick={() => doCalc()}
           style={{
-            width: '100%', padding: '13px 0',
-            background: dirty ? s.accent : `${s.accent}22`,
-            border: `1px solid ${s.accent}`,
+            width: '100%', padding: '14px 0',
+            background: flash ? s.accent : dirty ? `${s.accent}22` : `${s.accent}10`,
+            border: `2px solid ${dirty || flash ? s.accent : s.border}`,
             borderRadius: 9, cursor: 'pointer',
-            color: dirty ? s.bgCard : s.accent,
-            fontSize: 13, fontWeight: 800, letterSpacing: 1.5,
-            fontFamily: 'monospace', transition: 'all .2s',
-            boxShadow: dirty ? `0 0 18px ${s.accent}55` : 'none',
+            color: flash ? s.bgCard : dirty ? s.accent : s.textSec,
+            fontSize: 13, fontWeight: 800, letterSpacing: 2,
+            fontFamily: 'monospace', transition: 'all .15s',
+            boxShadow: dirty ? `0 0 20px ${s.accent}44` : 'none',
           }}
         >
-          {dirty ? '▶  CALCULAR' : '✓  CALCULADO'}
+          {flash ? '✓ CALCULADO' : dirty ? '▶  CALCULAR' : '▶  CALCULAR'}
         </button>
       </div>
 
