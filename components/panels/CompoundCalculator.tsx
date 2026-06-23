@@ -49,14 +49,39 @@ function simulate(p: CalcParams): SimResult {
   return { rows, depletionYear }
 }
 
+type ChartView = 'annual' | 'monthly' | 'daily'
+
+interface ChartRow { period: number; compound: number; contributed: number; simple: number; withdrawn: number }
+
+function simulateChart(p: CalcParams, view: ChartView): ChartRow[] {
+  const ppy      = view === 'annual' ? 1 : view === 'monthly' ? 12 : 365
+  const r        = p.annualRate / 100 / ppy
+  const contribP = p.contribution * (12 / ppy)
+  const wdP      = p.withdrawal   * (12 / ppy)
+  const total    = Math.round(p.years * ppy)
+  let bal = p.principal, tc = p.principal, tw = 0
+  const rows: ChartRow[] = [{ period: 0, compound: p.principal, contributed: p.principal, simple: p.principal, withdrawn: 0 }]
+  for (let i = 1; i <= total; i++) {
+    bal = Math.max(0, bal * (1 + r) + contribP - wdP)
+    tc += contribP; tw += wdP
+    const sim = p.principal * (1 + (p.annualRate / 100) * (i / ppy)) + (tc - p.principal - tw)
+    rows.push({ period: i, compound: Math.round(bal), contributed: Math.round(tc), simple: Math.round(Math.max(0, sim)), withdrawn: Math.round(tw) })
+  }
+  return rows
+}
+
 interface Palette { bgCard: string; bgCard2: string; border: string; text: string; textSec: string; accent: string; accent2: string; orange: string; purple: string; blue: string; danger: string }
 
-function ApexTooltip({ active, payload, label, s }: { active?: boolean; payload?: { payload: Row }[]; label?: number; s: Palette }) {
-  if (!active || !payload?.length) return null
+function ApexTooltip({ active, payload, label, s, view }: { active?: boolean; payload?: { payload: ChartRow }[]; label?: number; s: Palette; view: ChartView }) {
+  if (!active || !payload?.length || label === undefined) return null
   const d = payload[0].payload
+  let periodLabel: string
+  if (view === 'annual')  periodLabel = `AÑO ${label}`
+  else if (view === 'monthly') periodLabel = `MES ${label}  (AÑO ${Math.floor(label / 12)})`
+  else { const m = Math.floor(label / 30); periodLabel = `DÍA ${label}  (MES ${m}, AÑO ${Math.floor(label / 365)})` }
   return (
-    <div style={{ background: s.bgCard, border: `1px solid ${s.border}`, borderRadius: 8, padding: '10px 14px', fontSize: 11, boxShadow: '0 4px 16px rgba(0,0,0,0.4)', minWidth: 160 }}>
-      <div style={{ color: s.textSec, marginBottom: 8, fontSize: 10, fontWeight: 600 }}>AÑO {label}</div>
+    <div style={{ background: s.bgCard, border: `1px solid ${s.border}`, borderRadius: 8, padding: '10px 14px', fontSize: 11, boxShadow: '0 4px 16px rgba(0,0,0,0.4)', minWidth: 180 }}>
+      <div style={{ color: s.textSec, marginBottom: 8, fontSize: 10, fontWeight: 600 }}>{periodLabel}</div>
       {([
         { label: 'Compuesto',      val: d.compound,    color: s.accent  },
         { label: 'Simple',         val: d.simple,      color: s.purple  },
@@ -165,7 +190,8 @@ export default function CompoundCalculator() {
   const [freqIdx,      setFreqIdx]      = useState(INIT.freqIdx)
   const [rateTypeIdx,  setRateTypeIdx]  = useState<RateTypeIdx>(INIT.rateTypeIdx)
   const [dirty,        setDirty]        = useState(false)
-  const [flash,        setFlash]        = useState(false)  // button press feedback
+  const [flash,        setFlash]        = useState(false)
+  const [chartView,    setChartView]    = useState<ChartView>('annual')
 
   // Committed snapshot — only updated on CALCULAR click
   const [committed, setCommitted] = useState<CalcParams>({
@@ -189,6 +215,7 @@ export default function CompoundCalculator() {
   }
 
   const { rows: data, depletionYear } = useMemo(() => simulate(committed), [committed])
+  const chartData = useMemo(() => simulateChart(committed, chartView), [committed, chartView])
 
   const final        = data[data.length - 1]
   const totalContrib = final.contributed
@@ -276,9 +303,27 @@ export default function CompoundCalculator() {
 
       {/* Chart */}
       <div style={{ background: s.bgCard, border: `1px solid ${s.border}`, borderRadius: 12, padding: '14px 10px 6px', marginBottom: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 6px 10px', flexWrap: 'wrap', gap: 6 }}>
-          <span style={{ fontSize: 10, color: s.textSec, letterSpacing: 0.5 }}>EVOLUCIÓN DE LA INVERSIÓN</span>
-          <div style={{ display: 'flex', gap: 10, fontSize: 10, flexWrap: 'wrap' }}>
+        {/* Header row: title + legend + view toggle */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '0 6px 10px', flexWrap: 'wrap', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 10, color: s.textSec, letterSpacing: 0.5, marginBottom: 6 }}>EVOLUCIÓN DE LA INVERSIÓN</div>
+            {/* View toggle */}
+            <div style={{ display: 'flex', gap: 4 }}>
+              {(['annual', 'monthly', 'daily'] as ChartView[]).map(v => {
+                const lbl = v === 'annual' ? 'Anual' : v === 'monthly' ? 'Mensual' : 'Diario'
+                const active = chartView === v
+                return (
+                  <button key={v} onClick={() => setChartView(v)} style={{
+                    padding: '3px 10px', borderRadius: 5, cursor: 'pointer', fontSize: 10, fontFamily: 'monospace',
+                    background: active ? `${s.accent}22` : 'transparent',
+                    border: `1px solid ${active ? s.accent + '88' : s.border}`,
+                    color: active ? s.accent : s.textSec, fontWeight: active ? 700 : 400,
+                  }}>{lbl}</button>
+                )
+              })}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 10, fontSize: 10, flexWrap: 'wrap', paddingTop: 2 }}>
             {([
               { color: s.accent, label: 'Compuesto', dash: false },
               { color: s.purple, label: 'Simple',     dash: true  },
@@ -292,8 +337,8 @@ export default function CompoundCalculator() {
             ))}
           </div>
         </div>
-        <ResponsiveContainer width="100%" height={220}>
-          <ComposedChart data={data} margin={{ top: 4, right: 6, left: 0, bottom: 0 }}>
+        <ResponsiveContainer width="100%" height={240}>
+          <ComposedChart data={chartData} margin={{ top: 4, right: 6, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="apexCalcGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%"   stopColor={s.accent} stopOpacity={0.32} />
@@ -301,9 +346,26 @@ export default function CompoundCalculator() {
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke={s.border} vertical={false} />
-            <XAxis dataKey="year" tickFormatter={y => `A${y}`} stroke={s.textSec} tick={{ fontSize: 10, fontFamily: 'monospace', fill: s.textSec }} axisLine={{ stroke: s.border }} tickLine={false} />
+            <XAxis
+              dataKey="period"
+              type="number"
+              domain={[0, chartData.length - 1]}
+              ticks={chartView === 'annual'
+                ? Array.from({ length: committed.years + 1 }, (_, i) => i)
+                : chartView === 'monthly'
+                  ? Array.from({ length: committed.years + 1 }, (_, i) => i * 12)
+                  : Array.from({ length: committed.years + 1 }, (_, i) => i * 365)
+              }
+              tickFormatter={p => {
+                if (chartView === 'annual')  return `A${p}`
+                if (chartView === 'monthly') return `A${p / 12}`
+                return `A${Math.round(p / 365)}`
+              }}
+              stroke={s.textSec} tick={{ fontSize: 10, fontFamily: 'monospace', fill: s.textSec }}
+              axisLine={{ stroke: s.border }} tickLine={false}
+            />
             <YAxis tickFormatter={fmtCompact} stroke={s.textSec} tick={{ fontSize: 9, fontFamily: 'monospace', fill: s.textSec }} axisLine={false} tickLine={false} width={50} />
-            <Tooltip content={<ApexTooltip s={s} />} />
+            <Tooltip content={<ApexTooltip s={s} view={chartView} />} />
             <Area type="monotone" dataKey="compound" stroke={s.accent} strokeWidth={2.5} fill="url(#apexCalcGrad)" dot={false} activeDot={{ r: 4, fill: s.accent }} />
             <Line type="monotone" dataKey="simple" stroke={s.purple} strokeWidth={1.5} strokeDasharray="4 3" dot={false} activeDot={{ r: 3, fill: s.purple }} />
             <Line type="monotone" dataKey="contributed" stroke={s.blue} strokeWidth={1.2} strokeDasharray="2 4" dot={false} activeDot={{ r: 3, fill: s.blue }} />
