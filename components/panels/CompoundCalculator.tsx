@@ -20,21 +20,29 @@ const FREQS = [
   { label: 'Trimestral', ppy: 4  },
   { label: 'Anual',      ppy: 1  },
 ]
+
+const RATE_TYPES = [
+  { label: 'Anual',      mult: 1     },
+  { label: 'Mensual',    mult: 12    },
+  { label: 'Trimestral', mult: 4     },
+]
+
 const TFS = [1, 3, 5, 10, 20]
 
-interface Row {
-  year: number
-  compound: number
-  contributed: number
-  simple: number
-  withdrawn: number
+type RateTypeIdx = 0 | 1 | 2
+
+interface CalcParams {
+  principal: number; contribution: number; withdrawal: number
+  annualRate: number; years: number; ppy: number
 }
 
-function simulate(
-  principal: number, contribution: number, withdrawal: number,
-  ratePct: number, years: number, ppy: number,
-): Row[] {
-  const r       = ratePct / 100 / ppy
+interface Row {
+  year: number; compound: number; contributed: number; simple: number; withdrawn: number
+}
+
+function simulate(p: CalcParams): Row[] {
+  const { principal, contribution, withdrawal, annualRate, years, ppy } = p
+  const r        = annualRate / 100 / ppy
   const contribP = contribution * (12 / ppy)
   const wdP      = withdrawal   * (12 / ppy)
   const periods  = Math.round(years * ppy)
@@ -47,7 +55,7 @@ function simulate(
     totalWd      += wdP
     if (i % ppy === 0) {
       const yr  = i / ppy
-      const sim = principal * (1 + (ratePct / 100) * yr) + (totalContrib - principal - totalWd)
+      const sim = principal * (1 + (annualRate / 100) * yr) + (totalContrib - principal - totalWd)
       rows.push({
         year:        yr,
         compound:    Math.round(Math.max(0, bal)),
@@ -62,22 +70,15 @@ function simulate(
 
 interface Palette {
   bgCard: string; bgCard2: string; border: string; text: string
-  textSec: string; accent: string; accent2: string
-  orange: string; purple: string; blue: string
+  textSec: string; accent: string; accent2: string; orange: string; purple: string; blue: string
 }
 
 function ApexTooltip({ active, payload, label, s }: { active?: boolean; payload?: { payload: Row }[]; label?: number; s: Palette }) {
   if (!active || !payload?.length) return null
   const d = payload[0].payload
   return (
-    <div style={{
-      background: s.bgCard, border: `1px solid ${s.border}`,
-      borderRadius: 8, padding: '10px 14px', fontSize: 11,
-      boxShadow: '0 4px 16px rgba(0,0,0,0.4)', minWidth: 160,
-    }}>
-      <div style={{ color: s.textSec, marginBottom: 8, fontSize: 10, fontWeight: 600 }}>
-        AÑO {label}
-      </div>
+    <div style={{ background: s.bgCard, border: `1px solid ${s.border}`, borderRadius: 8, padding: '10px 14px', fontSize: 11, boxShadow: '0 4px 16px rgba(0,0,0,0.4)', minWidth: 160 }}>
+      <div style={{ color: s.textSec, marginBottom: 8, fontSize: 10, fontWeight: 600 }}>AÑO {label}</div>
       {([
         { label: 'Compuesto',      val: d.compound,    color: s.accent  },
         { label: 'Simple',         val: d.simple,      color: s.purple  },
@@ -113,9 +114,7 @@ function Field({ label, value, onChange, min, max, step, prefix = '', suffix = '
   return (
     <div style={{ marginBottom: 18 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
-        <span style={{ fontSize: 10, color: s.textSec, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-          {label}
-        </span>
+        <span style={{ fontSize: 10, color: s.textSec, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           {prefix && <span style={{ fontSize: 12, color: s.accent, fontWeight: 700 }}>{prefix}</span>}
           <input
@@ -124,37 +123,21 @@ function Field({ label, value, onChange, min, max, step, prefix = '', suffix = '
             onBlur={commit}
             onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
             style={{
-              width: 68, textAlign: 'right',
-              background: s.bgCard2,
-              border: `1px solid ${s.border}`,
-              borderRadius: 5, color: s.accent,
-              fontWeight: 700, fontSize: 13,
-              padding: '3px 6px', outline: 'none', fontFamily: 'monospace',
+              width: 80, textAlign: 'right', background: s.bgCard2,
+              border: `1px solid ${s.border}`, borderRadius: 5, color: s.accent,
+              fontWeight: 700, fontSize: 13, padding: '3px 8px', outline: 'none', fontFamily: 'monospace',
             }}
           />
-          {suffix && <span style={{ fontSize: 11, color: s.textSec, marginLeft: 2 }}>{suffix}</span>}
+          {suffix && <span style={{ fontSize: 11, color: s.textSec, marginLeft: 3 }}>{suffix}</span>}
         </div>
       </div>
       <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center' }}>
-        <div style={{
-          position: 'absolute', left: 0, right: 0, height: 3,
-          borderRadius: 2, background: s.bgCard2,
-          border: `1px solid ${s.border}`,
-        }} />
-        <div style={{
-          position: 'absolute', left: 0, height: 3, borderRadius: 2,
-          width: `${pct}%`,
-          background: `linear-gradient(90deg, ${s.accent2}, ${s.accent})`,
-          pointerEvents: 'none',
-        }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, height: 3, borderRadius: 2, background: s.bgCard2, border: `1px solid ${s.border}` }} />
+        <div style={{ position: 'absolute', left: 0, height: 3, borderRadius: 2, width: `${pct}%`, background: `linear-gradient(90deg, ${s.accent2}, ${s.accent})`, pointerEvents: 'none' }} />
         <input
           type="range" min={min} max={max} step={step} value={value}
           onChange={e => onChange(parseFloat(e.target.value))}
-          style={{
-            position: 'relative', width: '100%', height: 20,
-            WebkitAppearance: 'none', appearance: 'none',
-            background: 'transparent', outline: 'none', cursor: 'pointer', zIndex: 1,
-          }}
+          style={{ position: 'relative', width: '100%', height: 20, WebkitAppearance: 'none', appearance: 'none', background: 'transparent', outline: 'none', cursor: 'pointer', zIndex: 1 }}
           className="apex-calc-range"
         />
       </div>
@@ -162,33 +145,54 @@ function Field({ label, value, onChange, min, max, step, prefix = '', suffix = '
   )
 }
 
+const INITIAL: CalcParams = { principal: 1890, contribution: 200, withdrawal: 500, annualRate: 35, years: 5, ppy: 12 }
+
 export default function CompoundCalculator() {
   const T = useTheme()
 
-  const [principal,    setPrincipal]    = useState(1890)
-  const [contribution, setContribution] = useState(200)
-  const [withdrawal,   setWithdrawal]   = useState(500)
+  // Editing state
+  const [principal,    setPrincipal]    = useState(INITIAL.principal)
+  const [contribution, setContribution] = useState(INITIAL.contribution)
+  const [withdrawal,   setWithdrawal]   = useState(INITIAL.withdrawal)
   const [rate,         setRate]         = useState(35)
-  const [years,        setYears]        = useState(5)
+  const [years,        setYears]        = useState(INITIAL.years)
   const [freqIdx,      setFreqIdx]      = useState(0)
+  const [rateTypeIdx,  setRateTypeIdx]  = useState<RateTypeIdx>(0)
+  const [dirty,        setDirty]        = useState(false)
 
-  const ppy  = FREQS[freqIdx].ppy
-  const data = useMemo(
-    () => simulate(principal, contribution, withdrawal, rate, years, ppy),
-    [principal, contribution, withdrawal, rate, years, ppy],
-  )
+  // Committed snapshot — simulation only runs on this
+  const [committed, setCommitted] = useState<CalcParams>(INITIAL)
+
+  const ppy = FREQS[freqIdx].ppy
+
+  function toAnnual(r: number, idx: RateTypeIdx) {
+    return r * RATE_TYPES[idx].mult
+  }
+
+  function doCalc(overrideYears?: number) {
+    setCommitted({
+      principal, contribution, withdrawal,
+      annualRate: toAnnual(rate, rateTypeIdx),
+      years: overrideYears ?? years,
+      ppy,
+    })
+    if (overrideYears !== undefined) setYears(overrideYears)
+    setDirty(false)
+  }
+
+  function markDirty() { setDirty(true) }
+
+  const data = useMemo(() => simulate(committed), [committed])
+
   const final        = data[data.length - 1]
   const totalContrib = final.contributed
   const interest     = Math.max(0, final.compound - totalContrib + final.withdrawn)
-  const multiplier   = principal > 0 ? final.compound / principal : 0
+  const multiplier   = committed.principal > 0 ? final.compound / committed.principal : 0
   const compAdv      = final.compound - final.simple
 
   const tfResults = useMemo(
-    () => TFS.map(y => ({
-      y,
-      val: simulate(principal, contribution, withdrawal, rate, y, ppy).slice(-1)[0].compound,
-    })),
-    [principal, contribution, withdrawal, rate, ppy],
+    () => TFS.map(y => ({ y, val: simulate({ ...committed, years: y }).slice(-1)[0].compound })),
+    [committed],
   )
 
   useEffect(() => {
@@ -197,83 +201,55 @@ export default function CompoundCalculator() {
     const st = document.createElement('style')
     st.id = id
     st.textContent = `
-      .apex-calc-range::-webkit-slider-thumb {
-        -webkit-appearance:none;appearance:none;
-        width:15px;height:15px;border-radius:50%;
-        background:#00ff88;cursor:pointer;margin-top:-6px;
-        box-shadow:0 0 0 3px rgba(0,0,0,0.5),0 0 8px #00ff8866;
-      }
-      .apex-calc-range::-moz-range-thumb {
-        width:15px;height:15px;border-radius:50%;border:none;
-        background:#00ff88;cursor:pointer;
-        box-shadow:0 0 0 3px rgba(0,0,0,0.5);
-      }
+      .apex-calc-range::-webkit-slider-thumb { -webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:50%;background:#00ff88;cursor:pointer;margin-top:-6px;box-shadow:0 0 0 3px rgba(0,0,0,0.5),0 0 8px #00ff8866; }
+      .apex-calc-range::-moz-range-thumb { width:15px;height:15px;border-radius:50%;border:none;background:#00ff88;cursor:pointer;box-shadow:0 0 0 3px rgba(0,0,0,0.5); }
     `
     document.head.appendChild(st)
   }, [])
 
   const s: Palette = {
-    bgCard:  T.card,
-    bgCard2: T.bg,
-    border:  T.border,
-    text:    T.text,
-    textSec: T.textSec,
-    accent:  T.accent,
-    accent2: T.bull,
-    orange:  T.price,
-    purple:  T.warn,
-    blue:    T.danger,
+    bgCard: T.card, bgCard2: T.bg, border: T.border, text: T.text,
+    textSec: T.textSec, accent: T.accent, accent2: T.bull,
+    orange: T.price, purple: T.warn, blue: T.danger,
   }
+
+  const btnStyle = (active: boolean) => ({
+    flex: 1, padding: '7px 0',
+    background: active ? `${s.accent}18` : s.bgCard2,
+    border: `1px solid ${active ? s.accent + '66' : s.border}`,
+    borderRadius: 7, cursor: 'pointer',
+    color: active ? s.accent : s.textSec,
+    fontSize: 11, fontWeight: 600 as const, fontFamily: 'monospace',
+  })
 
   return (
     <div style={{ padding: '10px 2px 32px', color: s.text }}>
 
       {/* Hero */}
-      <div style={{
-        background: s.bgCard, border: `1px solid ${s.border}`,
-        borderRadius: 12, padding: '20px', marginBottom: 14,
-        position: 'relative', overflow: 'hidden',
-      }}>
-        <div style={{
-          position: 'absolute', top: -30, right: -30,
-          width: 130, height: 130, borderRadius: '50%',
-          background: `radial-gradient(circle, ${s.accent}14, transparent 70%)`,
-          pointerEvents: 'none',
-        }} />
+      <div style={{ background: s.bgCard, border: `1px solid ${s.border}`, borderRadius: 12, padding: '20px', marginBottom: 14, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: -30, right: -30, width: 130, height: 130, borderRadius: '50%', background: `radial-gradient(circle, ${s.accent}14, transparent 70%)`, pointerEvents: 'none' }} />
         <div style={{ fontSize: 10, color: s.textSec, letterSpacing: 0.8, marginBottom: 5 }}>
-          VALOR PROYECTADO EN {years} {years === 1 ? 'AÑO' : 'AÑOS'}
+          VALOR PROYECTADO EN {committed.years} {committed.years === 1 ? 'AÑO' : 'AÑOS'}
         </div>
-        <div style={{
-          fontSize: 36, fontWeight: 800, color: s.accent,
-          fontFamily: 'monospace', letterSpacing: -1, lineHeight: 1, marginBottom: 8,
-        }}>
+        <div style={{ fontSize: 36, fontWeight: 800, color: s.accent, fontFamily: 'monospace', letterSpacing: -1, lineHeight: 1, marginBottom: 8 }}>
           {fmtFull(final.compound)}
         </div>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 11, color: s.textSec }}>
           <span><span style={{ color: s.orange, fontWeight: 700 }}>{multiplier.toFixed(2)}×</span> capital inicial</span>
           <span><span style={{ color: s.purple, fontWeight: 700 }}>+{fmtCompact(compAdv)}</span> vs interés simple</span>
+          <span style={{ color: s.textSec }}>Tasa {RATE_TYPES[rateTypeIdx].label.toLowerCase()}: <span style={{ color: s.accent }}>{rate}%</span> → anual: <span style={{ color: s.accent }}>{toAnnual(rate, rateTypeIdx)}%</span></span>
         </div>
       </div>
 
       {/* Stats */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         {([
-          { label: 'Aportado',       val: totalContrib,    col: s.text,   sub: `${fmtFull(principal)} inicial + aportes` },
+          { label: 'Aportado',       val: totalContrib,    col: s.text,   sub: `${fmtFull(committed.principal)} inicial + aportes` },
           { label: 'Interés ganado', val: interest,        col: s.accent, sub: `${totalContrib > 0 ? Math.round((interest / totalContrib) * 100) : 0}% retorno` },
-          { label: 'Total retirado', val: final.withdrawn, col: s.orange, sub: `$${withdrawal}/mes × ${years} años` },
+          { label: 'Total retirado', val: final.withdrawn, col: s.orange, sub: `$${committed.withdrawal}/mes × ${committed.years} años` },
         ] as { label: string; val: number; col: string; sub: string }[]).map(({ label, val, col, sub }) => (
-          <div key={label} style={{
-            background: s.bgCard,
-            border: `1px solid ${col === s.text ? s.border : col + '44'}`,
-            borderRadius: 10, padding: '13px 14px',
-            flex: 1, minWidth: 100, position: 'relative', overflow: 'hidden',
-          }}>
-            {col !== s.text && (
-              <div style={{
-                position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-                background: `linear-gradient(90deg,transparent,${col},transparent)`,
-              }} />
-            )}
+          <div key={label} style={{ background: s.bgCard, border: `1px solid ${col === s.text ? s.border : col + '44'}`, borderRadius: 10, padding: '13px 14px', flex: 1, minWidth: 100, position: 'relative', overflow: 'hidden' }}>
+            {col !== s.text && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: `linear-gradient(90deg,transparent,${col},transparent)` }} />}
             <div style={{ fontSize: 9, color: s.textSec, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 5 }}>{label}</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: col, fontFamily: 'monospace' }}>{fmtCompact(val)}</div>
             <div style={{ fontSize: 10, color: s.textSec, marginTop: 2 }}>{sub}</div>
@@ -293,11 +269,7 @@ export default function CompoundCalculator() {
               { color: s.orange, label: 'Retirado',   dash: true  },
             ] as { color: string; label: string; dash: boolean }[]).map(({ color, label, dash }) => (
               <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <div style={{
-                  width: 10, height: dash ? 0 : 2, minWidth: 10,
-                  borderTop: dash ? `1.5px dashed ${color}` : 'none',
-                  background: dash ? 'transparent' : color, borderRadius: 1,
-                }} />
+                <div style={{ width: 10, height: dash ? 0 : 2, minWidth: 10, borderTop: dash ? `1.5px dashed ${color}` : 'none', background: dash ? 'transparent' : color, borderRadius: 1 }} />
                 <span style={{ color: s.textSec }}>{label}</span>
               </div>
             ))}
@@ -312,21 +284,13 @@ export default function CompoundCalculator() {
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke={s.border} vertical={false} />
-            <XAxis dataKey="year" tickFormatter={y => `A${y}`} stroke={s.textSec}
-              tick={{ fontSize: 10, fontFamily: 'monospace', fill: s.textSec }}
-              axisLine={{ stroke: s.border }} tickLine={false} />
-            <YAxis tickFormatter={fmtCompact} stroke={s.textSec}
-              tick={{ fontSize: 9, fontFamily: 'monospace', fill: s.textSec }}
-              axisLine={false} tickLine={false} width={50} />
+            <XAxis dataKey="year" tickFormatter={y => `A${y}`} stroke={s.textSec} tick={{ fontSize: 10, fontFamily: 'monospace', fill: s.textSec }} axisLine={{ stroke: s.border }} tickLine={false} />
+            <YAxis tickFormatter={fmtCompact} stroke={s.textSec} tick={{ fontSize: 9, fontFamily: 'monospace', fill: s.textSec }} axisLine={false} tickLine={false} width={50} />
             <Tooltip content={<ApexTooltip s={s} />} />
-            <Area type="monotone" dataKey="compound" stroke={s.accent} strokeWidth={2.5}
-              fill="url(#apexCalcGrad)" dot={false} activeDot={{ r: 4, fill: s.accent }} />
-            <Line type="monotone" dataKey="simple" stroke={s.purple} strokeWidth={1.5}
-              strokeDasharray="4 3" dot={false} activeDot={{ r: 3, fill: s.purple }} />
-            <Line type="monotone" dataKey="contributed" stroke={s.blue} strokeWidth={1.2}
-              strokeDasharray="2 4" dot={false} activeDot={{ r: 3, fill: s.blue }} />
-            <Line type="monotone" dataKey="withdrawn" stroke={s.orange} strokeWidth={1.2}
-              strokeDasharray="2 4" dot={false} activeDot={{ r: 3, fill: s.orange }} />
+            <Area type="monotone" dataKey="compound" stroke={s.accent} strokeWidth={2.5} fill="url(#apexCalcGrad)" dot={false} activeDot={{ r: 4, fill: s.accent }} />
+            <Line type="monotone" dataKey="simple" stroke={s.purple} strokeWidth={1.5} strokeDasharray="4 3" dot={false} activeDot={{ r: 3, fill: s.purple }} />
+            <Line type="monotone" dataKey="contributed" stroke={s.blue} strokeWidth={1.2} strokeDasharray="2 4" dot={false} activeDot={{ r: 3, fill: s.blue }} />
+            <Line type="monotone" dataKey="withdrawn" stroke={s.orange} strokeWidth={1.2} strokeDasharray="2 4" dot={false} activeDot={{ r: 3, fill: s.orange }} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -336,21 +300,16 @@ export default function CompoundCalculator() {
         <div style={{ fontSize: 10, color: s.textSec, letterSpacing: 0.5, marginBottom: 7 }}>PROYECCIÓN POR PERIODO</div>
         <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 3 }}>
           {tfResults.map(({ y, val }) => {
-            const active = years === y
+            const active = committed.years === y
             return (
-              <button key={y} onClick={() => setYears(y)} style={{
+              <button key={y} onClick={() => doCalc(y)} style={{
                 flex: '0 0 auto', minWidth: 80,
                 background: active ? `${s.accent}14` : s.bgCard,
                 border: `1px solid ${active ? s.accent + '66' : s.border}`,
-                borderRadius: 9, padding: '9px 11px',
-                cursor: 'pointer', textAlign: 'left',
+                borderRadius: 9, padding: '9px 11px', cursor: 'pointer', textAlign: 'left',
               }}>
-                <div style={{ fontSize: 9, color: active ? s.accent : s.textSec, fontFamily: 'monospace', marginBottom: 3 }}>
-                  {y} AÑO{y > 1 ? 'S' : ''}
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: active ? s.text : s.textSec, fontFamily: 'monospace' }}>
-                  {fmtCompact(val)}
-                </div>
+                <div style={{ fontSize: 9, color: active ? s.accent : s.textSec, fontFamily: 'monospace', marginBottom: 3 }}>{y} AÑO{y > 1 ? 'S' : ''}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: active ? s.text : s.textSec, fontFamily: 'monospace' }}>{fmtCompact(val)}</div>
               </button>
             )
           })}
@@ -358,30 +317,81 @@ export default function CompoundCalculator() {
       </div>
 
       {/* Controls */}
-      <div style={{ background: s.bgCard, border: `1px solid ${s.border}`, borderRadius: 12, padding: '16px 15px' }}>
+      <div style={{ background: s.bgCard, border: `1px solid ${dirty ? s.accent + '55' : s.border}`, borderRadius: 12, padding: '16px 15px', transition: 'border-color .3s' }}>
         <div style={{ fontSize: 10, color: s.textSec, letterSpacing: 0.5, marginBottom: 16 }}>
-          PARÁMETROS — escribe el valor o usa el slider
+          PARÁMETROS — modifica y presiona CALCULAR
         </div>
-        <Field s={s} label="Capital inicial"       value={principal}    onChange={setPrincipal}    min={0} max={500000} step={100}  prefix="$" />
-        <Field s={s} label="Aporte mensual"        value={contribution} onChange={setContribution} min={0} max={20000}  step={50}   prefix="$" />
-        <Field s={s} label="Retiro mensual"        value={withdrawal}   onChange={setWithdrawal}   min={0} max={20000}  step={50}   prefix="$" />
-        <Field s={s} label="Tasa de interés anual" value={rate}         onChange={setRate}         min={0} max={500}    step={1}    suffix="%" />
-        <Field s={s} label="Periodo"               value={years}        onChange={setYears}        min={1} max={30}     step={1}    suffix=" años" />
-        <div style={{ marginTop: 8 }}>
+
+        <Field s={s} label="Capital inicial"  value={principal}    onChange={v => { setPrincipal(v);    markDirty() }} min={0} max={500000} step={100} prefix="$" />
+        <Field s={s} label="Aporte mensual"   value={contribution} onChange={v => { setContribution(v); markDirty() }} min={0} max={20000}  step={50}  prefix="$" />
+        <Field s={s} label="Retiro mensual"   value={withdrawal}   onChange={v => { setWithdrawal(v);   markDirty() }} min={0} max={20000}  step={50}  prefix="$" />
+
+        {/* Rate row with type selector */}
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+            <span style={{ fontSize: 10, color: s.textSec, textTransform: 'uppercase', letterSpacing: 0.6 }}>Tasa de interés</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <input
+                type="text" inputMode="decimal"
+                value={rate}
+                onChange={e => { const n = parseFloat(e.target.value); if (!isNaN(n)) { setRate(Math.min(500, Math.max(0, n))); markDirty() } }}
+                style={{ width: 68, textAlign: 'right', background: s.bgCard2, border: `1px solid ${s.border}`, borderRadius: 5, color: s.accent, fontWeight: 700, fontSize: 13, padding: '3px 8px', outline: 'none', fontFamily: 'monospace' }}
+              />
+              <span style={{ fontSize: 11, color: s.textSec, marginLeft: 3 }}>%</span>
+            </div>
+          </div>
+          {/* Rate type buttons */}
+          <div style={{ display: 'flex', gap: 5, marginBottom: 10 }}>
+            {RATE_TYPES.map((rt, i) => (
+              <button key={rt.label} onClick={() => { setRateTypeIdx(i as RateTypeIdx); markDirty() }} style={btnStyle(rateTypeIdx === i)}>
+                {rt.label}
+              </button>
+            ))}
+          </div>
+          {/* Slider */}
+          <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center' }}>
+            <div style={{ position: 'absolute', left: 0, right: 0, height: 3, borderRadius: 2, background: s.bgCard2, border: `1px solid ${s.border}` }} />
+            <div style={{ position: 'absolute', left: 0, height: 3, borderRadius: 2, width: `${Math.min(100, (rate / 500) * 100)}%`, background: `linear-gradient(90deg, ${s.accent2}, ${s.accent})`, pointerEvents: 'none' }} />
+            <input
+              type="range" min={0} max={500} step={1} value={rate}
+              onChange={e => { setRate(parseFloat(e.target.value)); markDirty() }}
+              style={{ position: 'relative', width: '100%', height: 20, WebkitAppearance: 'none', appearance: 'none', background: 'transparent', outline: 'none', cursor: 'pointer', zIndex: 1 }}
+              className="apex-calc-range"
+            />
+          </div>
+          <div style={{ fontSize: 9, color: s.textSec, marginTop: 5 }}>
+            Equivalente anual: <span style={{ color: s.accent, fontWeight: 700 }}>{toAnnual(rate, rateTypeIdx)}%</span>
+          </div>
+        </div>
+
+        <Field s={s} label="Periodo" value={years} onChange={v => { setYears(v); markDirty() }} min={1} max={30} step={1} suffix=" años" />
+
+        {/* Compounding frequency */}
+        <div style={{ marginTop: 4, marginBottom: 18 }}>
           <div style={{ fontSize: 10, color: s.textSec, marginBottom: 8 }}>FRECUENCIA DE CAPITALIZACIÓN</div>
           <div style={{ display: 'flex', gap: 6 }}>
             {FREQS.map((f, i) => (
-              <button key={f.label} onClick={() => setFreqIdx(i)} style={{
-                flex: 1, padding: '7px 0',
-                background: freqIdx === i ? `${s.accent}18` : s.bgCard2,
-                border: `1px solid ${freqIdx === i ? s.accent + '66' : s.border}`,
-                borderRadius: 7, cursor: 'pointer',
-                color: freqIdx === i ? s.accent : s.textSec,
-                fontSize: 11, fontWeight: 600, fontFamily: 'monospace',
-              }}>{f.label}</button>
+              <button key={f.label} onClick={() => { setFreqIdx(i); markDirty() }} style={btnStyle(freqIdx === i)}>{f.label}</button>
             ))}
           </div>
         </div>
+
+        {/* CALCULAR button */}
+        <button
+          onClick={() => doCalc()}
+          style={{
+            width: '100%', padding: '13px 0',
+            background: dirty ? s.accent : `${s.accent}22`,
+            border: `1px solid ${s.accent}`,
+            borderRadius: 9, cursor: 'pointer',
+            color: dirty ? s.bgCard : s.accent,
+            fontSize: 13, fontWeight: 800, letterSpacing: 1.5,
+            fontFamily: 'monospace', transition: 'all .2s',
+            boxShadow: dirty ? `0 0 18px ${s.accent}55` : 'none',
+          }}
+        >
+          {dirty ? '▶  CALCULAR' : '✓  CALCULADO'}
+        </button>
       </div>
 
       <div style={{ textAlign: 'center', marginTop: 12, fontSize: 9, color: s.textSec, lineHeight: 1.6 }}>
