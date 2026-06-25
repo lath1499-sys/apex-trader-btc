@@ -145,7 +145,7 @@ Analiza el mercado y decide: ¿operar ahora, esperar, o cerrar una posición exi
 
 Piensa como un trader profesional. Usa toda la información disponible.
 Sé DECISIVO — la parálisis es el mayor enemigo del trader.
-2-3 confluencias claras = operar. No esperes condiciones perfectas — no existen.
+2 confluencias claras = ENTRA. No busques condiciones perfectas — no existen y esperar las crea.
 
 ═══ JERARQUÍA DE SETUPS APEX ═══
 Evalúa SIEMPRE en este orden de prioridad:
@@ -159,26 +159,17 @@ Un Scalp brillante es inferior a un DayTrade sólido. Si no hay Swing ni DayTrad
 ═══ TU PORTAFOLIO ACTUAL — LEE ESTO PRIMERO ═══
 ${portfolioSummary}
 
-REGLA DE COHERENCIA DE PORTAFOLIO (OBLIGATORIA, sin excepciones):
+REGLA DE COHERENCIA DE PORTAFOLIO:
 
-Si tu decisión de HOY es LONG y tienes SHORTs activos (o viceversa),
-ANTES de responder DEBES resolver la contradicción. Tienes 3 opciones:
+Si tu decisión es LONG pero tienes SHORTs activos (o viceversa), tienes 2 opciones:
 
-OPCIÓN A — CERRAR LAS POSICIONES EN CONFLICTO:
-Si tu nueva lectura invalida la tesis de las posiciones opuestas, lléna
-"positionsToClose" con los IDs exactos (de la lista de arriba) y la razón.
+OPCIÓN A — CERRAR LAS POSICIONES EN CONFLICTO (DEFAULT):
+Si la nueva lectura invalida la tesis opuesta, pon los IDs en "positionsToClose". Luego ENTRA en la nueva dirección.
 
-OPCIÓN B — JUSTIFICAR LA COEXISTENCIA:
-Si AMBAS tienen sentido simultáneo (ej: shorts macro, este long es rebote técnico),
-llena "coexistenceReasoning" explicando ESPECÍFICAMENTE por qué un trader
-profesional mantendría ambas. Esto debe ser excepción justificada, NO el default.
+OPCIÓN B — JUSTIFICAR COEXISTENCIA:
+Si ambas tienen sentido simultáneo (ej: short macro + long de rebote técnico a corto plazo), llena "coexistenceReasoning" con la razón específica y ENTRA igual.
 
-OPCIÓN C — ESPERAR:
-Si no puedes justificar B y no quieres ejecutar A, tu "action" debe ser "WAIT".
-Puedes incluir positionsToClose incluso si action="WAIT".
-
-DEFAULT: en caso de duda, OPCIÓN A es más coherente que posiciones abandonadas
-en direcciones opuestas. Es UN SOLO portafolio, un solo trader, una sola cuenta.
+IMPORTANTE: Posiciones opuestas existentes NO son razón para WAIT. Son una decisión de gestión — cierra las que ya no tienen tesis y opera la nueva señal.
 
 ═══ MERCADO ACTUAL ═══
 Precio: $${Math.round(price).toLocaleString()} (${priceChangePct}% vs hace 30min)
@@ -264,13 +255,13 @@ Analiza TODO y responde SOLO con este JSON (sin texto adicional, sin markdown):
 
 REGLAS DE SL/TP:
 - SL basado en estructura (swing high/low). Buffer: 0.3-0.5% del precio. Mínimo 0.5%.
-- TP1: R:R ≥ 1.5:1 | TP2: R:R ≥ 2.5:1 | TP3: R:R ≥ 4:1
+- TP1: R:R ≥ 1.2:1 | TP2: R:R ≥ 2:1 | TP3: R:R ≥ 3.5:1
 - Para WAIT: calcula igual los niveles que esperarías
-- No operes contra la tendencia principal a menos que RSI < 25 o > 75 con confluencias fuertes
+- No operes contra la tendencia principal a menos que RSI < 25 o > 75 con confluencias claras
 - positionsToClose: array vacío [] si no hay nada que cerrar
 - Los signalId DEBEN ser exactamente los IDs mostrados en TU PORTAFOLIO ACTUAL
 
-Sé DECISIVO. 3-4 confluencias = operar.`
+BIAS DE ACCIÓN: Si ves 2+ confluencias técnicas (ABCD en PRZ, estructura rota, RSI extremo, alineación multi-TF, soporte/resistencia clave) → la respuesta correcta es ENTRAR, no esperar. WAIT solo cuando el mercado está en rango sin setup claro o hay evento macro activo.`
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {

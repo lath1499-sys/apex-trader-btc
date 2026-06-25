@@ -967,25 +967,24 @@ export async function GET(req: Request): Promise<NextResponse> {
               whaleAlert: whaleAlert ?? null, abcdAnalysis,
             })
 
-        // Dedup: skip if same-side active or recently notified
-        // Use stillActive (excludes just-closed portfolio-coherence signals)
-        const sameActive = stillActive.some(s => s.idea.tradeType !== 'Scalp' && s.idea.side === recSide)
+        // Dedup: skip if recently notified same-side (45min cooldown)
         const alreadyNotified = allSignals.some(s =>
           (s.status === 'active' || s.status === 'tp1_hit' || s.status === 'tp2_hit') &&
           s.ntfySent === true && s.idea.side === recSide &&
-          new Date(s.createdAt).getTime() > Date.now() - 2 * 3_600_000,
+          new Date(s.createdAt).getTime() > Date.now() - 45 * 60_000,
         )
-        if (sameActive || alreadyNotified) {
-          console.log(`[APEX] Signal deduped — sameActive=${sameActive} alreadyNotified=${alreadyNotified}`)
+        if (alreadyNotified) {
+          console.log(`[APEX] Signal deduped — alreadyNotified same side in last 45min`)
         } else {
-          // R:R validation — reject if TP1 R:R < 1.5
+          // R:R validation — reject if TP1 R:R below minimum (1.2 for Scalp, 1.3 for DayTrade/Swing)
+          const minTP1RR = recType === 'Scalp' ? 1.2 : 1.3
           const slDist  = Math.abs(recEntry - recSL)
           const tp1RR   = slDist > 0 ? +(Math.abs(recTP1 - recEntry) / slDist).toFixed(2) : 0
           const tp2RR   = slDist > 0 ? +(Math.abs(recTP2 - recEntry) / slDist).toFixed(2) : 0
           const tp3RR   = slDist > 0 ? +(Math.abs(recTP3 - recEntry) / slDist).toFixed(2) : 0
-          if (tp1RR < 1.5) {
-            console.log(`[APEX] Signal rejected — TP1 R:R ${tp1RR}:1 below minimum 1.5:1`)
-            results.errors.push(`[RRCheck] Rejected — TP1 R:R ${tp1RR}:1 < 1.5`)
+          if (tp1RR < minTP1RR) {
+            console.log(`[APEX] Signal rejected — TP1 R:R ${tp1RR}:1 below minimum ${minTP1RR}:1`)
+            results.errors.push(`[RRCheck] Rejected — TP1 R:R ${tp1RR}:1 < ${minTP1RR}`)
           } else {
           const partialCfg = getPartialCloseConfig(recType, tp1RR, tp2RR)
 
@@ -1066,7 +1065,7 @@ export async function GET(req: Request): Promise<NextResponse> {
         mkt.funding ?? undefined,
       )
 
-      if (scalpSig && scalpSig.confidence !== 'BAJA') {
+      if (scalpSig) {
         // Dedup: skip if a similar scalp already exists (same side, entry within 0.5%, last 2h)
         const twoHoursAgo = Date.now() - 2 * 3_600_000
         const duplicate = allSignals.find(s =>

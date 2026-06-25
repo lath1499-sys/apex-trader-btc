@@ -85,8 +85,8 @@ export const TRADING_SESSIONS: TradingSession[] = [
     utcStart: 18, utcEnd: 21,
     quality: 'caution',
     reason: 'Cierre NY, posible reversion de posiciones, spreads ampliandose',
-    allowScalp: false, allowDayTrade: true, allowSwing: true,
-    minConfidence: 'ALTA',
+    allowScalp: true, allowDayTrade: true, allowSwing: true,
+    minConfidence: 'MEDIA',
   },
 ]
 

@@ -39,6 +39,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# PM2 logs (local dev process manager)
+.pm2/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

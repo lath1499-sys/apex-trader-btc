@@ -4,6 +4,7 @@ import { useTheme } from '@/hooks/useTheme'
 import { fmt, fmtB } from '@/lib/buildContext'
 import { DominanceCard, CapitalFlowCard, SpreadCard, OIAnalysisCard, LiquidationsCard } from './DashboardCards1'
 import { SentimentCard, AlertHeatmapCard, EventsCard, PersonalStatsCard, MacroCorrelCard, EquityCurveCard } from './DashboardCards2'
+import { HVCard, MVRVCard, MultiTFBiasCard, ApexScoreCard, CVDCard, ActiveSignalsCard } from './DashboardCards3'
 
 export default function DashboardPanel() {
   const T      = useTheme()
@@ -83,7 +84,13 @@ export default function DashboardPanel() {
       <EventsCard />
       <PersonalStatsCard />
       <MacroCorrelCard />
+      <HVCard />
+      <MVRVCard />
+      <MultiTFBiasCard />
+      <ApexScoreCard />
+      <CVDCard />
       <EquityCurveCard />
+      <ActiveSignalsCard />
 
       {/* ── Legacy alerts strip (if any, small) ──────────────────────────── */}
       {alerts.length > 0 && (

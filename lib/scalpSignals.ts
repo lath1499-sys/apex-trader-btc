@@ -266,9 +266,8 @@ export function detectScalpSignals(
   // ── FILTER 0: Trading session gate ────────────────────────────────────────
   if (!shouldGenerateSignal('Scalp', 'MEDIA')) return null
 
-  // ── FILTER 1: Must be in a Killzone ────────────────────────────────────────
+  // ── FILTER 1: Killzone bonus (no longer a hard gate — KZ raises signal quality)
   const activeKZ = killzones.find(kz => kz.active)
-  if (!activeKZ) return null
 
   // ── FILTER 2: BB Squeeze guard on 15M (skip if too compressed) ─────────────
   const closes15m = klines15m.map(k => k.c)
@@ -405,7 +404,8 @@ export function detectScalpSignals(
   // ── Decision ───────────────────────────────────────────────────────────────
   const side: 'LONG' | 'SHORT' | null = bull > bear ? 'LONG' : bear > bull ? 'SHORT' : null
   const maxScore = Math.max(bull, bear)
-  if (!side || maxScore < 4) return null
+  const minScore = activeKZ ? 4 : 5
+  if (!side || maxScore < minScore) return null
 
   // ── SL: structure-based (swing high/low) + ATR floor, min 0.4% ──────────────
   // ATR on 15M used as baseline
