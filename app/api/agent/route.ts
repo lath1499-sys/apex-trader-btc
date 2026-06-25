@@ -32,8 +32,8 @@ import { fetchOptionsData }             from '@/lib/deribitFetch'
 import { runWalkForward }               from '@/lib/walkForwardBacktest'
 import { analyzeAllABCD, getABCDScoreImpact, generateHarmonicSignals } from '@/lib/harmonicPatterns'
 import type { MultiTFABCD, HarmonicSignalCandidate } from '@/lib/harmonicPatterns'
-import { askClaudeForDecision } from '@/lib/aiDecisionMaker'
-import type { TradeDecision }   from '@/lib/aiDecisionMaker'
+import { askClaudeForDecision, getLastClaudeError } from '@/lib/aiDecisionMaker'
+import type { TradeDecision }                       from '@/lib/aiDecisionMaker'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 
 export const runtime    = 'nodejs'
@@ -857,7 +857,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 
       results.debug = {
         claudeAttempted: true,
-        claudeResult: aiDecision ? aiDecision.action : 'null_api_failed',
+        claudeResult: aiDecision ? aiDecision.action : `null — ${getLastClaudeError() || 'unknown'}`,
         fallbackResult: fallbackSignal ? (fallbackSignal.consolidation ? 'consolidation' : `${fallbackSignal.side}_${fallbackSignal.tradeType}`) : 'null',
         canTrade: !!(useAI || useRules),
         activeCount,

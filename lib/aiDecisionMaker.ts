@@ -91,6 +91,9 @@ function buildPerfFeedback(p: any): string {
   return lines.join('\n')
 }
 
+let lastClaudeError = ''
+export function getLastClaudeError(): string { return lastClaudeError }
+
 export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return null
@@ -276,12 +279,14 @@ BIAS DE ACCIÓN: Si ves 2+ confluencias técnicas (ABCD en PRZ, estructura rota,
         max_tokens: 1500,
         messages:   [{ role: 'user', content: prompt }],
       }),
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(45_000),
     })
 
     if (!res.ok) {
       const errBody = await res.text().catch(() => '')
-      console.error(`[APEX AI] API error ${res.status}: ${errBody.slice(0, 200)}`)
+      const msg = `HTTP ${res.status}: ${errBody.slice(0, 300)}`
+      console.error(`[APEX AI] API error ${msg}`)
+      lastClaudeError = msg
       return null
     }
 
@@ -313,7 +318,9 @@ BIAS DE ACCIÓN: Si ves 2+ confluencias técnicas (ABCD en PRZ, estructura rota,
     return decision
 
   } catch (err) {
-    console.error('[APEX AI] Decision failed:', err instanceof Error ? err.message : err)
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[APEX AI] Decision failed:', msg)
+    lastClaudeError = msg
     return null
   }
 }

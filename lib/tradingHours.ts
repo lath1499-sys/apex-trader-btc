@@ -22,7 +22,7 @@ export const TRADING_SESSIONS: TradingSession[] = [
     quality: 'avoid',
     reason: 'Liquidez minima, spreads amplios, movimientos manipulados',
     allowScalp: false, allowDayTrade: true, allowSwing: true,
-    minConfidence: 'ALTA',
+    minConfidence: 'MEDIA',
   },
   {
     name: 'Asia Opening',
