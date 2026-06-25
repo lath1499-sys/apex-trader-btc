@@ -383,6 +383,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     aiReasoning?: string
     aiDecision?: string
     portfolioCloses?: Array<{ id: string; side: string; pnl: string; reason: string }>
+    debug?: { claudeAttempted: boolean; claudeResult: string; fallbackResult: string; canTrade: boolean; activeCount: number; apiKeySet: boolean }
   } = { time, session: '', regime: '', signals: [], updates: [], errors: [], globalMarkets: null, macro: null }
 
   try {
@@ -804,6 +805,10 @@ export async function GET(req: Request): Promise<NextResponse> {
       ? { ...learnedWeights, minScoreAdjustment: Math.min(0, (learnedWeights?.minScoreAdjustment ?? 0) - 1) }
       : learnedWeights
 
+    if (activeCount >= 5) {
+      results.debug = { claudeAttempted: false, claudeResult: 'blocked_max_active', fallbackResult: 'skipped', canTrade: false, activeCount, apiKeySet: !!process.env.ANTHROPIC_API_KEY }
+    }
+
     if (activeCount < 5) {
       // ── PRIMARY: Ask Claude AI for trading decision ─────────────────────────
       const aiDecision: TradeDecision | null = await askClaudeForDecision({
@@ -849,6 +854,15 @@ export async function GET(req: Request): Promise<NextResponse> {
       const useAI  = aiDecision && aiDecision.action !== 'WAIT' && aiDecision.action !== 'CLOSE_EXISTING'
                      && aiDecision.entry > 0 && aiDecision.sl > 0
       const useRules = !aiDecision && !!fallbackSignal && !fallbackSignal.consolidation
+
+      results.debug = {
+        claudeAttempted: true,
+        claudeResult: aiDecision ? aiDecision.action : 'null_api_failed',
+        fallbackResult: fallbackSignal ? (fallbackSignal.consolidation ? 'consolidation' : `${fallbackSignal.side}_${fallbackSignal.tradeType}`) : 'null',
+        canTrade: !!(useAI || useRules),
+        activeCount,
+        apiKeySet: !!process.env.ANTHROPIC_API_KEY,
+      }
 
       // ── Agent memory ─────────────────────────────────────────────────────────
       const memorySb    = getDbClient()
