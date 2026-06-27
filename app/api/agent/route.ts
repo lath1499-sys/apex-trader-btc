@@ -795,9 +795,10 @@ export async function GET(req: Request): Promise<NextResponse> {
     const lastSignalTime = allSignals[0]?.createdAt
       ? new Date(allSignals[0].createdAt).getTime() : 0
     const hoursSinceLastSignal = (Date.now() - lastSignalTime) / 3_600_000
+    const daysSinceLastSignal  = Math.floor(hoursSinceLastSignal / 24)
     const permissiveMode = hoursSinceLastSignal > 48
     if (permissiveMode) {
-      console.log(`[APEX] Permissive mode — ${Math.round(hoursSinceLastSignal)}h since last signal, lowering thresholds`)
+      console.log(`[APEX] Permissive mode — ${Math.round(hoursSinceLastSignal)}h (${daysSinceLastSignal}d) since last signal`)
     }
 
     // Pass permissiveMode via learnedWeights override
@@ -811,7 +812,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 
     if (activeCount < 5) {
       // ── PRIMARY: Ask Claude AI for trading decision ─────────────────────────
-      const aiDecision: TradeDecision | null = await askClaudeForDecision({
+      const claudeCtx = {
         price,
         prevPrice:       prevStateForVoice?.lastPrice ?? price,
         inds, regime, session,
@@ -831,14 +832,29 @@ export async function GET(req: Request): Promise<NextResponse> {
         optionsData,
         perfStats,
         klines4h:        klines['4h'],
-      })
+        daysSinceLastSignal,
+      }
+      let aiDecision: TradeDecision | null = await askClaudeForDecision(claudeCtx)
 
       if (aiDecision) {
         results.aiDecision = aiDecision.action
         if (aiDecision.action === 'WAIT') {
-          results.waitReason   = aiDecision.waitingFor ?? 'Claude esperando mejor setup'
-          results.aiReasoning  = aiDecision.reasoning
+          results.waitReason  = aiDecision.waitingFor ?? 'Claude esperando mejor setup'
+          results.aiReasoning = aiDecision.reasoning
           console.log(`[APEX AI] WAIT — ${aiDecision.waitingFor ?? aiDecision.reasoning.slice(0, 80)}`)
+
+          // WAIT override: after 7+ days without a signal, force-look for a scalp
+          if (daysSinceLastSignal >= 7) {
+            console.log(`[APEX] ${daysSinceLastSignal}d without signal — re-prompting Claude to find a scalp`)
+            const forced = await askClaudeForDecision({ ...claudeCtx, forceScalpEvaluation: true })
+            if (forced && forced.action !== 'WAIT') {
+              aiDecision = forced
+              results.aiDecision  = forced.action
+              results.waitReason  = undefined
+              results.aiReasoning = undefined
+              console.log(`[APEX] Force-scalp succeeded: ${forced.action} ${forced.tradeType}`)
+            }
+          }
         }
       }
 
@@ -1143,7 +1159,7 @@ export async function GET(req: Request): Promise<NextResponse> {
               updated_at: new Date().toISOString(), ntfy_sent: true,
               pnl: null, pnl_r: null, closed_at: null, exit_price: null, close_reason: null,
               tp1_hit: false, tp2_hit: false, sl_warning_fired: false,
-              expiry_warning_fired: false, max_lev: rec.idea.maxLev ?? 5,
+              expiry_warning_fired: false,
               tp1_close_pct: sCfg.tp1Pct, tp2_close_pct: sCfg.tp2Pct, tp3_close_pct: sCfg.tp3Pct,
               tp1_banked_pnl: 0, tp2_banked_pnl: 0, total_banked_pnl: 0, remaining_size_pct: 100,
               tp1_rr: sTP1RR, tp2_rr: sTP2RR, tp3_rr: sTP3RR,
@@ -1330,7 +1346,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 
     // 4H deep analysis — fire if 4+ hours since last deep send
     if (hrsSinceDeep >= 4 && ntfyTopic) {
-      const deepAnalysis = generateDeepAnalysis(
+      const deepAnalysis = await generateDeepAnalysis(
         price,
         inds,
         regime,

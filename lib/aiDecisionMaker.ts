@@ -106,6 +106,8 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
     globalMarkets, socialSentiment,
     abcdAnalysis, optionsData,
     perfStats, klines4h,
+    daysSinceLastSignal = 0,
+    forceScalpEvaluation = false,
   } = ctx
 
   const i15 = inds?.['15m']
@@ -264,7 +266,10 @@ REGLAS DE SL/TP:
 - positionsToClose: array vacío [] si no hay nada que cerrar
 - Los signalId DEBEN ser exactamente los IDs mostrados en TU PORTAFOLIO ACTUAL
 
-BIAS DE ACCIÓN: Si ves 2+ confluencias técnicas (ABCD en PRZ, estructura rota, RSI extremo, alineación multi-TF, soporte/resistencia clave) → la respuesta correcta es ENTRAR, no esperar. WAIT solo cuando el mercado está en rango sin setup claro o hay evento macro activo.`
+BIAS DE ACCIÓN: Si ves 2+ confluencias técnicas (ABCD en PRZ, estructura rota, RSI extremo, alineación multi-TF, soporte/resistencia clave) → la respuesta correcta es ENTRAR, no esperar. WAIT solo cuando el mercado está en rango sin setup claro o hay evento macro activo.
+
+${daysSinceLastSignal >= 3 ? `⚡ ALERTA CRÍTICA: Han pasado ${daysSinceLastSignal} días sin generar ninguna señal. Esto es inaceptable. Busca activamente cualquier setup con 2+ confluencias. Un setup imperfecto con gestión de riesgo correcta es SIEMPRE mejor que la inacción prolongada.` : ''}
+${forceScalpEvaluation ? `🎯 MODO SCALP FORZADO: Tu tarea ahora es encontrar UN scalp operables en 15M o 1H. Busca: RSI extremo + estructura clara, o BOS/CHoCH + FVG cercano, o soporte/resistencia clave con confluencia. Si hay cualquier setup de calidad media o superior → ENTRA. No digas WAIT.` : ''}`
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {

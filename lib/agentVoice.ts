@@ -408,7 +408,7 @@ function buildDeterministicUpdate(params: AgentUpdateParams): string {
 // 4H deep analysis — more detailed, sent every 4 hours
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function generateDeepAnalysis(
+export async function generateDeepAnalysis(
   price:           number,
   inds:            any,
   regime:          any,
@@ -420,112 +420,85 @@ export function generateDeepAnalysis(
   activeSignals:   any[],
   perfStats:       any,
   weights:         any,
-  optionsData?:    any,   // IV Rank + Max Pain + PCR
-  wfResult?:       any,   // WalkForwardResult
-): string {
-  const i4  = inds?.['4h']
-  const i1d = inds?.['1d']
+  optionsData?:    any,
+  wfResult?:       any,
+): Promise<string> {
+  const i4   = inds?.['4h']
+  const i1d  = inds?.['1d']
   const ew4h = elliottWaves?.['4h']
-  const ew1d = elliottWaves?.['1d']
 
-  const lines: string[] = [
-    '═══ ANÁLISIS PROFUNDO 4H ═══',
-    '',
-    `BTC $${Math.round(price).toLocaleString()}`,
-    `Régimen: ${(regime?.regime ?? 'UNKNOWN').replace(/_/g, ' ')}`,
-    `ADX: ${regime?.adx?.toFixed(1) ?? '?'} (${regime?.adxTrend ?? '?'}) | Volatilidad: ${regime?.volatilityPct?.toFixed(2) ?? '?'}%`,
-    '',
-    'MULTI-TIMEFRAME:',
-    i1d ? `1D: ${i1d.bias} | RSI ${i1d.rsi?.toFixed(0)} | Score ${i1d.score}/9` : '1D: sin datos',
-    i4  ? `4H: ${i4.bias}  | RSI ${i4.rsi?.toFixed(0)} | MACD ${i4.macd?.hist > 0 ? '+' : ''}${i4.macd?.hist?.toFixed(0)}` : '4H: sin datos',
-    '',
-  ]
+  // ── Try Claude first for a narrative deep analysis ────────────────────────
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (apiKey) {
+    const regimeTxt = (regime?.regime ?? 'UNKNOWN').replace(/_/g, ' ')
+    const strongPats = (patterns ?? []).filter((p: any) => p.pattern?.strength === 3).slice(0, 3)
+      .map((p: any) => `${p.pattern.name} (${p.confidence}%)`).join(', ')
+    const activeSigTxt = activeSignals.length > 0
+      ? activeSignals.map((s: any) => {
+          const pnl = s.side === 'LONG' ? (price - s.entry) / s.entry * 100 : (s.entry - price) / s.entry * 100
+          return `${s.side} ${s.tradeType} @$${Math.round(s.entry).toLocaleString()} P&L:${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
+        }).join(' | ')
+      : 'ninguna'
 
-  // Elliott waves
-  if (ew4h?.currentWave !== 'unclear') {
-    lines.push('ESTRUCTURA ELLIOTT:')
-    lines.push(`1D: Onda ${ew1d?.currentWave ?? '?'} ${ew1d?.direction ?? ''}`)
-    lines.push(`4H: Onda ${ew4h?.currentWave} ${ew4h?.direction} | Confianza: ${ew4h?.confidence}`)
-    if (ew4h?.nextTarget)   lines.push(`Target: $${Math.round(ew4h.nextTarget).toLocaleString()}`)
-    if (ew4h?.invalidation) lines.push(`Invalidación: $${Math.round(ew4h.invalidation).toLocaleString()}`)
-    lines.push('')
+    const deepPrompt = `Eres APEX, trader senior BTC 15 años. Análisis profundo cada 4 horas.
+Tu jefe es un trader experimentado — necesita OPINIÓN y NARRATIVA, no datos en crudo.
+
+DATOS (no los repitas literalmente):
+BTC $${Math.round(price).toLocaleString()} | Régimen: ${regimeTxt} | ADX: ${regime?.adx?.toFixed(1) ?? '?'}
+1D: ${i1d?.bias ?? '?'} RSI${i1d?.rsi?.toFixed(0) ?? '?'} Score${i1d?.score ?? '?'}
+4H: ${i4?.bias ?? '?'} RSI${i4?.rsi?.toFixed(0) ?? '?'} MACD${(i4?.macd?.hist ?? 0) > 0 ? '+' : ''}${i4?.macd?.hist?.toFixed(0) ?? '?'}
+Elliott 4H: Onda ${ew4h?.currentWave ?? '?'} ${ew4h?.direction ?? ''} → $${ew4h?.nextTarget ? Math.round(ew4h.nextTarget).toLocaleString() : 'N/A'}
+Patrones fuertes: ${strongPats || 'ninguno'}
+Fed: ${macroIndicators?.fedRate?.current?.toFixed(2) ?? '?'}% | CPI: ${macroIndicators?.cpi?.yoy?.toFixed(1) ?? '?'}% | Liquidez global: ${globalLiquidity?.trend ?? 'N/A'}
+IV Rank: ${optionsData?.iv?.ivRank ?? 'N/A'}/100 | Max Pain: $${optionsData?.maxPain ? Math.round(optionsData.maxPain).toLocaleString() : 'N/A'}
+Señales activas: ${activeSigTxt}
+Rendimiento: ${perfStats?.total > 0 ? `${perfStats.total} señales | WR ${perfStats.winRate}% | P&L ${perfStats.totalPnl >= 0 ? '+' : ''}${perfStats.totalPnl?.toFixed(1)}%` : 'sin historial suficiente'}
+
+Escribe análisis profundo de 4H en máximo 20 líneas:
+1. Narrativa de la estructura actual (qué está haciendo el mercado realmente)
+2. Los 2-3 factores más relevantes ahora conectados entre sí
+3. Macro y su impacto específico en BTC esta semana
+4. Estado de las señales activas (si las hay)
+5. Sesgo y los niveles clave que cambian el escenario
+Sin headers tipo ═══. Sin bullets. Párrafos cortos. Primera persona con opinión.`
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 600, messages: [{ role: 'user', content: deepPrompt }] }),
+        signal: AbortSignal.timeout(20_000),
+      })
+      if (res.ok) {
+        const data = await res.json() as { content?: Array<{ text?: string }> }
+        const text = data.content?.[0]?.text
+        if (text) return `📊 Análisis 4H — APEX\n\n${text}`
+      }
+    } catch { /* fall through to deterministic */ }
   }
 
-  // Top candle patterns
-  const strongPatterns = (patterns ?? [])
-    .filter((p: any) => p.pattern?.strength === 3)
-    .slice(0, 3)
-  if (strongPatterns.length > 0) {
-    lines.push('PATRONES VELAS (4H):')
-    strongPatterns.forEach((p: any) => {
-      lines.push(`• ${p.pattern.name} (${p.confidence}%) — ${p.pattern.tradingAdvice}`)
-    })
-    lines.push('')
+  // ── Deterministic fallback (no data dump headers) ─────────────────────────
+  const lines: string[] = [`BTC $${Math.round(price).toLocaleString()} — ${(regime?.regime ?? 'UNKNOWN').replace(/_/g, ' ')}`]
+  if (i1d && i4) {
+    lines.push(``)
+    lines.push(`Estructura: 1D ${i1d.bias} RSI${i1d.rsi?.toFixed(0)} | 4H ${i4.bias} RSI${i4.rsi?.toFixed(0)} MACD${i4.macd?.hist > 0 ? '+' : ''}${i4.macd?.hist?.toFixed(0)}`)
   }
-
-  // Macro
-  if (macroIndicators) {
-    lines.push('MACRO:')
-    lines.push(`Fed: ${macroIndicators.fedRate?.current?.toFixed(2)}% (${macroIndicators.fedRate?.trend})`)
-    lines.push(`CPI: ${macroIndicators.cpi?.yoy?.toFixed(1)}% YoY`)
-    lines.push(`M2:  ${macroIndicators.m2?.yoyChange?.toFixed(1)}% YoY (${macroIndicators.m2?.trend})`)
-    if (fedExpectations) {
-      lines.push(`Expectativas Fed: ${fedExpectations.cutProbability}% recorte | ${fedExpectations.holdProbability}% pausa`)
-    }
-    if (globalLiquidity) {
-      lines.push(`Liquidez global: ${globalLiquidity.trend} (${globalLiquidity.liquidityIndex}/100)`)
-    }
-    lines.push(`Señal macro: ${(macroIndicators.overallSignal ?? '').replace(/_/g, ' ')}`)
-    lines.push('')
+  if (ew4h?.currentWave && ew4h.currentWave !== 'unclear') {
+    lines.push(`Elliott 4H: Onda ${ew4h.currentWave} ${ew4h.direction} — target $${ew4h.nextTarget ? Math.round(ew4h.nextTarget).toLocaleString() : 'N/A'}`)
   }
-
-  // Agent performance
-  if (perfStats?.total > 0) {
-    lines.push('RENDIMIENTO AGENTE:')
-    const pnlSign = (perfStats.totalPnl ?? 0) >= 0 ? '+' : ''
-    lines.push(`${perfStats.total} señales | WR ${perfStats.winRate}% | P&L total ${pnlSign}${perfStats.totalPnl?.toFixed(1)}%`)
-    if ((weights?.currentStreak ?? 0) > 1) {
-      const streakType = weights.streakType === 'win' ? 'wins' : 'losses'
-      lines.push(`Racha: ${weights.currentStreak} ${streakType} seguidos`)
-    }
-    lines.push('')
-  }
-
-  // Active signals
   if (activeSignals.length > 0) {
-    lines.push(`SEÑALES ACTIVAS (${activeSignals.length}):`)
+    lines.push(``)
+    lines.push(`Señales activas:`)
     activeSignals.forEach(s => {
-      const pnl = s.side === 'LONG'
-        ? (price - s.entry) / s.entry * 100
-        : (s.entry - price) / s.entry * 100
-      const pnlStr = `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
-      lines.push(`${s.side} desde $${Math.round(s.entry).toLocaleString()} — ${pnlStr}`)
+      const pnl = s.side === 'LONG' ? (price - s.entry) / s.entry * 100 : (s.entry - price) / s.entry * 100
+      lines.push(`${s.side} ${s.tradeType} @$${Math.round(s.entry).toLocaleString()} — ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`)
     })
   } else {
-    lines.push('Sin señales activas.')
+    lines.push(`Sin señales activas.`)
   }
-
-  // ── Options + IV Rank ─────────────────────────────────────────────────────
-  if (optionsData?.iv) {
-    const iv = optionsData.iv
-    lines.push('')
-    lines.push('VOLATILIDAD IMPLÍCITA (DERIBIT):')
-    lines.push(`DVOL: ${iv.currentIV.toFixed(1)}% | IVR: ${iv.ivRank}/100 | IVP: ${iv.ivPercentile}%`)
-    lines.push(`Rango 30D: ${iv.min30d.toFixed(0)}–${iv.max30d.toFixed(0)}% | Régimen: ${iv.regime.toUpperCase()}`)
-    lines.push(`Señal: ${iv.signal === 'buy_vol' ? 'opciones baratas — favorece comprar volatilidad' : iv.signal === 'sell_vol' ? 'opciones caras — favorece vender volatilidad' : 'IV en rango normal'}`)
-    if (optionsData.maxPain) {
-      lines.push(`Max Pain: $${Math.round(optionsData.maxPain).toLocaleString()} (${optionsData.maxPainDistance}%) | PCR: ${optionsData.putCallRatio?.toFixed(2)} — ${optionsData.sentiment}`)
-    }
+  if (perfStats?.total > 0) {
+    lines.push(``)
+    lines.push(`Rendimiento: ${perfStats.total} señales | WR ${perfStats.winRate}% | P&L total ${perfStats.totalPnl >= 0 ? '+' : ''}${perfStats.totalPnl?.toFixed(1)}%`)
   }
-
-  // ── Walk-Forward validation ───────────────────────────────────────────────
-  if (wfResult?.isReliable) {
-    lines.push('')
-    lines.push('WALK-FORWARD (validación señales reales):')
-    lines.push(`Grado: ${wfResult.grade} | WR OOS: ${(wfResult.avgTestWR * 100).toFixed(1)}% | PF: ${wfResult.totalTestPF.toFixed(2)}x`)
-    lines.push(`Sobreajuste: ${(wfResult.overfitScore * 100).toFixed(1)}% | Consistencia: ${(wfResult.consistency * 100).toFixed(0)}%`)
-    if (wfResult.recommendation) lines.push(wfResult.recommendation.split('\n')[0])
-  }
-
   return lines.join('\n')
 }
