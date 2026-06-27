@@ -134,11 +134,18 @@ ${(recentlyClosed ?? []).map((s: any) => {
 }).join('\n')}
 INSTRUCCIÓN: Menciona estas cierres en tu análisis. NO digas que están activas.` : ''}
 
-${capitalState ? `
+${capitalState ? (() => {
+  const dynTarget    = capitalState.monthlyProfitTarget ?? (capitalState.monthlyStartBalance ?? 0) * 0.15
+  const progressPct  = dynTarget > 0 ? Math.min(100, ((capitalState.monthlyPnl ?? 0) / dynTarget) * 100) : 0
+  const stageTxt     = capitalState.drawdownStage === 3 ? '🛑 HARD STOP'
+                     : capitalState.drawdownStage === 2 ? '⚠️ SURVIVAL (2% riesgo)'
+                     : '✅ NORMAL (5% riesgo)'
+  return `
 GESTIÓN DE CAPITAL:
 Balance: $${capitalState.availableBalance?.toFixed(2) ?? 'N/A'} | Desplegado: $${capitalState.deployedCapital?.toFixed(2) ?? '0'}
-P&L este mes: ${(capitalState.monthlyPnlPct ?? 0) >= 0 ? '+' : ''}${(capitalState.monthlyPnlPct ?? 0).toFixed(2)}% ($${capitalState.monthlyPnl?.toFixed(0) ?? '0'} / $${capitalState.monthlyProfitTarget ?? 500} target)
-Estado: ${capitalState.canOpenNewTrade ? 'PUEDE abrir nuevos trades' : 'PAUSADO — ' + capitalState.reason}` : ''}
+P&L este mes: ${(capitalState.monthlyPnlPct ?? 0) >= 0 ? '+' : ''}${(capitalState.monthlyPnlPct ?? 0).toFixed(2)}% — Target: $${dynTarget.toFixed(0)} (15%) — Progreso: ${progressPct.toFixed(0)}%
+Estado: ${stageTxt} | ${capitalState.canOpenNewTrade ? 'Puede abrir trades' : 'PAUSADO — ' + capitalState.reason}`
+})() : ''}
 ${memory?.lastAnalysisAt ? `SESGO ANTERIOR (hace ${Math.round((Date.now() - new Date(memory.lastAnalysisAt).getTime()) / 60_000)} min): ${memory.lastBias}${memory.changeReason ? ` — "${memory.changeReason.slice(0, 150)}"` : ''}
 Precio entonces: $${Math.round(memory.lastPrice).toLocaleString()} → ahora $${Math.round(price).toLocaleString()} (${((price - memory.lastPrice) / (memory.lastPrice || price) * 100).toFixed(2)}%)` : ''}
 ${opinionChanges.length > 0 ? `\nCAMBIOS DETECTADOS:\n${opinionChanges.map((c: string) => `• ${c}`).join('\n')}` : ''}

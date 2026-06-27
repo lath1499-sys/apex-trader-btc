@@ -1,6 +1,5 @@
 // APEX — Capital Management System
-// Tracks available balance, deployed capital, monthly P&L, and trade limits.
-// Balance is configured manually in the UI (no Binance API key required).
+// Dynamic monthly target (15% of start balance) + 3-stage drawdown management.
 
 import { createClient } from '@supabase/supabase-js'
 
@@ -14,9 +13,6 @@ function getServerSb() {
 export interface CapitalConfig {
   maxCapitalDeployedPct: number   // 0-1, e.g. 0.70
   maxPerTradePct:        number   // 0-1, e.g. 0.30
-  riskPerTradePct:       number   // 0-1, e.g. 0.05
-  monthlyProfitTarget:   number   // USD, e.g. 500
-  maxDrawdownPct:        number   // 0-1, e.g. 0.15
 }
 
 export interface CapitalState {
@@ -26,8 +22,11 @@ export interface CapitalState {
   monthlyStartBalance: number
   monthlyPnl:          number
   monthlyPnlPct:       number
+  monthlyProfitTarget: number   // 15% of start balance
   targetReached:       boolean
-  drawdownTriggered:   boolean
+  drawdownStage:       1 | 2 | 3  // 1=normal, 2=survival, 3=hard stop
+  drawdownPct:         number      // negative = loss
+  effectiveRiskPct:    number      // 0.05 or 0.02 or 0
   canOpenNewTrade:     boolean
   maxPositionSize:     number
   reason:              string
@@ -36,34 +35,34 @@ export interface CapitalState {
 export const DEFAULT_CAPITAL_CONFIG: CapitalConfig = {
   maxCapitalDeployedPct: 0.70,
   maxPerTradePct:        0.30,
-  riskPerTradePct:       0.05,
-  monthlyProfitTarget:   500,
-  maxDrawdownPct:        0.15,
 }
 
-export async function getCapitalState(config: CapitalConfig = DEFAULT_CAPITAL_CONFIG): Promise<CapitalState> {
+const WARNING_PCT   = -15   // enter survival mode (5% → 2% risk)
+const HARD_STOP_PCT = -20   // full trading pause
+const RECOVERY_PCT  =   0   // from survival back to normal
+
+export async function getCapitalState(
+  config: CapitalConfig = DEFAULT_CAPITAL_CONFIG,
+  ntfyTopic?: string,
+): Promise<CapitalState> {
   const sb = getServerSb()
 
-  // 1. Read stored balance from Supabase config
+  // 1. Read stored config from Supabase
   let monthlyStartBalance = 0
-  let storedMonthlyTarget = config.monthlyProfitTarget
+  let maxCapitalDeployedPct = config.maxCapitalDeployedPct
+  let maxPerTradePct        = config.maxPerTradePct
+
   if (sb) {
     const { data: cfg } = await Promise.resolve(
       sb.from('apex_capital_config')
-        .select('monthly_start_balance, monthly_profit_target, max_capital_deployed_pct, max_per_trade_pct, risk_per_trade_pct, max_drawdown_pct')
+        .select('monthly_start_balance, max_capital_deployed_pct, max_per_trade_pct')
         .eq('id', 'default')
         .single()
     ).catch(() => ({ data: null })) as { data: Record<string, number> | null }
     if (cfg) {
-      monthlyStartBalance = cfg.monthly_start_balance  ?? 0
-      storedMonthlyTarget = cfg.monthly_profit_target  ?? config.monthlyProfitTarget
-      config = {
-        maxCapitalDeployedPct: cfg.max_capital_deployed_pct ?? config.maxCapitalDeployedPct,
-        maxPerTradePct:        cfg.max_per_trade_pct        ?? config.maxPerTradePct,
-        riskPerTradePct:       cfg.risk_per_trade_pct       ?? config.riskPerTradePct,
-        monthlyProfitTarget:   storedMonthlyTarget,
-        maxDrawdownPct:        cfg.max_drawdown_pct         ?? config.maxDrawdownPct,
-      }
+      monthlyStartBalance   = cfg.monthly_start_balance   ?? 0
+      maxCapitalDeployedPct = cfg.max_capital_deployed_pct ?? config.maxCapitalDeployedPct
+      maxPerTradePct        = cfg.max_per_trade_pct        ?? config.maxPerTradePct
     }
   }
 
@@ -106,37 +105,94 @@ export async function getCapitalState(config: CapitalConfig = DEFAULT_CAPITAL_CO
     }, 0)
   }
 
-  // 4. Compute current balance
-  const availableBalance = monthlyStartBalance > 0
-    ? monthlyStartBalance + monthlyPnl
-    : 1000  // fallback: $1000 if not configured
-  const freeCapital     = Math.max(0, availableBalance - deployedCapital)
-  const monthlyPnlPct   = monthlyStartBalance > 0
-    ? (monthlyPnl / monthlyStartBalance) * 100
-    : 0
+  // 4. Balance + dynamic target (15% of start balance)
+  const availableBalance    = monthlyStartBalance > 0 ? monthlyStartBalance + monthlyPnl : 1000
+  const freeCapital         = Math.max(0, availableBalance - deployedCapital)
+  const drawdownPct         = monthlyStartBalance > 0 ? (monthlyPnl / monthlyStartBalance) * 100 : 0
+  const monthlyProfitTarget = monthlyStartBalance * 0.15
 
-  // 5. Limits
-  const maxDeployable   = availableBalance * config.maxCapitalDeployedPct
+  // 5. Capital limits
+  const maxDeployable   = availableBalance * maxCapitalDeployedPct
   const remainingRoom   = Math.max(0, maxDeployable - deployedCapital)
-  const maxPerTrade     = availableBalance * config.maxPerTradePct
+  const maxPerTrade     = availableBalance * maxPerTradePct
   const maxPositionSize = Math.min(remainingRoom, maxPerTrade)
 
-  // 6. Stop conditions
-  const targetReached      = monthlyPnl >= config.monthlyProfitTarget
-  const drawdownTriggered  = monthlyStartBalance > 0 && monthlyPnl < -(monthlyStartBalance * config.maxDrawdownPct)
+  // 6. Monthly target check
+  const targetReached = monthlyStartBalance > 0 && monthlyPnl >= monthlyProfitTarget
 
+  // 7. 3-stage drawdown system
+  let drawdownStage: 1 | 2 | 3
+  let effectiveRiskPct: number
   let canOpenNewTrade = true
-  let reason = 'OK'
+  let reason = 'Normal'
 
+  if (drawdownPct <= HARD_STOP_PCT) {
+    drawdownStage    = 3
+    effectiveRiskPct = 0
+    canOpenNewTrade  = false
+    reason = `Hard stop: drawdown ${drawdownPct.toFixed(1)}% superó -20%. Sin trades hasta el próximo mes.`
+  } else if (drawdownPct <= WARNING_PCT) {
+    drawdownStage    = 2
+    effectiveRiskPct = 0.02
+    reason = `Survival mode: drawdown ${drawdownPct.toFixed(1)}%. Riesgo reducido a 2% por trade.`
+  } else {
+    drawdownStage    = 1
+    effectiveRiskPct = 0.05
+  }
+
+  // Recovery: if in survival and PnL recovers to >= 0 → back to normal
+  if (drawdownStage === 2 && drawdownPct >= RECOVERY_PCT) {
+    drawdownStage    = 1
+    effectiveRiskPct = 0.05
+    reason = 'Recuperado a BE — riesgo restaurado a 5%'
+  }
+
+  // Monthly target overrides canOpenNewTrade
   if (targetReached) {
     canOpenNewTrade = false
     reason = `Target mensual alcanzado (+$${monthlyPnl.toFixed(0)}). Pausa hasta el próximo mes.`
-  } else if (drawdownTriggered) {
+  }
+
+  // Insufficient capital
+  if (canOpenNewTrade && maxPositionSize < 50 && monthlyStartBalance > 0) {
     canOpenNewTrade = false
-    reason = `Drawdown máximo activado (-$${Math.abs(monthlyPnl).toFixed(0)}). Pausa de trading.`
-  } else if (maxPositionSize < 50 && monthlyStartBalance > 0) {
-    canOpenNewTrade = false
-    reason = `Capital libre insuficiente ($${maxPositionSize.toFixed(0)} < $50 mínimo).`
+    reason = `Capital insuficiente ($${maxPositionSize.toFixed(0)} disponible, mínimo $50).`
+  }
+
+  // 8. Persist drawdown stage change to Supabase + NTFY alert
+  if (sb) {
+    const { data: currentCfg } = await Promise.resolve(
+      sb.from('apex_capital_config').select('drawdown_stage').eq('id', 'default').single()
+    ).catch(() => ({ data: null })) as { data: { drawdown_stage: number } | null }
+
+    if (currentCfg && currentCfg.drawdown_stage !== drawdownStage) {
+      await Promise.resolve(
+        sb.from('apex_capital_config').update({
+          drawdown_stage:             drawdownStage,
+          risk_per_trade_pct:         effectiveRiskPct,
+          drawdown_stage_updated_at:  new Date().toISOString(),
+          updated_at:                 new Date().toISOString(),
+        }).eq('id', 'default')
+      ).catch(() => {})
+
+      console.log(`[CAPITAL] Stage: ${currentCfg.drawdown_stage} → ${drawdownStage} | risk: ${(effectiveRiskPct * 100).toFixed(0)}%`)
+
+      if (ntfyTopic) {
+        const msgs: Record<number, string> = {
+          1: `✅ APEX — Riesgo restaurado al 5%\nDrawdown recuperado. Trading normal reanudado.`,
+          2: `⚠️ APEX — SURVIVAL MODE\nDrawdown: ${drawdownPct.toFixed(1)}%\nRiesgo reducido a 2% hasta recuperar BE o llegar a -20%.`,
+          3: `🛑 APEX — TRADING PAUSADO\nDrawdown: ${drawdownPct.toFixed(1)}% superó el -20%.\nSin trades hasta el próximo mes.`,
+        }
+        await fetch(`https://ntfy.sh/${ntfyTopic}`, {
+          method: 'POST',
+          headers: {
+            Title:    `APEX Capital Stage ${drawdownStage}`,
+            Priority: drawdownStage === 3 ? '5' : '4',
+          },
+          body: msgs[drawdownStage] ?? '',
+        }).catch(() => {})
+      }
+    }
   }
 
   return {
@@ -145,9 +201,12 @@ export async function getCapitalState(config: CapitalConfig = DEFAULT_CAPITAL_CO
     freeCapital,
     monthlyStartBalance,
     monthlyPnl,
-    monthlyPnlPct,
+    monthlyPnlPct: drawdownPct,
+    monthlyProfitTarget,
     targetReached,
-    drawdownTriggered,
+    drawdownStage,
+    drawdownPct,
+    effectiveRiskPct,
     canOpenNewTrade,
     maxPositionSize,
     reason,
@@ -158,7 +217,6 @@ export async function resetMonthlyTracking(balanceOverride?: number): Promise<vo
   const sb = getServerSb()
   if (!sb) return
 
-  // Use override if provided, else keep current stored balance
   let balance = balanceOverride
   if (balance == null) {
     const { data: cfg } = await Promise.resolve(
@@ -167,11 +225,16 @@ export async function resetMonthlyTracking(balanceOverride?: number): Promise<vo
     balance = cfg?.monthly_start_balance ?? 1000
   }
 
-  await sb.from('apex_capital_config').upsert({
+  const monthlyTarget = balance * 0.15
+  await Promise.resolve(sb.from('apex_capital_config').upsert({
     id:                   'default',
     monthly_start_balance: balance,
+    monthly_target_pct:   0.15,
+    drawdown_stage:       1,
+    risk_per_trade_pct:   0.05,
     month_reset_at:       new Date().toISOString(),
     updated_at:           new Date().toISOString(),
-  })
-  console.log(`[CAPITAL] Monthly reset — start balance: $${balance?.toFixed(2)}`)
+  })).catch(() => {})
+
+  console.log(`[CAPITAL] Monthly reset — balance: $${balance.toFixed(2)} | target: $${monthlyTarget.toFixed(2)} (15%)`)
 }

@@ -802,7 +802,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     }
 
     // Capital state — injected into Claude context and brief
-    const capitalState = await getCapitalState(DEFAULT_CAPITAL_CONFIG).catch(() => null)
+    const capitalState = await getCapitalState(DEFAULT_CAPITAL_CONFIG, ntfyTopic).catch(() => null)
 
     // ── 4. Generate new Normal signal ─────────────────────────────────────────
     const activeCount  = active.filter(s => s.idea.tradeType !== 'Scalp').length
@@ -850,12 +850,16 @@ export async function GET(req: Request): Promise<NextResponse> {
         perfStats,
         klines4h:        klines['4h'],
         daysSinceLastSignal,
-        capitalContext: capitalState ? `
-Balance Binance: $${capitalState.availableBalance.toFixed(2)}
-Capital desplegado: $${capitalState.deployedCapital.toFixed(2)} (${((capitalState.deployedCapital / Math.max(1, capitalState.availableBalance)) * 100).toFixed(0)}%)
-Disponible para nuevo trade: $${capitalState.maxPositionSize.toFixed(2)}
-P&L este mes: ${capitalState.monthlyPnlPct >= 0 ? '+' : ''}${capitalState.monthlyPnlPct.toFixed(2)}% ($${capitalState.monthlyPnl.toFixed(0)} acumulado este mes)
-`.trim() : undefined,
+        capitalContext: capitalState ? (() => {
+          const stageLabels: Record<number, string> = { 1: 'NORMAL (5% riesgo)', 2: 'SURVIVAL (2% riesgo)', 3: 'HARD STOP' }
+          const dynTarget = capitalState.monthlyProfitTarget ?? capitalState.monthlyStartBalance * 0.15
+          const progressPct = dynTarget > 0 ? Math.min(100, (capitalState.monthlyPnl / dynTarget) * 100) : 0
+          return `Balance Binance: $${capitalState.availableBalance.toFixed(2)}
+Capital desplegado: $${capitalState.deployedCapital.toFixed(2)} | Disponible: $${capitalState.maxPositionSize.toFixed(2)}
+P&L este mes: ${capitalState.monthlyPnlPct >= 0 ? '+' : ''}${capitalState.monthlyPnlPct.toFixed(2)}% ($${capitalState.monthlyPnl.toFixed(0)})
+Target mensual: $${dynTarget.toFixed(0)} (15% de $${capitalState.monthlyStartBalance.toFixed(0)}) | Progreso: ${progressPct.toFixed(0)}%
+Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectivo: ${((capitalState.effectiveRiskPct ?? 0.05) * 100).toFixed(0)}%${capitalState.drawdownStage === 2 ? '\n⚠️ Survival mode — solo setups de alta calidad' : ''}${capitalState.drawdownStage === 3 ? '\n🛑 Hard stop — NO abrir trades nuevos' : ''}`
+        })() : undefined,
       }
       let aiDecision: TradeDecision | null = await askClaudeForDecision(claudeCtx)
 

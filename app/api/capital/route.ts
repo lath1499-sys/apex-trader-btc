@@ -23,9 +23,6 @@ export async function GET() {
     const cfgForState = {
       maxCapitalDeployedPct: config?.max_capital_deployed_pct ?? DEFAULT_CAPITAL_CONFIG.maxCapitalDeployedPct,
       maxPerTradePct:        config?.max_per_trade_pct        ?? DEFAULT_CAPITAL_CONFIG.maxPerTradePct,
-      riskPerTradePct:       config?.risk_per_trade_pct       ?? DEFAULT_CAPITAL_CONFIG.riskPerTradePct,
-      monthlyProfitTarget:   config?.monthly_profit_target    ?? DEFAULT_CAPITAL_CONFIG.monthlyProfitTarget,
-      maxDrawdownPct:        config?.max_drawdown_pct         ?? DEFAULT_CAPITAL_CONFIG.maxDrawdownPct,
     }
 
     const state = await getCapitalState(cfgForState).catch(() => null)
