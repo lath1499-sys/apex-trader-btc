@@ -24,6 +24,8 @@ export interface AgentUpdateParams {
   fvgs:            any
   liquidity:       any
   activeSignals:   any[]
+  recentlyClosed?: any[]
+  capitalState?:   any
   opinionChanges:  string[]
   patternMatch:    any
   globalMarkets:   any
@@ -35,15 +37,38 @@ export interface AgentUpdateParams {
   memory?:          { lastBias: string; lastPrice: number; lastAnalysisAt: string | null; changeReason: string | null } | null
 }
 
+// ── Fresh signal state — re-queries Supabase AFTER all closes are saved ──────
+export async function getFreshSignalState(sb: any): Promise<{ activeSignals: any[]; recentlyClosed: any[] }> {
+  try {
+    const [activeRes, closedRes] = await Promise.allSettled([
+      sb.from('apex_signals')
+        .select('*')
+        .in('status', ['active', 'tp1_hit', 'tp2_hit'])
+        .order('created_at', { ascending: false }),
+      sb.from('apex_signals')
+        .select('*')
+        .in('status', ['sl_hit', 'tp3_hit', 'closed_manual', 'breakeven'])
+        .gte('closed_at', new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString())
+        .order('closed_at', { ascending: false })
+        .limit(3),
+    ])
+    const activeSignals  = activeRes.status  === 'fulfilled' ? (activeRes.value.data  ?? []) : []
+    const recentlyClosed = closedRes.status  === 'fulfilled' ? (closedRes.value.data  ?? []) : []
+    return { activeSignals, recentlyClosed }
+  } catch {
+    return { activeSignals: [], recentlyClosed: [] }
+  }
+}
+
 // ── Claude API call for rich, intelligent voice ────────────────────────────
 async function callClaudeForUpdate(p: AgentUpdateParams): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return null
 
-  const { price, prevPrice, inds, regime, session, activeSignals, opinionChanges,
-          mkt, whaleAlert, macroSentiment, macroIndicators, fedExpectations,
-          globalMarkets, elliottWaves, fvgs, liquidity, optionsData, news,
-          socialSentiment, abcdAnalysis, memory } = p
+  const { price, prevPrice, inds, regime, session, activeSignals, recentlyClosed,
+          capitalState, opinionChanges, mkt, whaleAlert, macroSentiment,
+          macroIndicators, fedExpectations, globalMarkets, elliottWaves, fvgs,
+          liquidity, optionsData, news, socialSentiment, abcdAnalysis, memory } = p
 
   const i4   = inds?.['4h']
   const i1   = inds?.['1h']
@@ -87,18 +112,33 @@ ${socialSentiment ? `Social Galaxy Score: ${socialSentiment.galaxyScore} | ${soc
 NOTICIAS:
 ${(news ?? []).slice(0, 3).map((n: any) => `• ${String(n.title ?? '').slice(0, 90)} [${n.tag ?? 'neutral'}]`).join('\n') || '(Sin noticias recientes)'}
 
-SEÑALES ACTIVAS (${activeSignals.length}):
+ESTADO SEÑALES (datos frescos de DB — usa ESTO, no estado anterior):
 ${activeSignals.length > 0
   ? activeSignals.map((s: any) => {
       const isLong  = s.side === 'LONG'
-      const pnl     = isLong ? (price - s.entry) / s.entry * 100 : (s.entry - price) / s.entry * 100
-      const slDist  = Math.abs(price - s.sl) / s.entry * 100
-      const tp1Dist = isLong ? (s.tp1 - price) / price * 100 : (price - s.tp1) / price * 100
-      const hrs     = Math.round((Date.now() - new Date(s.createdAt).getTime()) / 3_600_000)
-      return `${s.side} ${s.tradeType} @$${Math.round(s.entry).toLocaleString()} | P&L:${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% | SL:${slDist.toFixed(1)}% lejos | TP1:${tp1Dist.toFixed(1)}% lejos | TP1hit:${s.tp1Hit ? 'SI' : 'NO'} | ${hrs}h`
+      const entry   = s.entry ?? s.idea_entry ?? 0
+      const sl      = s.sl    ?? s.idea_sl    ?? 0
+      const tp1     = s.tp1   ?? s.idea_tp1   ?? 0
+      const pnl     = isLong ? (price - entry) / entry * 100 : (entry - price) / entry * 100
+      const slDist  = Math.abs(price - sl) / entry * 100
+      const tp1Dist = isLong ? (tp1 - price) / price * 100 : (price - tp1) / price * 100
+      const hrs     = Math.round((Date.now() - new Date(s.created_at ?? s.createdAt).getTime()) / 3_600_000)
+      return `• ${s.side} ${s.trade_type ?? s.tradeType} @$${Math.round(entry).toLocaleString()} | P&L:${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% | SL:${slDist.toFixed(1)}% lejos | TP1:${tp1Dist.toFixed(1)}% lejos | ${hrs}h | Status:${s.status}`
     }).join('\n')
-  : 'Ninguna'}
+  : '✅ SIN SEÑALES ACTIVAS — capital libre'}
+${(recentlyClosed ?? []).length > 0 ? `
+CERRADAS EN ÚLTIMAS 2H:
+${(recentlyClosed ?? []).map((s: any) => {
+  const pnl = s.pnl ?? 0
+  return `• ${s.side ?? ''} ${s.trade_type ?? ''} cerrada $${s.exit_price ? Math.round(s.exit_price).toLocaleString() : 'mercado'} | P&L:${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% | ${s.close_reason ?? s.status}`
+}).join('\n')}
+INSTRUCCIÓN: Menciona estas cierres en tu análisis. NO digas que están activas.` : ''}
 
+${capitalState ? `
+GESTIÓN DE CAPITAL:
+Balance: $${capitalState.availableBalance?.toFixed(2) ?? 'N/A'} | Desplegado: $${capitalState.deployedCapital?.toFixed(2) ?? '0'}
+P&L este mes: ${(capitalState.monthlyPnlPct ?? 0) >= 0 ? '+' : ''}${(capitalState.monthlyPnlPct ?? 0).toFixed(2)}% ($${capitalState.monthlyPnl?.toFixed(0) ?? '0'} / $${capitalState.monthlyProfitTarget ?? 500} target)
+Estado: ${capitalState.canOpenNewTrade ? 'PUEDE abrir nuevos trades' : 'PAUSADO — ' + capitalState.reason}` : ''}
 ${memory?.lastAnalysisAt ? `SESGO ANTERIOR (hace ${Math.round((Date.now() - new Date(memory.lastAnalysisAt).getTime()) / 60_000)} min): ${memory.lastBias}${memory.changeReason ? ` — "${memory.changeReason.slice(0, 150)}"` : ''}
 Precio entonces: $${Math.round(memory.lastPrice).toLocaleString()} → ahora $${Math.round(price).toLocaleString()} (${((price - memory.lastPrice) / (memory.lastPrice || price) * 100).toFixed(2)}%)` : ''}
 ${opinionChanges.length > 0 ? `\nCAMBIOS DETECTADOS:\n${opinionChanges.map((c: string) => `• ${c}`).join('\n')}` : ''}

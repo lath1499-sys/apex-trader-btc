@@ -4,7 +4,7 @@ export type TabName =
   | 'dashboard' | 'chart' | 'cycle' | 'indicators' | 'vpvr'
   | 'orderbook' | 'heatmap' | 'onchain' | 'news'
   | 'tradeideas' | 'backtest' | 'calc' | 'alerts'
-  | 'journal' | 'sessions' | 'funding' | 'status' | 'compound'
+  | 'journal' | 'sessions' | 'funding' | 'capital' | 'status' | 'compound'
 
 export type ThemeName = 'terminal' | 'white' | 'midnight' | 'amber' | 'tradingview'
 

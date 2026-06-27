@@ -32,6 +32,12 @@ import TradeJournal     from '@/components/panels/TradeJournal'
 import SessionsPanel    from '@/components/panels/SessionsPanel'
 import FundingCalcPanel from '@/components/panels/FundingCalcPanel'
 import StatusPanel      from '@/components/panels/StatusPanel'
+import CapitalSettings  from '@/components/panels/CapitalSettings'
+
+function CapitalSettingsWithTheme() {
+  const T = useTheme()
+  return <CapitalSettings T={T as unknown as Record<string, string>} />
+}
 
 function TabContent({ tab }: { tab: TabName }) {
   switch (tab) {
@@ -52,6 +58,7 @@ function TabContent({ tab }: { tab: TabName }) {
     case 'journal':    return <TradeJournal />
     case 'sessions':   return <SessionsPanel />
     case 'funding':    return <FundingCalcPanel />
+    case 'capital':    return <CapitalSettingsWithTheme />
     case 'status':     return <StatusPanel />
     default:           return null
   }

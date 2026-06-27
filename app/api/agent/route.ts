@@ -23,11 +23,12 @@ import { fetchGlobalMarkets }                            from '@/lib/marketCorre
 import { ntfyBBSqueeze }                                 from '@/lib/ntfy'
 import { loadAgentState, saveAgentState, detectOpinionChange } from '@/lib/agentMemory'
 import { fetchSocialSentiment }       from '@/lib/socialSentiment'
-import { generateAgentUpdate, generateDeepAnalysis, type AgentUpdateParams } from '@/lib/agentVoice'
+import { generateAgentUpdate, generateDeepAnalysis, getFreshSignalState, type AgentUpdateParams } from '@/lib/agentVoice'
 import { detectElliottWaves }          from '@/lib/elliottWaves'
 import { fetchWhaleAlert }             from '@/lib/whaleDetector'
 import { checkCircuitBreaker }         from '@/lib/circuitBreaker'
 import { loadCapitalConfig, DEFAULT_CONFIG } from '@/lib/capitalManagement'
+import { getCapitalState, resetMonthlyTracking, DEFAULT_CAPITAL_CONFIG } from '@/lib/capitalManager'
 import { fetchOptionsData }             from '@/lib/deribitFetch'
 import { runWalkForward }               from '@/lib/walkForwardBacktest'
 import { analyzeAllABCD, getABCDScoreImpact, generateHarmonicSignals } from '@/lib/harmonicPatterns'
@@ -787,6 +788,22 @@ export async function GET(req: Request): Promise<NextResponse> {
       )
     }
 
+    // ── Monthly capital reset ─────────────────────────────────────────────────
+    const monthStart = new Date()
+    monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
+    const capitalSb = getDbClient()
+    if (capitalSb) {
+      const { data: capitalCfg } = await Promise.resolve(
+        capitalSb.from('apex_capital_config').select('month_reset_at').eq('id', 'default').single()
+      ).catch(() => ({ data: null }))
+      if (!capitalCfg?.month_reset_at || new Date(capitalCfg.month_reset_at) < monthStart) {
+        await resetMonthlyTracking().catch(() => {})
+      }
+    }
+
+    // Capital state — injected into Claude context and brief
+    const capitalState = await getCapitalState(DEFAULT_CAPITAL_CONFIG).catch(() => null)
+
     // ── 4. Generate new Normal signal ─────────────────────────────────────────
     const activeCount  = active.filter(s => s.idea.tradeType !== 'Scalp').length
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
@@ -833,6 +850,12 @@ export async function GET(req: Request): Promise<NextResponse> {
         perfStats,
         klines4h:        klines['4h'],
         daysSinceLastSignal,
+        capitalContext: capitalState ? `
+Balance Binance: $${capitalState.availableBalance.toFixed(2)}
+Capital desplegado: $${capitalState.deployedCapital.toFixed(2)} (${((capitalState.deployedCapital / Math.max(1, capitalState.availableBalance)) * 100).toFixed(0)}%)
+Disponible para nuevo trade: $${capitalState.maxPositionSize.toFixed(2)}
+P&L este mes: ${capitalState.monthlyPnlPct >= 0 ? '+' : ''}${capitalState.monthlyPnlPct.toFixed(2)}% ($${capitalState.monthlyPnl.toFixed(0)} acumulado este mes)
+`.trim() : undefined,
       }
       let aiDecision: TradeDecision | null = await askClaudeForDecision(claudeCtx)
 
@@ -1297,6 +1320,12 @@ export async function GET(req: Request): Promise<NextResponse> {
       } else {
         const upcoming     = getUpcomingEvent(Date.now(), 4 * 60 * 60_000)
         const opinionLines = agentOpinionChange ? [agentOpinionChange] : []
+        // Fresh signal state — re-query AFTER all closes/TPs/SLs are saved
+        const freshSb = getDbClient()
+        const freshState = freshSb
+          ? await getFreshSignalState(freshSb)
+          : { activeSignals: activeSigData, recentlyClosed: [] }
+
         const updateParams: AgentUpdateParams = {
           price,
           prevPrice:       prevStateForVoice?.lastPrice ?? price,
@@ -1312,7 +1341,9 @@ export async function GET(req: Request): Promise<NextResponse> {
           elliottWaves:    ewMap,
           fvgs:            fvgsMap,
           liquidity,
-          activeSignals:   activeSigData,
+          activeSignals:   freshState.activeSignals,
+          recentlyClosed:  freshState.recentlyClosed,
+          capitalState:    capitalState ?? undefined,
           opinionChanges:  opinionLines,
           patternMatch:    null,
           globalMarkets,
