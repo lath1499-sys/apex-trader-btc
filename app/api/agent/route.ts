@@ -1278,36 +1278,6 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
       }
     }
 
-    // PRZ alert for non-Fib patterns — lightweight notification only, no signal
-    if (abcdAnalysis.inPRZ && harmonicCandidates.length === 0 && ntfyTopic) {
-      const p = abcdAnalysis.mostRelevant!
-      const action = p.direction === 'BEARISH' ? 'LONG' : 'SHORT'
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const lastPRZAt = (prevStateForVoice as any)?.lastPrzAlertAt
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ? new Date(String((prevStateForVoice as any).lastPrzAlertAt)).getTime() : 0
-      if ((Date.now() - lastPRZAt) / 3_600_000 > 2) {
-        await ntfy(
-          ntfyTopic,
-          sanitizeHdr(`APEX ABCD ${action} — PRZ sin Fib (${p.timeframe.toUpperCase()})`),
-          [
-            `⚠️ Precio en PRZ del patrón ABCD ${p.direction} (sin confluencia Fibonacci)`,
-            `TF: ${p.timeframe.toUpperCase()} | Calidad: ${p.quality}`,
-            `PRZ: $${Math.round(p.prz_low).toLocaleString()}–$${Math.round(p.prz_high).toLocaleString()}`,
-            `Punto D: $${Math.round(p.D_target).toLocaleString()}`,
-            `Sin señal generada — esperar confirmación Fibonacci.`,
-          ].join('\n'),
-          3,
-          'chart_with_upwards_trend',
-        )
-        const przSb = getDbClient()
-        if (przSb) {
-          await Promise.resolve(
-            przSb.from('apex_agent_state').update({ last_prz_alert_at: new Date().toISOString() }).eq('id', 'current')
-          ).catch(() => {})
-        }
-      }
-    }
 
     // ── 6. Periodic market analysis NTFY — time-since-last (not exact minute) ──
     // GitHub Actions runs at irregular times — exact :00/:30 checks NEVER fire.
