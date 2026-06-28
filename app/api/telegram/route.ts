@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { sendTelegram, tgStatus, authorizedChatId } from '@/lib/telegram'
 import { getCapitalState, DEFAULT_CAPITAL_CONFIG } from '@/lib/capitalManager'
+import { getMacroSnapshot, updateMacroOverride } from '@/lib/macroData'
 import { getSupabaseServer } from '@/lib/supabase'
 
 type RawSignal = { side: string; trade_type: string; entry: number; sl: number; tp1: number; tp2: number; tp3: number; pnl: number | null; status: string }
@@ -136,6 +137,42 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    else if (text.startsWith('/macro')) {
+      const parts = text.split(' ')
+      if (parts.length === 1) {
+        // /macro — show current snapshot
+        const m = await getMacroSnapshot().catch(() => null)
+        if (!m) { await sendTelegram('❌ Error obteniendo datos macro.', chatId); return NextResponse.json({ ok: true }) }
+        const etfTxt = m.etf_flow_7d >= 0 ? `+$${m.etf_flow_7d}M` : `-$${Math.abs(m.etf_flow_7d)}M`
+        await sendTelegram(
+          `📊 <b>Macro Snapshot</b>\n\n` +
+          `🏦 CPI YoY: <b>${m.cpi_yoy}%</b> | Core: ${m.core_cpi_yoy}%\n` +
+          `🏦 Fed Rate: <b>${m.fed_rate}%</b> | Próxima: ${m.fed_next_meeting}\n` +
+          `💵 DXY: <b>${m.dxy}</b> | S&amp;P 500: <b>${m.sp500_change >= 0 ? '+' : ''}${m.sp500_change}%</b>\n` +
+          `🥇 Gold: <b>$${m.gold_price.toLocaleString()}</b> | US 10Y: <b>${m.us10y_yield}%</b>\n` +
+          `₿ BTC Dom: <b>${m.btc_dominance}%</b> | Total MCap: <b>$${m.total_crypto_mcap}B</b>\n` +
+          `😱 Fear&amp;Greed: <b>${m.fear_greed}/100</b>\n` +
+          `🏦 ETF 7D: <b>${etfTxt}</b>\n\n` +
+          `<i>${m.source_note}</i>\n` +
+          `<i>Para actualizar: /macro update cpi 4.2</i>`,
+          chatId,
+        )
+      } else if (parts[1] === 'update' && parts[2] && parts[3]) {
+        // /macro update cpi 4.2
+        const key   = parts[2].toLowerCase()
+        const value = parseFloat(parts[3])
+        const source = parts.slice(4).join(' ') || 'manual_telegram'
+        if (isNaN(value)) {
+          await sendTelegram('❌ Valor inválido. Ejemplo: /macro update cpi 4.2', chatId)
+        } else {
+          await updateMacroOverride(key, value, source)
+          await sendTelegram(`✅ Macro actualizado:\n<code>${key} = ${value}</code>\nFuente: ${source}`, chatId)
+        }
+      } else {
+        await sendTelegram('❓ Uso:\n/macro — ver snapshot\n/macro update cpi 4.2 — actualizar valor', chatId)
+      }
+    }
+
     else if (text === '/help' || text === '/h' || text === '/start') {
       await sendTelegram(
         `🤖 <b>APEX Trader — Comandos</b>\n\n` +
@@ -144,7 +181,8 @@ export async function POST(req: NextRequest) {
         `/balance — Balance y capital\n` +
         `/signals — Señales activas\n` +
         `/capital — Gestión de capital\n` +
-        `/risk — Estado de riesgo y drawdown\n\n` +
+        `/risk — Estado de riesgo y drawdown\n` +
+        `/macro — Snapshot macro real (CPI, DXY, Gold...)\n\n` +
         `⚙️ <b>Control</b>\n` +
         `/pause — Pausar apertura de nuevos trades\n` +
         `/resume — Reanudar el agente\n` +

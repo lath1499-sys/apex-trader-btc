@@ -4,6 +4,26 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { createClient } from '@supabase/supabase-js'
+import { getMacroSnapshot, formatMacroForPrompt } from './macroData'
+
+function getVoiceSb() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_KEY
+  if (!url || !key) return null
+  return createClient(url, key)
+}
+
+const BRIEF_FOCUSES = [
+  'FLUJO_Y_LIQUIDEZ',
+  'ESTRUCTURA_TECNICA',
+  'MOMENTUM_Y_DIVERGENCIAS',
+  'MACRO_Y_CORRELACIONES',
+  'NARRATIVA_Y_SESGO',
+  'GESTION_Y_CAPITAL',
+] as const
+type BriefFocus = typeof BRIEF_FOCUSES[number]
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 30-min conversational update — params interface
 // ─────────────────────────────────────────────────────────────────────────────
@@ -70,6 +90,32 @@ async function callClaudeForUpdate(p: AgentUpdateParams): Promise<string | null>
           macroIndicators, fedExpectations, globalMarkets, elliottWaves, fvgs,
           liquidity, optionsData, news, socialSentiment, abcdAnalysis, memory } = p
 
+  // ── Macro snapshot (real CPI, DXY, Gold, etc.) ────────────────────────────
+  const macro    = await getMacroSnapshot().catch(() => null)
+  const macroTxt = macro ? formatMacroForPrompt(macro) : (
+    macroIndicators?.fedRate
+      ? `Fed: ${macroIndicators.fedRate.current?.toFixed(2)}% | CPI: ${macroIndicators.cpi?.yoy?.toFixed(1) ?? '?'}%`
+      : 'Macro data no disponible'
+  )
+
+  // ── Brief focus rotation — avoid repeating same angle ─────────────────────
+  const sb            = getVoiceSb()
+  const hourOfDay     = new Date().getUTCHours()
+  const defaultFocus  = BRIEF_FOCUSES[Math.floor(hourOfDay / 4) % BRIEF_FOCUSES.length]
+  let   selectedFocus: BriefFocus = defaultFocus
+
+  let recentFocuses: string[] = []
+  if (sb) {
+    const { data: recentBriefs } = await Promise.resolve(
+      sb.from('apex_brief_history').select('focus').order('created_at', { ascending: false }).limit(3)
+    ).catch(() => ({ data: null })) as { data: Array<{ focus: string }> | null }
+    recentFocuses = (recentBriefs ?? []).map(b => b.focus)
+    if (recentFocuses.includes(defaultFocus)) {
+      const available = BRIEF_FOCUSES.filter(f => !recentFocuses.includes(f))
+      if (available.length > 0) selectedFocus = available[0]
+    }
+  }
+
   const i4   = inds?.['4h']
   const i1   = inds?.['1h']
   const i1d  = inds?.['1d']
@@ -103,10 +149,10 @@ ${whaleAlert?.detected ? `WHALE: ${whaleAlert.description}` : ''}
 ${optionsData?.iv ? `IV Rank: ${optionsData.iv.ivRank}/100 (${optionsData.iv.regime})` : ''}
 
 MACRO:
-${macroSentiment ? `Sentimiento: ${macroSentiment.label} (${macroSentiment.score}/100)` : ''}
-${macroIndicators?.fedRate ? `Fed: ${macroIndicators.fedRate.current?.toFixed(2)}% (${macroIndicators.fedRate.trend})` : ''}
-${fedExpectations ? `Fed recorte: ${fedExpectations.cutProbability}% prob` : ''}
-${globalMarkets?.signalImpact !== 'NEUTRAL' ? `Global: ${globalMarkets?.btcCorrelation ?? ''}` : ''}
+${macroTxt}
+${fedExpectations ? `Prob. recorte Fed: ${fedExpectations.cutProbability}%` : ''}
+${macroSentiment ? `Sentimiento macro compuesto: ${macroSentiment.label} (${macroSentiment.score}/100)` : ''}
+${globalMarkets?.signalImpact !== 'NEUTRAL' ? `Correlación global: ${globalMarkets?.btcCorrelation ?? ''}` : ''}
 ${socialSentiment ? `Social Galaxy Score: ${socialSentiment.galaxyScore} | ${socialSentiment.sentiment}` : ''}
 
 NOTICIAS:
@@ -151,6 +197,47 @@ Precio entonces: $${Math.round(memory.lastPrice).toLocaleString()} → ahora $${
 ${opinionChanges.length > 0 ? `\nCAMBIOS DETECTADOS:\n${opinionChanges.map((c: string) => `• ${c}`).join('\n')}` : ''}
 `
 
+  const focusInstructions: Record<BriefFocus, string> = {
+    FLUJO_Y_LIQUIDEZ: `
+ÁNGULO DE ESTE BRIEF: Flujo de capital y liquidez.
+Profundiza en: funding rate (¿positivo o negativo y qué implica?), open interest (¿subiendo con el precio = fuerte, bajando = fuerza decreciente?), liquidaciones recientes, flujos ETF, volumen relativo vs promedio.
+La pregunta central: ¿el dinero real está entrando o saliendo? ¿Dónde están los stops del retail?
+NO enumeres ADX, Elliott Waves ni datos de CPI en este brief.`,
+
+    ESTRUCTURA_TECNICA: `
+ÁNGULO DE ESTE BRIEF: Estructura de precio y niveles clave.
+Profundiza en: soportes y resistencias exactos con precios, FVGs activos y si fueron respetados, qué estructura construye el precio (HH/HL alcista, LH/LL bajista), qué vela es la más importante de las últimas 4h y qué implica.
+La pregunta central: ¿dónde está el nivel que cambia todo? Si ese nivel cae o resiste, ¿qué pasa?
+NO menciones macro (CPI/Fed), ni teoría de ondas Elliott en este brief.`,
+
+    MOMENTUM_Y_DIVERGENCIAS: `
+ÁNGULO DE ESTE BRIEF: Momentum y divergencias entre timeframes.
+Profundiza en: RSI en cada TF (¿hay divergencias bullish/bearish con el precio?), MACD histogram (¿qué dirección tiene el histograma en 4H y 1H?), Stoch (¿sobrecomprado/sobrevendido con señal?).
+La pregunta central: ¿el momentum confirma la tendencia o la está traicionando?
+Si RSI en 1D y 4H dicen cosas opuestas al precio, explica qué significa eso.
+NO menciones macro ni FVGs en este brief.`,
+
+    MACRO_Y_CORRELACIONES: `
+ÁNGULO DE ESTE BRIEF: Macro y correlaciones con otros mercados.
+Profundiza en: CPI ${macro?.cpi_yoy ?? '?'}% y lo que implica para la Fed, DXY ${macro?.dxy ?? '?'} y su relación histórica con BTC, S&P ${macro?.sp500_change ?? '?'}% de hoy (¿risk-on o risk-off?), flujos ETF y lo que dicen los institucionales.
+La pregunta central: ¿la macro refuerza o contradice el setup técnico actual?
+Menciona BTC Dominance ${macro?.btc_dominance ?? '?'}% — ¿el capital está en BTC o saliendo a alts?`,
+
+    NARRATIVA_Y_SESGO: `
+ÁNGULO DE ESTE BRIEF: Narrativa y sesgo de participantes.
+Profundiza en: ¿qué historia se está contando ahora en el mercado? Fear&Greed ${macro?.fear_greed ?? '?'}/100 — ¿qué posicionamiento implica eso?
+¿El retail está largo o corto (L/S ratio)? Si el retail está muy de un lado, el mercado suele ir al otro.
+¿Hay un evento próximo (FOMC ${macro?.fed_next_meeting ?? '?'}, vencimiento de opciones, datos) que cambie la dinámica?
+La pregunta central: ¿con quién estoy operando: con la narrativa o contra ella?`,
+
+    GESTION_Y_CAPITAL: `
+ÁNGULO DE ESTE BRIEF: Portafolio y gestión activa.
+Profundiza en: ¿cómo van mis trades abiertos y qué haría ahora si los tuviera que revisar desde cero? ¿Hay alguno que deba cerrar, mover el SL, o escalar?
+Progreso del mes vs target 15%: ¿voy bien, atrasado, o ya lo alcancé?
+Si no hay señales: ¿exactamente QUÉ setup estoy esperando y a QUÉ precio exactamente entraría?
+La pregunta central: ¿mi capital está bien gestionado para el contexto actual?`,
+  }
+
   const prompt = `Eres APEX, un trader senior de Bitcoin con 15 años de experiencia.
 Le estás reportando a tu jefe cada 30 minutos. Tu jefe es un trader experimentado
 también — no necesita que le expliques qué es el RSI, necesita saber QUÉ PIENSAS
@@ -159,38 +246,33 @@ que va a pasar y POR QUÉ.
 DATOS CRUDOS (para tu análisis, NO los repitas tal cual):
 ${rawData}
 
-═══ CÓMO ESCRIBIR TU REPORTE ═══
+═══ ENFOQUE OBLIGATORIO DE ESTE BRIEF ═══
 
-ESTRUCTURA (4-6 párrafos cortos, máximo 18 líneas total):
+${focusInstructions[selectedFocus]}
 
-1. ACCIÓN DE PRECIO — ¿Qué hizo el precio en los últimos 30 min y qué significa?
-   No digas "BTC subió 0.5%". Di algo como "BTC intentó romper $63k pero
-   fue rechazado en el FVG bajista — vendedores defendiendo ese nivel otra vez."
+═══ ANTI-REPETICIÓN ═══
 
-2. TU LECTURA DEL MOMENTO — Conecta 2-3 señales en una narrativa.
-   No listes RSI+MACD+Stoch por separado. Di algo como:
-   "El RSI en sobreventa junto con la liquidez debajo me dice que los bears
-   están perdiendo fuerza — esto huele a rebote técnico, no a reversión real."
+Los últimos 3 briefs cubrieron: ${recentFocuses.length > 0 ? recentFocuses.join(', ') : 'ninguno todavía'}.
+ESTÁ PROHIBIDO usar estas frases exactas en este brief:
+"distribución activa", "no voy a forzar", "lo dejo correr con trailing",
+"el macro me genera tensión narrativa", "no hay señal de giro todavía",
+"las señales siguen activas".
+Si el precio no se movió materialmente desde el último brief, di explícitamente:
+"El precio lleva X horas sin movimiento relevante. En ese contexto..."
+y luego ve al enfoque del brief directamente.
 
-3. NOTICIAS Y SOCIAL — Solo si hay algo que cambie el panorama. Si no, sáltalo.
+═══ ESTRUCTURA (4-6 párrafos cortos, máximo 18 líneas) ═══
 
-4. TUS POSICIONES — Habla de las señales activas como SI FUERAN TUS TRADES.
-   Da tu opinión sobre cómo van, no solo el P&L.
-   Si algo te preocupa, dilo directamente.
-
-5. TU SESGO Y QUÉ ESPERAS — Sé específico y comprométete con una visión.
-   Menciona el nivel clave que cambia todo.
-
-6. LO MÁS IMPORTANTE PARA LAS PRÓXIMAS HORAS — Una frase final, concreta.
+1. APERTURA — Una oración específica sobre qué hizo el precio en los últimos 30 min.
+2. DESARROLLO DEL ÁNGULO — 2-3 párrafos profundizando en ${selectedFocus.replace(/_/g, ' ')}.
+3. TUS POSICIONES (si las hay) — Estado real, no solo P&L. Di si te preocupa algo.
+4. CIERRE — Una frase concreta sobre el nivel o evento más importante para las próximas horas.
 
 ═══ REGLAS DE ESTILO ═══
 
-- Habla en PRIMERA PERSONA con skin in the game. USA "creo que", "me preocupa", "me gusta".
-- CONECTA datos entre sí — nunca los listes por separado.
-- Si algo CONTRADICE tu sesgo anterior, dilo: "Pensaba X pero ahora veo Y, así que..."
-- Si NO hay nada importante, dilo brevemente y para: "Sin cambios relevantes. Mismo sesgo."
-- EVITA oraciones sueltas de indicadores. Solo menciona los 2-3 MÁS relevantes ahora.
-- Máximo 18 líneas. Sé denso, no repetitivo.
+- Primera persona con opinión real: "creo que", "me preocupa", "me sorprende".
+- Conecta datos en narrativa, nunca los listes.
+- Máximo 18 líneas. Denso, sin relleno.
 
 Escribe el reporte ahora.`
 
@@ -217,7 +299,15 @@ Escribe el reporte ahora.`
     const data = await res.json() as { content?: Array<{ text?: string }> }
     const text = data.content?.[0]?.text ?? null
     if (text) {
-      console.log(`[APEX Voice] Claude responded — ${text.length} chars`)
+      console.log(`[APEX Voice] Claude responded — ${text.length} chars | focus: ${selectedFocus}`)
+      // Persist focus so next brief avoids repeating it
+      if (sb) {
+        await Promise.resolve(
+          sb.from('apex_brief_history').insert({
+            focus: selectedFocus, summary: text.slice(0, 100), created_at: new Date().toISOString(),
+          })
+        ).catch(() => {})
+      }
     }
     return text
   } catch (err) {
