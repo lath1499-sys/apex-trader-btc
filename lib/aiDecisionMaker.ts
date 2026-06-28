@@ -4,6 +4,9 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { getMacroSnapshot, formatMacroForPrompt } from './macroData'
+import { formatLeverageTableForPrompt } from './leverageCalculator'
+
 export interface TradeDecision {
   action:        'LONG' | 'SHORT' | 'WAIT' | 'CLOSE_EXISTING'
   confidence:    'ALTA' | 'MEDIA' | 'BAJA'
@@ -145,6 +148,11 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
 
   const portfolioSummary = buildPortfolioSummary(activeSignals ?? [], price)
 
+  // Real macro data — 6h cached, always has sane defaults even without API keys
+  const macroSnapshot = await getMacroSnapshot().catch(() => null)
+  const macroBlock    = macroSnapshot ? formatMacroForPrompt(macroSnapshot) : 'Macro: datos no disponibles'
+  const leverageTable = formatLeverageTableForPrompt()
+
   const prompt = `Eres APEX, un trader experto de Bitcoin con 15 años de experiencia en futuros Binance.
 Analiza el mercado y decide: ¿operar ahora, esperar, o cerrar una posición existente?
 
@@ -218,11 +226,10 @@ ${optionsData?.iv ? `IV Rank: ${optionsData.iv.ivRank}/100 | DVOL: ${optionsData
 ${optionsData?.maxPain ? `Max Pain: $${Math.round(optionsData.maxPain).toLocaleString()} | PCR: ${optionsData.putCallRatio?.toFixed(2)}` : ''}
 
 ═══ CONTEXTO MACRO ═══
-${macroSentiment ? `Sentimiento: ${macroSentiment.label} (${macroSentiment.score}/100)` : ''}
-${macroIndicators?.fedRate ? `Fed: ${macroIndicators.fedRate.current?.toFixed(2)}% (${macroIndicators.fedRate.trend})` : ''}
-${macroIndicators?.cpi ? `CPI YoY: ${macroIndicators.cpi.yoy?.toFixed(1)}%` : ''}
-${fedExpectations ? `Corte Fed: ${fedExpectations.cutProbability}% prob | FOMC: ${fedExpectations.nextMeetingDate ?? 'N/A'}` : ''}
-${globalMarkets?.signalImpact !== 'NEUTRAL' ? `Global: ${globalMarkets?.btcCorrelation ?? ''}` : ''}
+${macroBlock}
+${macroSentiment ? `Sentimiento macro: ${macroSentiment.label} (${macroSentiment.score}/100)` : ''}
+${fedExpectations ? `Prob. recorte Fed: ${fedExpectations.cutProbability}% | FOMC: ${fedExpectations.nextMeetingDate ?? 'N/A'}` : ''}
+${globalMarkets?.signalImpact !== 'NEUTRAL' ? `Mercados globales: ${globalMarkets?.btcCorrelation ?? ''}` : ''}
 ${socialSentiment ? `Social: ${socialSentiment.sentiment} (Galaxy ${socialSentiment.galaxyScore})` : ''}
 
 ═══ NOTICIAS ═══
@@ -265,6 +272,15 @@ REGLAS DE SL/TP:
 - No operes contra la tendencia principal a menos que RSI < 25 o > 75 con confluencias claras
 - positionsToClose: array vacío [] si no hay nada que cerrar
 - Los signalId DEBEN ser exactamente los IDs mostrados en TU PORTAFOLIO ACTUAL
+
+CRITERIOS PARA SCALP (eres ahora el único generador de Scalps — no hay detector algorítmico):
+- Scalp LONG: RSI 15M < 35 rebotando + BOS alcista en 15M/1H + FVG cercano como soporte
+- Scalp SHORT: RSI 15M > 65 cayendo + CHoCH bajista en 15M + resistencia clave con confluencia
+- Scalp válido SOLO en: London Open (7-9 UTC), NY Open (12-15 UTC), London Close (15-17 UTC)
+- Scalp SL mínimo 0.25%, máximo 0.8% — fuera de ese rango es DayTrade, no Scalp
+- 2 confluencias técnicas claras en 15M+1H son suficientes para un Scalp
+
+${leverageTable}
 
 BIAS DE ACCIÓN: Si ves 2+ confluencias técnicas (ABCD en PRZ, estructura rota, RSI extremo, alineación multi-TF, soporte/resistencia clave) → la respuesta correcta es ENTRAR, no esperar. WAIT solo cuando el mercado está en rango sin setup claro o hay evento macro activo.
 

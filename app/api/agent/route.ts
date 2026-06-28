@@ -8,7 +8,6 @@ import { scoreTradeIdea, validateAndFixSL } from '@/lib/tradeScoring'
 import { detectFVGs }              from '@/lib/fvg'
 import { detectLiquidity }         from '@/lib/liquidity'
 import { detectMarketRegime }      from '@/lib/marketRegime'
-import { detectScalpSignals, detectBOSCHoCH, getICTKillzones, calcVWAP } from '@/lib/scalpSignals'
 import { evaluateStopManagement }  from '@/lib/stopManagement'
 import { getCurrentTradingSession, shouldGenerateSignal } from '@/lib/tradingHours'
 import { getActiveBlockingEvent, getUpcomingEvent, minutesUntilEvent, fetchUpcomingEvents } from '@/lib/macroCalendar'
@@ -37,6 +36,7 @@ import { askClaudeForDecision, getLastClaudeError } from '@/lib/aiDecisionMaker'
 import type { TradeDecision }                       from '@/lib/aiDecisionMaker'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 import { sendTelegram, tgSignal, tgClose, tgTP, tgBrief } from '@/lib/telegram'
+import { calculateLeverage } from '@/lib/leverageCalculator'
 
 export const runtime    = 'nodejs'
 export const maxDuration = 60   // Vercel Hobby max; agent needs ~20-40s for all API calls
@@ -1024,7 +1024,13 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
         const recTP1        = useAI ? aiDecision!.tp1    : fallbackSignal!.tp1
         const recTP2        = useAI ? aiDecision!.tp2    : fallbackSignal!.tp2
         const recTP3        = useAI ? aiDecision!.tp3    : fallbackSignal!.tp3
-        const recLev        = fallbackSignal?.maxLev ?? 5
+        const levResult     = calculateLeverage(
+          recType, recEntry, recSL,
+          capitalState?.availableBalance ?? 1860,
+          capitalState?.effectiveRiskPct ?? 0.05,
+        )
+        const recLev        = levResult.leverage
+        if (levResult.warning) console.warn(`[APEX Leverage] ${levResult.warning}`)
         const recReasons    = useAI
           ? aiDecision!.keyFactors.map(f => ({ s: recSide === 'LONG' ? 'bull' as const : 'bear' as const, txt: f }))
           : (fallbackSignal!.reasons)
@@ -1117,106 +1123,6 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
             }
           }
           } // end tp1RR >= 1.5
-        }
-      }
-    }
-
-    // ── 5. Generate Scalp signal (only during valid sessions + killzone) ───────
-    const hasActiveScalp = active.some(s => s.idea.tradeType === 'Scalp')
-
-    if (!hasActiveScalp && shouldGenerateSignal('Scalp', 'MEDIA') && klines['15m'].length >= 14) {
-      // Compute VWAP from today's 15m candles
-      const todayMs    = new Date().setUTCHours(0, 0, 0, 0)
-      const intraday   = klines['15m'].filter(k => k.t >= todayMs)
-      const vwapResult = calcVWAP(intraday.length >= 5 ? intraday : klines['15m'])
-
-      const kz         = getICTKillzones()
-      const bosChoch   = detectBOSCHoCH(klines['15m'])
-      const cvd        = { cvd: [] as number[], delta: [] as number[] }  // not available server-side
-
-      const scalpSig = detectScalpSignals(
-        price, klines['15m'], klines['1h'],
-        vwapResult, cvd, bosChoch, kz,
-        fvg15m, liquidity, obVal,
-        mkt.funding ?? undefined,
-      )
-
-      if (scalpSig) {
-        // Dedup: skip if a similar scalp already exists (same side, entry within 0.5%, last 2h)
-        const twoHoursAgo = Date.now() - 2 * 3_600_000
-        const duplicate = allSignals.find(s =>
-          s.idea.tradeType === 'Scalp' &&
-          (s.status === 'active' || s.status === 'tp1_hit' || s.status === 'tp2_hit') &&
-          s.idea.side === scalpSig.side &&
-          Math.abs(s.idea.price - scalpSig.entry) / scalpSig.entry < 0.005 &&
-          new Date(s.createdAt).getTime() > twoHoursAgo,
-        )
-
-        // Secondary dedup: same-side scalp already notified in last 1h (side-aware — allows LONG after SHORT)
-        const oneHourAgo = Date.now() - 60 * 60_000
-        const recentlyNotified = allSignals.find(s =>
-          s.idea.tradeType === 'Scalp' &&
-          s.idea.side === scalpSig.side &&
-          s.ntfySent === true &&
-          new Date(s.createdAt).getTime() > oneHourAgo,
-        )
-
-        if (duplicate || recentlyNotified) {
-          results.scalpSkipped = duplicate ? 'duplicate' : 'ntfy_sent_recently'
-        } else {
-          const sSlDist  = Math.abs(scalpSig.entry - scalpSig.sl)
-          const sTP1RR   = sSlDist > 0 ? +(Math.abs(scalpSig.tp1 - scalpSig.entry) / sSlDist).toFixed(2) : 0
-          const sTP2RR   = sSlDist > 0 ? +(Math.abs(scalpSig.tp2 - scalpSig.entry) / sSlDist).toFixed(2) : 0
-          const sTP3RR   = sSlDist > 0 ? +(Math.abs(scalpSig.tp3 - scalpSig.entry) / sSlDist).toFixed(2) : 0
-          const sCfg     = getPartialCloseConfig('Scalp', sTP1RR, sTP2RR)
-          const rec: SignalRecord = {
-            id:          String(Date.now()),
-            createdAt:   time,
-            status:      'active',
-            exitPrice:   null, exitTs: null, pnl: null, pnlR: null,
-            closedAt:    null, closeReason: null,
-            ntfySent:    true,
-            tp1ClosePct: sCfg.tp1Pct, tp2ClosePct: sCfg.tp2Pct, tp3ClosePct: sCfg.tp3Pct,
-            tp1BankedPnl: 0, tp2BankedPnl: 0, totalBankedPnl: 0, remainingSizePct: 100,
-            tp1RR: sTP1RR, tp2RR: sTP2RR, tp3RR: sTP3RR,
-            idea: {
-              side:       scalpSig.side,
-              tradeType:  'Scalp',
-              confidence: scalpSig.confidence,
-              price:      scalpSig.entry,
-              sl:         scalpSig.sl,
-              tp1:        scalpSig.tp1,
-              tp2:        scalpSig.tp2,
-              tp3:        scalpSig.tp3,
-              maxLev:     scalpSig.maxLeverage,
-              bull:       0, bear: 0, maxSc: scalpSig.score,
-              reasons:    scalpSig.reasons.map(r => ({ s: 'bull' as const, txt: r })),
-              analysis:   `Scalp ${scalpSig.side} | ${scalpSig.killzone ?? ''} | ${scalpSig.qualityLabel}`,
-              ts:         new Date(time),
-            },
-          }
-          const saveSb = getDbClient()
-          const { error: saveErr } = await Promise.resolve(
-            saveSb.from('apex_signals').upsert({
-              id: rec.id, side: rec.idea.side, trade_type: rec.idea.tradeType,
-              entry: rec.idea.price, sl: rec.idea.sl, tp1: rec.idea.tp1,
-              tp2: rec.idea.tp2, tp3: rec.idea.tp3, confidence: rec.idea.confidence,
-              status: rec.status, reasons: rec.idea.reasons, created_at: rec.createdAt,
-              updated_at: new Date().toISOString(), ntfy_sent: true,
-              pnl: null, pnl_r: null, closed_at: null, exit_price: null, close_reason: null,
-              tp1_hit: false, tp2_hit: false, sl_warning_fired: false,
-              expiry_warning_fired: false,
-              tp1_close_pct: sCfg.tp1Pct, tp2_close_pct: sCfg.tp2Pct, tp3_close_pct: sCfg.tp3Pct,
-              tp1_banked_pnl: 0, tp2_banked_pnl: 0, total_banked_pnl: 0, remaining_size_pct: 100,
-              tp1_rr: sTP1RR, tp2_rr: sTP2RR, tp3_rr: sTP3RR,
-            }, { onConflict: 'id' })
-          ).catch((e: Error) => ({ error: e }))
-          if (saveErr) {
-            results.errors.push(`[ScalpSave] ${(saveErr as {message?:string}).message ?? saveErr}`)
-          } else {
-            await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
-            results.signals.push({ type: 'Scalp', side: scalpSig.side, confidence: scalpSig.confidence })
-          }
         }
       }
     }

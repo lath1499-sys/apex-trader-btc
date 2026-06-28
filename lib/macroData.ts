@@ -71,7 +71,7 @@ export async function getMacroSnapshot(): Promise<MacroSnapshot> {
       ).catch(() => ({ data: null })) as { data: Array<{ key: string; value: number; source: string }> | null }
       const validKeys = new Set<string>(Object.keys(merged))
       for (const o of data ?? []) {
-        if (validKeys.has(o.key)) (merged as Record<string, number | string>)[o.key] = o.value
+        if (validKeys.has(o.key)) (merged as unknown as Record<string, number | string>)[o.key] = o.value
       }
       const srcNote = (data ?? [])
         .filter(o => o.source && o.source !== 'manual')
