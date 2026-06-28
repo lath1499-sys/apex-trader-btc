@@ -173,6 +173,37 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    else if (text === '/leverage' || text === '/lev') {
+      const sb = getSb()
+      if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
+      const { data } = await Promise.resolve(
+        sb.from('apex_leverage_config').select('*').order('trade_type')
+      ).catch(() => ({ data: null })) as { data: Array<{
+        trade_type: string; leverage_min: number; leverage_max: number
+        sl_min_pct: number; sl_max_pct: number
+      }> | null }
+      if (!data || data.length === 0) {
+        await sendTelegram('❌ Tabla apex_leverage_config no encontrada. Ejecuta el SQL en Supabase.', chatId)
+        return NextResponse.json({ ok: true })
+      }
+      const emoji: Record<string, string> = { Scalp: '⚡', DayTrade: '📊', Swing: '🌊' }
+      const lines = data.map(cfg => {
+        const sl1 = Math.max(cfg.leverage_min, Math.min(cfg.leverage_max, Math.round(0.05 / 0.01)))
+        const sl2 = Math.max(cfg.leverage_min, Math.min(cfg.leverage_max, Math.round(0.05 / 0.02)))
+        return (
+          `${emoji[cfg.trade_type] ?? '•'} <b>${cfg.trade_type}</b>\n` +
+          `   Leverage: ${cfg.leverage_min}x – ${cfg.leverage_max}x\n` +
+          `   SL rango: ${(cfg.sl_min_pct * 100).toFixed(1)}% – ${(cfg.sl_max_pct * 100).toFixed(1)}%\n` +
+          `   SL 1% → ${sl1}x | SL 2% → ${sl2}x`
+        )
+      })
+      await sendTelegram(
+        `⚙️ <b>Configuración de Leverage</b>\n\n${lines.join('\n\n')}\n\n` +
+        `<i>Ajusta en Dashboard → ⚡ Leverage</i>`,
+        chatId,
+      )
+    }
+
     else if (text === '/help' || text === '/h' || text === '/start') {
       await sendTelegram(
         `🤖 <b>APEX Trader — Comandos</b>\n\n` +
@@ -182,12 +213,13 @@ export async function POST(req: NextRequest) {
         `/signals — Señales activas\n` +
         `/capital — Gestión de capital\n` +
         `/risk — Estado de riesgo y drawdown\n` +
-        `/macro — Snapshot macro real (CPI, DXY, Gold...)\n\n` +
+        `/macro — Snapshot macro real (CPI, DXY, Gold...)\n` +
+        `/leverage — Configuración de leverage por tipo\n\n` +
         `⚙️ <b>Control</b>\n` +
         `/pause — Pausar apertura de nuevos trades\n` +
         `/resume — Reanudar el agente\n` +
         `/close_all — ⚠️ Cerrar señales en Supabase\n\n` +
-        `💡 Atajos: /s /b /sig /p /r /ca /cap`,
+        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev`,
         chatId,
       )
     }

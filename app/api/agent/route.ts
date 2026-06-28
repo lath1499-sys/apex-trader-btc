@@ -36,7 +36,7 @@ import { askClaudeForDecision, getLastClaudeError } from '@/lib/aiDecisionMaker'
 import type { TradeDecision }                       from '@/lib/aiDecisionMaker'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 import { sendTelegram, tgSignal, tgClose, tgTP, tgBrief } from '@/lib/telegram'
-import { calculateLeverage } from '@/lib/leverageCalculator'
+import { calculateLeverage, getLeverageConfig, DEFAULT_LEVERAGE_CONFIG } from '@/lib/leverageCalculator'
 
 export const runtime    = 'nodejs'
 export const maxDuration = 60   // Vercel Hobby max; agent needs ~20-40s for all API calls
@@ -1010,6 +1010,9 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
       }
 
       const canTrade = (useAI || useRules) && !blockedByCorrelation && !cb.blocked
+      const leverageConfig = canTrade
+        ? await getLeverageConfig(getDbClient()).catch(() => DEFAULT_LEVERAGE_CONFIG)
+        : DEFAULT_LEVERAGE_CONFIG
 
       if (canTrade) {
         // ── Build signal record from either AI decision or rule-based ───────────
@@ -1025,12 +1028,13 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
         const recTP2        = useAI ? aiDecision!.tp2    : fallbackSignal!.tp2
         const recTP3        = useAI ? aiDecision!.tp3    : fallbackSignal!.tp3
         const levResult     = calculateLeverage(
-          recType, recEntry, recSL,
-          capitalState?.availableBalance ?? 1860,
-          capitalState?.effectiveRiskPct ?? 0.05,
+          { tradeType: recType, entryPrice: recEntry, slPrice: recSL,
+            availableCapital: capitalState?.availableBalance ?? 1860,
+            riskPct: capitalState?.effectiveRiskPct ?? 0.05 },
+          leverageConfig[recType],
         )
         const recLev        = levResult.leverage
-        if (levResult.warning) console.warn(`[APEX Leverage] ${levResult.warning}`)
+        if (levResult.reasoning) console.log(`[APEX Leverage] ${levResult.reasoning}`)
         const recReasons    = useAI
           ? aiDecision!.keyFactors.map(f => ({ s: recSide === 'LONG' ? 'bull' as const : 'bear' as const, txt: f }))
           : (fallbackSignal!.reasons)

@@ -22,6 +22,7 @@ const TABS: [TabName, string][] = [
   ['sessions',   '🕐 Sesiones'],
   ['funding',    '💸 Funding'],
   ['capital',    '💰 Capital'],
+  ['leverage',   '⚡ Leverage'],
   ['status',     '🔗 Status'],
 ]
 
