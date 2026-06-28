@@ -36,6 +36,7 @@ import type { MultiTFABCD, HarmonicSignalCandidate } from '@/lib/harmonicPattern
 import { askClaudeForDecision, getLastClaudeError } from '@/lib/aiDecisionMaker'
 import type { TradeDecision }                       from '@/lib/aiDecisionMaker'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
+import { sendTelegram, tgSignal, tgClose, tgTP, tgBrief } from '@/lib/telegram'
 
 export const runtime    = 'nodejs'
 export const maxDuration = 60   // Vercel Hobby max; agent needs ~20-40s for all API calls
@@ -161,7 +162,8 @@ async function handleSignalEvent(
     } : {}),
   }
 
-  if (!ntfyTopic) return updated
+  const hasTg = !!process.env.TELEGRAM_BOT_TOKEN
+  if (!ntfyTopic && !hasTg) return updated
 
   const side = idea.side
   const P    = (n: number) => `$${Math.round(n).toLocaleString()}`
@@ -317,7 +319,17 @@ async function handleSignalEvent(
     manual_close: 'lock',
   }
 
-  await ntfy(ntfyTopic, titles[event], bodies[event], priorities[event], tags[event])
+  await Promise.all([
+    ntfyTopic ? ntfy(ntfyTopic, titles[event], bodies[event], priorities[event], tags[event]) : Promise.resolve(),
+    event === 'new'          ? sendTelegram(tgSignal(updated)) :
+    event === 'tp1'          ? sendTelegram(tgTP(updated, 1, updated.tp1BankedPnl ?? 0)) :
+    event === 'tp2'          ? sendTelegram(tgTP(updated, 2, updated.tp2BankedPnl ?? 0)) :
+    event === 'tp3'          ? sendTelegram(tgClose(updated, finalPnl, 'TP3 objetivo máximo alcanzado')) :
+    event === 'sl'           ? sendTelegram(tgClose(updated, finalPnl, extra?.reason ?? 'Stop loss')) :
+    event === 'breakeven_sl' ? sendTelegram(tgClose(updated, finalPnl, 'SL breakeven tocado')) :
+    event === 'manual_close' ? sendTelegram(tgClose(updated, finalPnl, extra?.reason ?? 'Cierre manual')) :
+    Promise.resolve(),
+  ])
   return updated
 }
 
@@ -341,9 +353,9 @@ export async function GET(req: Request): Promise<NextResponse> {
   if (lockSb) {
     const { data: lockState } = await (lockSb
       .from('apex_agent_state')
-      .select('is_running, lock_acquired_at')
+      .select('is_running, lock_acquired_at, is_paused, pause_reason')
       .eq('id', 'current')
-      .maybeSingle() as Promise<{ data: { is_running?: boolean; lock_acquired_at?: string } | null }>)
+      .maybeSingle() as Promise<{ data: { is_running?: boolean; lock_acquired_at?: string; is_paused?: boolean; pause_reason?: string } | null }>)
     const lockAge = lockState?.lock_acquired_at
       ? Date.now() - new Date(lockState.lock_acquired_at).getTime()
       : Infinity
@@ -357,6 +369,13 @@ export async function GET(req: Request): Promise<NextResponse> {
         .eq('id', 'current')
     } catch {}
     lockAcquired = true
+
+    // Telegram pause: /pause command sets is_paused=true — skip entire run
+    if (lockState?.is_paused) {
+      console.log(`[APEX] Agent paused via Telegram: ${lockState.pause_reason}`)
+      await Promise.resolve(lockSb.from('apex_agent_state').update({ is_running: false }).eq('id', 'current')).catch(() => {})
+      return NextResponse.json({ status: 'paused', reason: lockState.pause_reason })
+    }
   }
 
   const ntfyTopic = process.env.NTFY_TOPIC ?? ''
@@ -1366,13 +1385,11 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
         const upcomingNote = upcoming
           ? `\n\n⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución`
           : ''
-        await ntfy(
-          ntfyTopic,
-          sanitizeHdr(`APEX ${session.name} — $${Math.round(price).toLocaleString()}`),
-          update + upcomingNote,
-          2,
-          'bar_chart',
-        )
+        const briefText = update + upcomingNote
+        await Promise.all([
+          ntfyTopic ? ntfy(ntfyTopic, sanitizeHdr(`APEX ${session.name} — $${Math.round(price).toLocaleString()}`), briefText, 2, 'bar_chart') : Promise.resolve(),
+          sendTelegram(tgBrief(briefText, price, mkt.change ?? 0)),
+        ])
         results.update30minSent = true
       }
     } else if (!results.update30minSent) {
@@ -1396,13 +1413,10 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
         optionsData,         // IV Rank + Max Pain + PCR
         wfResult.isReliable ? wfResult : null,  // Walk-Forward results
       )
-      await ntfy(
-        ntfyTopic,
-        sanitizeHdr(`APEX Analisis 4H — $${Math.round(price).toLocaleString()}`),
-        deepAnalysis,
-        3,
-        'bar_chart,clock4',
-      )
+      await Promise.all([
+        ntfyTopic ? ntfy(ntfyTopic, sanitizeHdr(`APEX Analisis 4H — $${Math.round(price).toLocaleString()}`), deepAnalysis, 3, 'bar_chart,clock4') : Promise.resolve(),
+        sendTelegram(`📊 <b>APEX — Análisis 4H</b>\nBTC: <code>$${Math.round(price).toLocaleString()}</code>\n\n${deepAnalysis}`),
+      ])
       // Targeted .update() — only touch last_deep_analysis_at to avoid race with fire-and-forget save
       const memorySb4h = getDbClient()
       if (memorySb4h) {

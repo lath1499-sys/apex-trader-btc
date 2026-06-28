@@ -2,6 +2,7 @@
 // Dynamic monthly target (15% of start balance) + 3-stage drawdown management.
 
 import { createClient } from '@supabase/supabase-js'
+import { sendTelegram, tgDrawdownAlert } from '@/lib/telegram'
 
 function getServerSb() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -177,21 +178,21 @@ export async function getCapitalState(
 
       console.log(`[CAPITAL] Stage: ${currentCfg.drawdown_stage} → ${drawdownStage} | risk: ${(effectiveRiskPct * 100).toFixed(0)}%`)
 
-      if (ntfyTopic) {
-        const msgs: Record<number, string> = {
-          1: `✅ APEX — Riesgo restaurado al 5%\nDrawdown recuperado. Trading normal reanudado.`,
-          2: `⚠️ APEX — SURVIVAL MODE\nDrawdown: ${drawdownPct.toFixed(1)}%\nRiesgo reducido a 2% hasta recuperar BE o llegar a -20%.`,
-          3: `🛑 APEX — TRADING PAUSADO\nDrawdown: ${drawdownPct.toFixed(1)}% superó el -20%.\nSin trades hasta el próximo mes.`,
-        }
-        await fetch(`https://ntfy.sh/${ntfyTopic}`, {
+      await Promise.all([
+        ntfyTopic ? fetch(`https://ntfy.sh/${ntfyTopic}`, {
           method: 'POST',
           headers: {
             Title:    `APEX Capital Stage ${drawdownStage}`,
             Priority: drawdownStage === 3 ? '5' : '4',
           },
-          body: msgs[drawdownStage] ?? '',
-        }).catch(() => {})
-      }
+          body: [
+            `Stage ${currentCfg.drawdown_stage} → ${drawdownStage}`,
+            `Drawdown: ${drawdownPct.toFixed(1)}%`,
+            `Riesgo: ${(effectiveRiskPct * 100).toFixed(0)}%`,
+          ].join('\n'),
+        }).catch(() => {}) : Promise.resolve(),
+        sendTelegram(tgDrawdownAlert(drawdownStage, drawdownPct, effectiveRiskPct * 100)),
+      ])
     }
   }
 
