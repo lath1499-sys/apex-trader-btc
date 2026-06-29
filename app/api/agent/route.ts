@@ -35,7 +35,7 @@ import type { MultiTFABCD, HarmonicSignalCandidate } from '@/lib/harmonicPattern
 import { askClaudeForDecision, getLastClaudeError } from '@/lib/aiDecisionMaker'
 import type { TradeDecision }                       from '@/lib/aiDecisionMaker'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
-import { sendTelegram, tgSignal, tgClose, tgTP, tgBrief, tgBreakeven } from '@/lib/telegram'
+import { sendTelegram, tgSignal, tgClose, tgTP, tgBrief, tgBreakeven, tgSLFloor } from '@/lib/telegram'
 import { validateSignalClose } from '@/lib/signalValidator'
 import { calculateLeverage, getLeverageConfig, DEFAULT_LEVERAGE_CONFIG } from '@/lib/leverageCalculator'
 
@@ -341,7 +341,7 @@ async function handleSignalEvent(
     event === 'tp3'          ? sendTelegram(tgClose(updated, finalPnl, 'TP3 objetivo máximo alcanzado')) :
     event === 'sl'           ? sendTelegram(tgClose(updated, finalPnl, extra?.reason ?? 'Stop loss')) :
     event === 'breakeven_sl' ? sendTelegram(tgBreakeven(updated, updated.tp1BankedPnl ?? 0)) :
-    event === 'manual_close' ? sendTelegram(tgClose(updated, finalPnl, extra?.reason ?? 'Cierre manual')) :
+    event === 'manual_close' ? sendTelegram(sig.tp2Hit ? tgSLFloor(updated, finalPnl) : tgClose(updated, finalPnl, extra?.reason ?? 'Cierre manual')) :
     Promise.resolve(),
   ])
   return updated
@@ -770,15 +770,24 @@ export async function GET(req: Request): Promise<NextResponse> {
         await saveSignalToCloud(updated)
         changed = true
       }
-      // SL — covers all remaining SL cases (tp2_hit with SL at tp1, non-breakeven losses)
+      // SL — three cases:
+      //   a) tp2Hit=true: SL is now at TP1 floor — profitable close (TP1+TP2 banked)
+      //   b) tp1Hit=true, !tp2Hit: handled above by breakeven priority; this handles edge cases
+      //   c) no TP hit: pure stop loss
       else if (!changed && (isLong ? price <= updated.idea.sl : price >= updated.idea.sl)) {
-        const wasBreakeven = (updated.breakevenSet === true)
-          || Math.abs((updated.idea.sl - updated.idea.price) / updated.idea.price * 100) <= 0.20
-        updated = await handleSignalEvent(updated, wasBreakeven ? 'breakeven_sl' : 'sl', updated.idea.sl, ntfyTopic, {
-          reason: wasBreakeven
-            ? `SL en breakeven tocado a $${Math.round(updated.idea.sl).toLocaleString()}`
-            : `SL tocado a $${Math.round(updated.idea.sl).toLocaleString()}`,
-        })
+        if (updated.tp2Hit) {
+          updated = await handleSignalEvent(updated, 'manual_close', updated.idea.sl, ntfyTopic, {
+            reason: `SL piso en TP1 tocado tras TP2. TP1+TP2 banqueados. Restante cerrado en $${Math.round(updated.idea.sl).toLocaleString()}`,
+          })
+        } else {
+          const wasBreakeven = (updated.breakevenSet === true)
+            || Math.abs((updated.idea.sl - updated.idea.price) / updated.idea.price * 100) <= 0.20
+          updated = await handleSignalEvent(updated, wasBreakeven ? 'breakeven_sl' : 'sl', updated.idea.sl, ntfyTopic, {
+            reason: wasBreakeven
+              ? `SL en breakeven tocado a $${Math.round(updated.idea.sl).toLocaleString()}`
+              : `SL tocado a $${Math.round(updated.idea.sl).toLocaleString()}`,
+          })
+        }
         changed = true
       }
 

@@ -134,6 +134,23 @@ export function tgBreakeven(sig: SignalRecord, bankedPnl: number): string {
   ].join('\n')
 }
 
+export function tgSLFloor(sig: SignalRecord, finalPnl: number): string {
+  const P = (n: number) => `$${Math.round(n).toLocaleString()}`
+  return [
+    `✅ <b>TRADE CERRADO CON GANANCIA — ${sig.idea.side} ${sig.idea.tradeType}</b>`,
+    ``,
+    `🎯 TP1 alcanzado → ${sig.tp1ClosePct ?? 40}% cerrado en ${P(sig.idea.tp1)}`,
+    `🎯 TP2 alcanzado → ${sig.tp2ClosePct ?? 35}% cerrado en ${P(sig.idea.tp2)}`,
+    `🔒 SL piso (TP1) tocado → ${sig.tp3ClosePct ?? 25}% restante cerrado`,
+    ``,
+    `Entry: <code>${P(sig.idea.price)}</code>`,
+    `SL piso: <code>${P(sig.idea.sl)}</code>`,
+    ``,
+    `💰 P&amp;L total: <b>+${finalPnl.toFixed(2)}%</b>`,
+    `<i>TP1+TP2 banqueados. El sistema de parciales garantizó ganancia.</i>`,
+  ].join('\n')
+}
+
 export function tgDrawdownAlert(stage: 1 | 2 | 3, drawdownPct: number, riskPct: number): string {
   const msgs: Record<1 | 2 | 3, string> = {
     1: `✅ <b>Riesgo restaurado al 5%</b>\nDrawdown recuperado. Trading normal reanudado.`,
