@@ -35,7 +35,8 @@ import type { MultiTFABCD, HarmonicSignalCandidate } from '@/lib/harmonicPattern
 import { askClaudeForDecision, getLastClaudeError } from '@/lib/aiDecisionMaker'
 import type { TradeDecision }                       from '@/lib/aiDecisionMaker'
 import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
-import { sendTelegram, tgSignal, tgClose, tgTP, tgBrief } from '@/lib/telegram'
+import { sendTelegram, tgSignal, tgClose, tgTP, tgBrief, tgBreakeven } from '@/lib/telegram'
+import { validateSignalClose } from '@/lib/signalValidator'
 import { calculateLeverage, getLeverageConfig, DEFAULT_LEVERAGE_CONFIG } from '@/lib/leverageCalculator'
 
 export const runtime    = 'nodejs'
@@ -160,6 +161,19 @@ async function handleSignalEvent(
       remainingSizePct: 100 - (sig.tp1ClosePct ?? 40) - (sig.tp2ClosePct ?? 35),
       totalBankedPnl:  parseFloat(((sig.tp1BankedPnl ?? 0) + (sig.tp2ClosePct ?? 35) / 100 * rawPnl).toFixed(2)),
     } : {}),
+  }
+
+  // Validate terminal closes — detect future misreports before they reach the DB
+  if (isClosed && eventPrice > 0) {
+    const v = validateSignalClose(
+      { side: idea.side, entry: idea.price, sl: idea.sl, tp1: idea.tp1, tp2: idea.tp2, tp3: idea.tp3,
+        tp1_hit: sig.tp1Hit ?? false, tp2_hit: sig.tp2Hit ?? false, status: sig.status },
+      eventPrice,
+    )
+    if (v.warning) {
+      console.error('[APEX Validator]', v.warning)
+      void sendTelegram(`⚠️ <b>Auto-corrección detectada</b>\n<code>${v.warning}</code>`)
+    }
   }
 
   const hasTg = !!process.env.TELEGRAM_BOT_TOKEN
@@ -326,7 +340,7 @@ async function handleSignalEvent(
     event === 'tp2'          ? sendTelegram(tgTP(updated, 2, updated.tp2BankedPnl ?? 0)) :
     event === 'tp3'          ? sendTelegram(tgClose(updated, finalPnl, 'TP3 objetivo máximo alcanzado')) :
     event === 'sl'           ? sendTelegram(tgClose(updated, finalPnl, extra?.reason ?? 'Stop loss')) :
-    event === 'breakeven_sl' ? sendTelegram(tgClose(updated, finalPnl, 'SL breakeven tocado')) :
+    event === 'breakeven_sl' ? sendTelegram(tgBreakeven(updated, updated.tp1BankedPnl ?? 0)) :
     event === 'manual_close' ? sendTelegram(tgClose(updated, finalPnl, extra?.reason ?? 'Cierre manual')) :
     Promise.resolve(),
   ])
@@ -695,9 +709,41 @@ export async function GET(req: Request): Promise<NextResponse> {
           results.updates.push({ id: sig.id, action: 'tp1_retroactive', newSL: sig.idea.price })
         }
       }
+      /*
+       * SIGNAL EVALUATION ORDER — DO NOT CHANGE:
+       * 0. Breakeven SL — BEFORE retroactive TP2 scan (prevents misreport)
+       * 1. Retroactive TP2 (only when live price is above breakeven)
+       * 2. Live price: TP3 → TP2 → TP1 → SL
+       *
+       * WHY: If TP1 was hit and SL is now at breakeven, a retrace to that level
+       * must be caught BEFORE the retroactive scan can falsely mark TP2.
+       * A kline that shows k.h >= TP2 might have actually hit breakeven SL first
+       * — we can't determine order from OHLC alone, so live price wins.
+       */
+
+      // ── 0. BREAKEVEN SL PRIORITY — runs before retroactive TP2 scan ─────────
+      // If tp1 was already hit AND the current price is at/below the current SL,
+      // close as breakeven now. This prevents the retroactive TP2 scan from firing
+      // and incorrectly marking TP2 when the position has already retraced to SL.
+      if (!changed && updated.tp1Hit && !updated.tp2Hit) {
+        const beSLHit = isLong ? price <= updated.idea.sl : price >= updated.idea.sl
+        if (beSLHit) {
+          const wasBreakeven = (updated.breakevenSet === true)
+            || Math.abs((updated.idea.sl - updated.idea.price) / updated.idea.price * 100) <= 0.20
+          updated = await handleSignalEvent(updated, wasBreakeven ? 'breakeven_sl' : 'sl', updated.idea.sl, ntfyTopic, {
+            reason: wasBreakeven
+              ? `SL en breakeven tocado a $${Math.round(updated.idea.sl).toLocaleString()}`
+              : `SL tocado a $${Math.round(updated.idea.sl).toLocaleString()}`,
+          })
+          changed = true
+          results.updates.push({ id: sig.id, action: wasBreakeven ? 'breakeven_sl_priority' : 'sl_priority', newSL: updated.idea.sl })
+        }
+      }
+
+      // ── 1. Retroactive TP2 — only if live price has NOT hit the breakeven SL ─
       if (!sig.tp2Hit && !changed && k1hHistory.length) {
         const tp2InHistory = k1hHistory.some(k => isLong ? k.h >= sig.idea.tp2 : k.l <= sig.idea.tp2)
-        if (tp2InHistory && updated.tp1Hit) {  // C1: use updated (may have tp1Hit set above)
+        if (tp2InHistory && updated.tp1Hit) {
           updated = await handleSignalEvent(updated, 'tp2', sig.idea.tp2, ntfyTopic, { reason: 'TP2 alcanzado (histórico — agente inactivo)' })
           await saveSignalToCloud(updated)
           changed = true
@@ -705,29 +751,29 @@ export async function GET(req: Request): Promise<NextResponse> {
         }
       }
 
-      // ── TP3 ───────────────────────────────────────────────────────────────────
-      // ALWAYS check TPs before SL — a signal that hit TP and retraced is a WIN
+      // ── 2. Live price evaluation: TP3 → TP2 → TP1 → SL ───────────────────────
+      // TP3
       if (!changed && (isLong ? price >= sig.idea.tp3 : price <= sig.idea.tp3)) {
         updated = await handleSignalEvent(updated, 'tp3', sig.idea.tp3, ntfyTopic, { reason: 'TP3 alcanzado' })
         changed = true
       }
-      // ── TP2 ───────────────────────────────────────────────────────────────────
+      // TP2 — only when live price actually reaches TP2 level
       else if (!changed && !sig.tp2Hit && (isLong ? price >= sig.idea.tp2 : price <= sig.idea.tp2)) {
         updated = await handleSignalEvent(updated, 'tp2', sig.idea.tp2, ntfyTopic, { reason: 'TP2 alcanzado' })
-        await saveSignalToCloud(updated)   // persist BEFORE next check to prevent re-fire
+        await saveSignalToCloud(updated)
         changed = true
       }
-      // ── TP1 ───────────────────────────────────────────────────────────────────
+      // TP1
       else if (!changed && !sig.tp1Hit && (isLong ? price >= sig.idea.tp1 : price <= sig.idea.tp1)) {
         updated = await handleSignalEvent(updated, 'tp1', sig.idea.tp1, ntfyTopic, { reason: 'TP1 alcanzado' })
         updated = { ...updated, breakevenSet: true }
-        await saveSignalToCloud(updated)   // persist BEFORE next check to prevent re-fire
+        await saveSignalToCloud(updated)
         changed = true
       }
-      // ── SL hit — checked LAST so a TP always wins over SL on same tick ────────
+      // SL — covers all remaining SL cases (tp2_hit with SL at tp1, non-breakeven losses)
       else if (!changed && (isLong ? price <= updated.idea.sl : price >= updated.idea.sl)) {
         const wasBreakeven = (updated.breakevenSet === true)
-          || Math.abs((updated.idea.sl - updated.idea.price) / updated.idea.price * 100) < 0.15
+          || Math.abs((updated.idea.sl - updated.idea.price) / updated.idea.price * 100) <= 0.20
         updated = await handleSignalEvent(updated, wasBreakeven ? 'breakeven_sl' : 'sl', updated.idea.sl, ntfyTopic, {
           reason: wasBreakeven
             ? `SL en breakeven tocado a $${Math.round(updated.idea.sl).toLocaleString()}`

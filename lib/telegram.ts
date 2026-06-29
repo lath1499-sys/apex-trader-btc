@@ -115,6 +115,25 @@ export function tgBrief(analysis: string, price: number, change: number): string
   return `📊 <b>APEX — ${time}</b>\nBTC: <code>${P(price)}</code> ${change >= 0 ? '▲' : '▼'} ${Math.abs(change).toFixed(2)}%\n\n${analysis}`
 }
 
+export function tgBreakeven(sig: SignalRecord, bankedPnl: number): string {
+  const P = (n: number) => `$${Math.round(n).toLocaleString()}`
+  return [
+    `🛡️ <b>BREAKEVEN CLOSE — ${sig.idea.side} ${sig.idea.tradeType}</b>`,
+    ``,
+    `✅ TP1 fue alcanzado → ${sig.tp1ClosePct ?? 40}% cerrado`,
+    `↩️ Precio regresó al entry → SL de breakeven tocado`,
+    ``,
+    `Entry: <code>${P(sig.idea.price)}</code>`,
+    `TP1 cerrado en: <code>${P(sig.idea.tp1)}</code>`,
+    `Breakeven SL: <code>${P(sig.idea.sl)}</code>`,
+    ``,
+    `💰 Ganancia banqueada en TP1: <b>+${bankedPnl.toFixed(2)}%</b>`,
+    `P&amp;L final: <b>+${bankedPnl.toFixed(2)}%</b>`,
+    ``,
+    `<i>El trade fue rentable. El sistema de parciales funcionó.</i>`,
+  ].join('\n')
+}
+
 export function tgDrawdownAlert(stage: 1 | 2 | 3, drawdownPct: number, riskPct: number): string {
   const msgs: Record<1 | 2 | 3, string> = {
     1: `✅ <b>Riesgo restaurado al 5%</b>\nDrawdown recuperado. Trading normal reanudado.`,
