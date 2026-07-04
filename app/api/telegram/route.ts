@@ -204,6 +204,34 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    else if (text === '/locks' || text === '/lock') {
+      const sb = getSb()
+      if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
+      const { data } = await Promise.resolve(
+        sb.from('apex_run_locks').select('*').order('job_type')
+      ).catch(() => ({ data: null })) as { data: Array<{
+        job_type: string; locked: boolean; locked_at: string | null
+        lock_expires_at: string | null; last_run_at: string | null; last_run_ms: number | null
+      }> | null }
+      if (!data || data.length === 0) {
+        await sendTelegram('❌ Tabla apex_run_locks no encontrada. Ejecuta el SQL en Supabase primero.', chatId)
+        return NextResponse.json({ ok: true })
+      }
+      const tz  = 'America/Santo_Domingo'
+      const fmt = (ts: string | null) => ts
+        ? new Date(ts).toLocaleTimeString('es-DO', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        : 'nunca'
+      const lines = data.map(l => {
+        const status = l.locked ? '🔴 RUNNING' : '🟢 libre'
+        const ms     = l.last_run_ms != null ? `${l.last_run_ms}ms` : '?'
+        return `${status} <b>${l.job_type}</b> — último: ${fmt(l.last_run_at)} (${ms})`
+      })
+      await sendTelegram(
+        `🔐 <b>Run Locks</b>\n\n${lines.join('\n')}\n\n<i>🔴 por más de 3min = problema</i>`,
+        chatId,
+      )
+    }
+
     else if (text === '/help' || text === '/h' || text === '/start') {
       await sendTelegram(
         `🤖 <b>APEX Trader — Comandos</b>\n\n` +
@@ -214,7 +242,8 @@ export async function POST(req: NextRequest) {
         `/capital — Gestión de capital\n` +
         `/risk — Estado de riesgo y drawdown\n` +
         `/macro — Snapshot macro real (CPI, DXY, Gold...)\n` +
-        `/leverage — Configuración de leverage por tipo\n\n` +
+        `/leverage — Configuración de leverage por tipo\n` +
+        `/locks — Estado de los run locks\n\n` +
         `⚙️ <b>Control</b>\n` +
         `/pause — Pausar apertura de nuevos trades\n` +
         `/resume — Reanudar el agente\n` +

@@ -683,6 +683,9 @@ export async function GET(req: Request): Promise<NextResponse> {
     let agentOpinionChange: string | null = null   // set inside generate-signal block if bias flips
     // prevStateForVoice already loaded in parallel Supabase batch above
 
+    // Tracks signals closed by the price-event loop this cycle.
+    // The portfolio-coherence block must skip these to prevent double-close.
+    const closedThisCycleByPrice = new Set<string>()
     const TERMINAL_STATUSES = new Set(['closed_manual', 'sl_hit', 'breakeven', 'tp3_hit'])
     for (const sig of active) {
       if (TERMINAL_STATUSES.has(sig.status)) continue
@@ -823,7 +826,8 @@ export async function GET(req: Request): Promise<NextResponse> {
 
       if (changed) {
         await saveSignalToCloud(updated)
-        const wasClosed = (['sl_hit', 'breakeven', 'tp3_hit'] as string[]).includes(updated.status)
+        const wasClosed = (['sl_hit', 'breakeven', 'tp3_hit', 'closed_manual'] as string[]).includes(updated.status)
+        if (wasClosed) closedThisCycleByPrice.add(sig.id)
         const closeSb = getDbClient()
         if (closeSb && wasClosed && updated.pnl != null) {
           const outcome = updated.status === 'breakeven'
@@ -1008,8 +1012,20 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
           for (const req of aiDecision.positionsToClose) {
             const sig = active.find(s => s.id === req.signalId)
             if (!sig) continue
+            // GUARD: skip if already closed by SL/TP this cycle — prevents double-close
+            if (closedThisCycleByPrice.has(req.signalId)) {
+              console.log(`[APEX Portfolio] Skipping close of ${req.signalId} — SL/TP already handled it this cycle`)
+              continue
+            }
             if (!['active', 'tp1_hit', 'tp2_hit'].includes(sig.status)) continue
             const isLong = sig.idea.side === 'LONG'
+            // Guard: if price already crossed SL, don't fabricate a bias-change close.
+            // The monitor or next SL check will handle it correctly.
+            const slAlreadyCrossed = isLong ? price <= sig.idea.sl : price >= sig.idea.sl
+            if (slAlreadyCrossed) {
+              console.log(`[APEX Portfolio] Skipping close of ${req.signalId} — price already at SL territory, SL handler will process`)
+              continue
+            }
             const pnlPct = isLong
               ? (price - sig.idea.price) / sig.idea.price * 100
               : (sig.idea.price - price) / sig.idea.price * 100
@@ -1028,19 +1044,29 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
             if (ntfyTopic) {
               await ntfy(
                 ntfyTopic,
-                sanitizeHdr(`APEX CIERRE COHERENCIA — ${sig.idea.side} ${pnlStr}`),
+                sanitizeHdr(`APEX SALIDA MANUAL — ${sig.idea.side} ${pnlStr}`),
                 [
-                  `🔄 Cambié de sesgo — cerrando posición que ya no encaja.`,
+                  `🔄 El agente decidió salir (precio NO tocó el SL)`,
                   ``,
                   `${sig.idea.side} ${sig.idea.tradeType} desde $${Math.round(sig.idea.price).toLocaleString()}`,
+                  `SL estaba en: $${Math.round(sig.idea.sl).toLocaleString()}`,
                   `Cierre: $${Math.round(price).toLocaleString()} | P&L: ${pnlStr}`,
                   ``,
-                  `Razón: ${req.reason}`,
+                  `Razón táctica: ${req.reason}`,
                 ].join('\n'),
                 4,
                 'arrows_counterclockwise',
               )
             }
+            await sendTelegram(
+              `🔄 <b>SALIDA MANUAL — ${sig.idea.side} ${sig.idea.tradeType}</b>\n\n` +
+              `⚡ Decisión del agente (precio NO tocó el SL)\n\n` +
+              `Entry: <code>$${Math.round(sig.idea.price).toLocaleString()}</code>\n` +
+              `SL estaba en: <code>$${Math.round(sig.idea.sl).toLocaleString()}</code>\n` +
+              `Salida: <code>$${Math.round(price).toLocaleString()}</code>\n` +
+              `P&L: <b>${pnlStr}</b>\n\n` +
+              `Razón táctica: <i>${req.reason}</i>`,
+            )
             closedIds.add(req.signalId)
             results.portfolioCloses!.push({ id: req.signalId, side: sig.idea.side, pnl: pnlStr, reason: req.reason })
             console.log(`[APEX Portfolio] Closed ${sig.idea.side} ${sig.id} — ${req.reason}`)

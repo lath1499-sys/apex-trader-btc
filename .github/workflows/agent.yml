@@ -2,50 +2,77 @@ name: APEX Agent
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # every 5 minutes — SL/TP detected within 5 min max
-  workflow_dispatch:          # manual trigger
+    - cron: '* * * * *'        # every 1 min — monitor runs every tick
+  workflow_dispatch:
   push:
     branches: [master]
-    paths-ignore:             # heartbeat commit must NOT re-trigger agent
+    paths-ignore:
       - '.agent-heartbeat'
       - '**.md'
 
-# Prevent parallel agent runs — queue instead of cancel (avoids missed TP/SL)
+# Separate concurrency groups per job type — monitor never blocks decide
 concurrency:
-  group: apex-agent-run
+  group: apex-${{ github.job }}
   cancel-in-progress: false
 
 jobs:
-  trigger-agent:
+  # ── Monitor: every minute — SL/TP only, no Claude, <15s ────────────────────
+  monitor:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger APEX Agent
+      - name: Monitor SL/TP
         run: |
           response=$(curl -s -w "\n%{http_code}" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            --max-time 65 \
+            --max-time 20 \
+            https://apex-trader-btc.vercel.app/api/agent/monitor)
+          http_code=$(echo "$response" | tail -1)
+          body=$(echo "$response" | head -1)
+          echo "Monitor HTTP $http_code: $body"
+
+  # ── Decide: every 5th minute — new signal generation with Claude ────────────
+  decide:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if 5th minute
+        id: check
+        run: |
+          MINUTE=$(date +%-M)
+          if [ $((MINUTE % 5)) -eq 0 ]; then echo "run=true" >> $GITHUB_OUTPUT
+          else echo "run=false" >> $GITHUB_OUTPUT; fi
+      - name: Generate signal
+        if: steps.check.outputs.run == 'true'
+        run: |
+          response=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            --max-time 90 \
             https://apex-trader-btc.vercel.app/api/agent)
           http_code=$(echo "$response" | tail -1)
           body=$(echo "$response" | head -1)
-          echo "HTTP Status: $http_code"
-          echo "Response: $body"
-          if [ "$http_code" != "200" ]; then
-            echo "Agent call failed with status $http_code"
-            exit 1
-          fi
+          echo "Decide HTTP $http_code: $body"
+          if [ "$http_code" != "200" ]; then echo "Agent call failed: $http_code"; exit 1; fi
 
+  # ── Keep-alive: every 5th minute — prevents workflow from sleeping ──────────
   keep-alive:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
     steps:
+      - name: Check if 5th minute
+        id: check
+        run: |
+          MINUTE=$(date +%-M)
+          if [ $((MINUTE % 5)) -eq 0 ]; then echo "run=true" >> $GITHUB_OUTPUT
+          else echo "run=false" >> $GITHUB_OUTPUT; fi
       - uses: actions/checkout@v4
+        if: steps.check.outputs.run == 'true'
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Keep workflow alive
+      - name: Heartbeat commit
+        if: steps.check.outputs.run == 'true'
         run: |
           git config user.email "apex-bot@apex-trader.com"
           git config user.name "APEX Bot"
-          echo "Last agent run: $(date -u)" > .agent-heartbeat
+          echo "Last run: $(date -u)" > .agent-heartbeat
           git add .agent-heartbeat
           git diff --staged --quiet || git commit -m "chore: agent heartbeat $(date -u +%Y-%m-%dT%H:%M)"
           git push || true
