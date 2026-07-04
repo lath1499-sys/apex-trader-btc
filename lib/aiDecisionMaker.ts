@@ -285,7 +285,22 @@ ${leverageTable}
 BIAS DE ACCIÓN: Si ves 2+ confluencias técnicas (ABCD en PRZ, estructura rota, RSI extremo, alineación multi-TF, soporte/resistencia clave) → la respuesta correcta es ENTRAR, no esperar. WAIT solo cuando el mercado está en rango sin setup claro o hay evento macro activo.
 
 ${daysSinceLastSignal >= 3 ? `⚡ ALERTA CRÍTICA: Han pasado ${daysSinceLastSignal} días sin generar ninguna señal. Esto es inaceptable. Busca activamente cualquier setup con 2+ confluencias. Un setup imperfecto con gestión de riesgo correcta es SIEMPRE mejor que la inacción prolongada.` : ''}
-${forceScalpEvaluation ? `🎯 MODO SCALP FORZADO: Tu tarea ahora es encontrar UN scalp operables en 15M o 1H. Busca: RSI extremo + estructura clara, o BOS/CHoCH + FVG cercano, o soporte/resistencia clave con confluencia. Si hay cualquier setup de calidad media o superior → ENTRA. No digas WAIT.` : ''}`
+${forceScalpEvaluation ? `🎯 MODO SCALP FORZADO: Tu tarea ahora es encontrar UN scalp operable en 15M o 1H. Busca: RSI extremo + estructura clara, o BOS/CHoCH + FVG cercano, o soporte/resistencia clave con confluencia. Si hay cualquier setup de calidad media o superior → ENTRA. No digas WAIT.` : ''}
+
+═══ AUDITORÍA DE SESGO ═══
+${(ctx as any)?.recentSignalTypes?.every((t: string) => t === 'Scalp') ? `
+⚠️ ALERTA DE SESGO: Los últimos trades generados fueron todos Scalps.
+Para este ciclo, evalúa PRIMERO el 1D y 4H:
+1. ¿Hay estructura Swing en 1D? Si SÍ → tradeType="Swing"
+2. ¿Hay setup DayTrade en 4H? Si SÍ → tradeType="DayTrade"
+3. Solo si ambas respuestas son genuinamente NO → evalúa el Scalp en 15M/1H
+Si el 4H tiene un setup igual o mejor que el 15M → usa el 4H y clasifica como DayTrade.
+` : ''}
+REGLA FINAL DE TIPO: El tipo de trade DEBE coincidir con el SL en % del precio:
+- SL < 1%   → Scalp (max 10x leverage)
+- SL 1-3%   → DayTrade (max 5x leverage)
+- SL > 3%   → Swing (max 3x leverage)
+Si el SL no coincide con el tipo → ajusta el tipo, no el SL.`
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {

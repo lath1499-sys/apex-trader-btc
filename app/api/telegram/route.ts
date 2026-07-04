@@ -3,6 +3,7 @@ import { sendTelegram, tgStatus, authorizedChatId } from '@/lib/telegram'
 import { getCapitalState, DEFAULT_CAPITAL_CONFIG } from '@/lib/capitalManager'
 import { getMacroSnapshot, updateMacroOverride } from '@/lib/macroData'
 import { getSupabaseServer } from '@/lib/supabase'
+import { fetchBTCNews, formatNewsForTelegram } from '@/lib/newsFetcher'
 
 type RawSignal = { side: string; trade_type: string; entry: number; sl: number; tp1: number; tp2: number; tp3: number; pnl: number | null; status: string }
 function getSb() { return getSupabaseServer() }
@@ -232,6 +233,139 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    else if (text === '/news' || text === '/n') {
+      try {
+        const snap = await fetchBTCNews()
+        await sendTelegram(formatNewsForTelegram(snap), chatId)
+      } catch {
+        await sendTelegram('❌ Error obteniendo noticias.', chatId)
+      }
+    }
+
+    else if (text === '/newsraw') {
+      try {
+        const snap = await fetchBTCNews()
+        const hitList  = snap.sourcesHit.map(s => `✅ ${s}`).join('\n')
+        const failList = snap.sourcesFailed.map(s => `❌ ${s}`).join('\n')
+        const time = new Date(snap.fetchedAt).toLocaleTimeString('es-DO', {
+          timeZone: 'America/Santo_Domingo', hour: '2-digit', minute: '2-digit',
+        })
+        await sendTelegram(
+          `🔧 <b>News Debug — ${time}</b>\n\n` +
+          `Items totales: <b>${snap.items.length}</b>\n` +
+          `Sentimiento: ${snap.sentimentScore}/100\n` +
+          `Bull: ${snap.sentiment.bullish} | Bear: ${snap.sentiment.bearish} | Neutral: ${snap.sentiment.neutral}\n` +
+          `Críticas: ${snap.criticalAlerts.length}\n\n` +
+          `<b>Fuentes OK (${snap.sourcesHit.length}):</b>\n${hitList || '—'}\n\n` +
+          (failList ? `<b>Fallos (${snap.sourcesFailed.length}):</b>\n${failList}` : ''),
+          chatId,
+        )
+      } catch {
+        await sendTelegram('❌ Error obteniendo debug de noticias.', chatId)
+      }
+    }
+
+    else if (text === '/verify' || text === '/v') {
+      const [macro, cs] = await Promise.all([
+        getMacroSnapshot().catch(() => null),
+        getCapitalState(DEFAULT_CAPITAL_CONFIG).catch(() => null),
+      ])
+      const sb = getSb()
+      const { data: winData } = await (sb
+        ? Promise.resolve(sb.from('apex_signals').select('pnl, status').eq('status', 'closed'))
+            .catch(() => ({ data: null }))
+        : Promise.resolve({ data: null })) as { data: Array<{ pnl: number | null }> | null }
+      const closed  = winData ?? []
+      const wins    = closed.filter(s => (s.pnl ?? 0) > 0).length
+      const winRate = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '?'
+      await sendTelegram(
+        `🔍 <b>Datos exactos del agente ahora:</b>\n\n` +
+        `📊 <b>Macro:</b>\n` +
+        `  CPI: <b>${macro?.cpi_yoy ?? '?'}%</b> | Core: ${macro?.core_cpi_yoy ?? '?'}%\n` +
+        `  Fed: <b>${macro?.fed_rate ?? '?'}%</b> (${macro?.fed_next_meeting ?? 'HOLD'})\n` +
+        `  DXY: ${macro?.dxy ?? '?'} | S&P: ${macro?.sp500_change ?? '?'}%\n` +
+        `  ETF 7D: $${macro?.etf_flow_7d ?? '?'}M | F&G: ${macro?.fear_greed ?? '?'}/100\n\n` +
+        `💰 <b>Capital:</b>\n` +
+        `  Balance: $${cs?.availableBalance?.toFixed(2) ?? '?'}\n` +
+        `  Riesgo/trade: ${cs ? (cs.effectiveRiskPct * 100).toFixed(0) : '?'}%\n` +
+        `  Stage: ${cs?.drawdownStage ?? '?'}\n\n` +
+        `📈 <b>Performance:</b>\n` +
+        `  Trades cerrados: ${closed.length}\n` +
+        `  Win Rate: ${winRate}%\n` +
+        `  Ganadores: ${wins} | Perdedores: ${closed.length - wins}\n\n` +
+        `<i>Fuente macro: ${macro?.source_note ?? 'desconocida'}</i>`,
+        chatId,
+      )
+    }
+
+    else if (text === '/stats') {
+      const sb = getSb()
+      if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
+      const { data: closed } = await Promise.resolve(
+        sb.from('apex_signals').select('pnl, trade_type, status, closed_at').eq('status', 'closed')
+          .order('closed_at', { ascending: false }).limit(100)
+      ).catch(() => ({ data: null })) as {
+        data: Array<{ pnl: number | null; trade_type: string; closed_at: string | null }> | null
+      }
+      if (!closed || closed.length === 0) { await sendTelegram('📋 Sin trades cerrados aún.', chatId); return NextResponse.json({ ok: true }) }
+
+      const byType: Record<string, { wins: number; losses: number; totalPnl: number; count: number }> = {}
+      for (const t of closed) {
+        const tt = t.trade_type ?? 'Unknown'
+        if (!byType[tt]) byType[tt] = { wins: 0, losses: 0, totalPnl: 0, count: 0 }
+        const pnl = t.pnl ?? 0
+        byType[tt].count++
+        byType[tt].totalPnl += pnl
+        if (pnl > 0) byType[tt].wins++; else byType[tt].losses++
+      }
+      const typeEmoji: Record<string, string> = { Scalp: '⚡', DayTrade: '📊', Swing: '🌊' }
+      const lines = Object.entries(byType).map(([tt, s]) => {
+        const wr    = s.count > 0 ? ((s.wins / s.count) * 100).toFixed(0) : '0'
+        const avgPnl = s.count > 0 ? (s.totalPnl / s.count).toFixed(2) : '0'
+        const emoji  = typeEmoji[tt] ?? '•'
+        return `${emoji} <b>${tt}</b>: ${s.count} trades | WR ${wr}% | Avg P&amp;L ${avgPnl >= '0' ? '+' : ''}${avgPnl}%`
+      })
+      const totalPnl = closed.reduce((acc, t) => acc + (t.pnl ?? 0), 0)
+      const totalWins = closed.filter(t => (t.pnl ?? 0) > 0).length
+      await sendTelegram(
+        `📈 <b>Performance por Tipo</b>\n\n${lines.join('\n\n')}\n\n` +
+        `📊 <b>Total:</b> ${closed.length} trades | WR ${((totalWins / closed.length) * 100).toFixed(0)}%\n` +
+        `💰 P&amp;L acumulado: ${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}%`,
+        chatId,
+      )
+    }
+
+    else if (text === '/lastbrief' || text === '/lb') {
+      const sb = getSb()
+      if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
+      const { data: briefs } = await Promise.resolve(
+        sb.from('apex_brief_history')
+          .select('brief_type, analysis, price_at_brief, created_at')
+          .order('created_at', { ascending: false })
+          .limit(5)
+      ).catch(() => ({ data: null })) as {
+        data: Array<{ brief_type: string | null; analysis: string; price_at_brief: number | null; created_at: string }> | null
+      }
+      if (!briefs || briefs.length === 0) {
+        await sendTelegram('📋 Sin briefs guardados. La tabla apex_brief_history puede estar vacía.', chatId)
+        return NextResponse.json({ ok: true })
+      }
+      const tz = 'America/Santo_Domingo'
+      for (const brief of briefs.slice(0, 5)) {
+        const timeStr = new Date(brief.created_at).toLocaleTimeString('es-DO', {
+          timeZone: tz, hour: '2-digit', minute: '2-digit',
+        })
+        const priceStr = brief.price_at_brief ? `$${Math.round(brief.price_at_brief).toLocaleString()}` : '?'
+        const snippet  = (brief.analysis ?? '').slice(0, 300)
+        await sendTelegram(
+          `📊 <b>${brief.brief_type ?? 'Brief'} — ${timeStr}</b>\n` +
+          `BTC: <code>${priceStr}</code>\n\n` +
+          `${snippet}${snippet.length >= 300 ? '…' : ''}`,
+          chatId,
+        )
+      }
+    }
+
     else if (text === '/help' || text === '/h' || text === '/start') {
       await sendTelegram(
         `🤖 <b>APEX Trader — Comandos</b>\n\n` +
@@ -244,11 +378,17 @@ export async function POST(req: NextRequest) {
         `/macro — Snapshot macro real (CPI, DXY, Gold...)\n` +
         `/leverage — Configuración de leverage por tipo\n` +
         `/locks — Estado de los run locks\n\n` +
+        `📰 <b>Análisis</b>\n` +
+        `/news — Noticias BTC recientes (15+ fuentes)\n` +
+        `/newsraw — Debug de fuentes y sentimiento\n` +
+        `/verify — Datos exactos que usa el agente\n` +
+        `/stats — Performance por tipo de trade\n` +
+        `/lastbrief — Últimos 5 análisis del agente\n\n` +
         `⚙️ <b>Control</b>\n` +
         `/pause — Pausar apertura de nuevos trades\n` +
         `/resume — Reanudar el agente\n` +
         `/close_all — ⚠️ Cerrar señales en Supabase\n\n` +
-        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev`,
+        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb`,
         chatId,
       )
     }

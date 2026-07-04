@@ -38,17 +38,28 @@ const P = (n: number) => `$${Math.round(n).toLocaleString()}`
 
 export function tgSignal(sig: SignalRecord): string {
   const { idea } = sig
-  const emoji   = idea.side === 'LONG' ? '🟢' : '🔴'
-  const reasons = idea.reasons.slice(0, 3).map(r => `• ${r.txt}`).join('\n')
+  const emoji     = idea.side === 'LONG' ? '🟢' : '🔴'
+  const confLabel = idea.confidence === 'ALTA' ? 'ALTA 🔥' : idea.confidence === 'MEDIA' ? 'MEDIA' : 'BAJA'
+  const reasons   = idea.reasons.slice(0, 3).map(r => `• ${r.txt}`).join('\n')
+  const scoreStr  = (idea.bull != null && idea.maxSc != null)
+    ? `📊 Score: ${idea.bull + idea.bear}/${idea.maxSc * 2}`
+    : ''
   return [
-    `${emoji} <b>${idea.side} ${idea.tradeType.toUpperCase()}</b> — Confianza: <b>${idea.confidence}</b>`,
+    `${emoji} <b>${idea.side} ${idea.tradeType.toUpperCase()}</b> — Confianza: <b>${confLabel}</b>`,
     ``,
     `💰 Entry: <code>${P(idea.price)}</code>`,
-    `🛑 SL: <code>${P(idea.sl)}</code>`,
-    `🎯 TP1: <code>${P(idea.tp1)}</code> (${sig.tp1ClosePct ?? 40}%) R:R ${sig.tp1RR ?? '?'}:1`,
-    `🎯 TP2: <code>${P(idea.tp2)}</code> (${sig.tp2ClosePct ?? 35}%) R:R ${sig.tp2RR ?? '?'}:1`,
-    `🎯 TP3: <code>${P(idea.tp3)}</code> (${sig.tp3ClosePct ?? 25}%)`,
+    `🛑 SL:    <code>${P(idea.sl)}</code>`,
+    ``,
+    `<b>PLAN DE SALIDA PARCIAL:</b>`,
+    `🎯 TP1: <code>${P(idea.tp1)}</code> → Cerrar ${sig.tp1ClosePct ?? 40}% | R:R ${sig.tp1RR ?? '?'}:1`,
+    `🎯 TP2: <code>${P(idea.tp2)}</code> → Cerrar ${sig.tp2ClosePct ?? 35}% | R:R ${sig.tp2RR ?? '?'}:1`,
+    `🎯 TP3: <code>${P(idea.tp3)}</code> → Cerrar ${sig.tp3ClosePct ?? 25}% restante`,
+    ``,
+    `Si TP1 tocado → SL a breakeven (trade gratuito)`,
+    `Si TP2 tocado → SL a TP1 (profit garantizado)`,
+    ``,
     `📐 Leverage máx: <b>${idea.maxLev}x</b>`,
+    scoreStr,
     reasons ? `\n📋 ${reasons}` : '',
   ].filter(Boolean).join('\n')
 }

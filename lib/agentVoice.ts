@@ -250,6 +250,14 @@ ${rawData}
 
 ${focusInstructions[selectedFocus]}
 
+═══ PROHIBICIONES ABSOLUTAS (ignora si lo ves en los datos) ═══
+
+- NO mencionar "Max Pain" — no tienes fuente de datos real para opciones BTC
+- NO mencionar "IV Rank" ni "DVOL" — datos de Deribit no disponibles ahora
+- NO usar CPI 0.0% — el CPI real es ${macro?.cpi_yoy ?? 4.2}%
+- NO decir "Fed bajó", "Fed recortó" ni "Fed podría recortar pronto" — la Fed está en HOLD con CPI en ${macro?.cpi_yoy ?? 4.2}% (> 3% = sin margen para recortar)
+- NO terminar con sesgo ambiguo ("neutral-bajista con sesgo alcista") — elige UNO
+
 ═══ ANTI-REPETICIÓN ═══
 
 Los últimos 3 briefs cubrieron: ${recentFocuses.length > 0 ? recentFocuses.join(', ') : 'ninguno todavía'}.
@@ -577,6 +585,11 @@ export async function generateDeepAnalysis(
         }).join(' | ')
       : 'ninguna'
 
+    // Use getMacroSnapshot() for verified macro data — avoids wrong CPI from FRED API
+    const deepMacro = await getMacroSnapshot().catch(() => null)
+    const deepCPI   = deepMacro?.cpi_yoy ?? macroIndicators?.cpi?.yoy?.toFixed(1) ?? '?'
+    const deepFed   = deepMacro?.fed_rate ?? macroIndicators?.fedRate?.current?.toFixed(2) ?? '?'
+
     const deepPrompt = `Eres APEX, trader senior BTC 15 años. Análisis profundo cada 4 horas.
 Tu jefe es un trader experimentado — necesita OPINIÓN y NARRATIVA, no datos en crudo.
 
@@ -586,17 +599,22 @@ BTC $${Math.round(price).toLocaleString()} | Régimen: ${regimeTxt} | ADX: ${reg
 4H: ${i4?.bias ?? '?'} RSI${i4?.rsi?.toFixed(0) ?? '?'} MACD${(i4?.macd?.hist ?? 0) > 0 ? '+' : ''}${i4?.macd?.hist?.toFixed(0) ?? '?'}
 Elliott 4H: Onda ${ew4h?.currentWave ?? '?'} ${ew4h?.direction ?? ''} → $${ew4h?.nextTarget ? Math.round(ew4h.nextTarget).toLocaleString() : 'N/A'}
 Patrones fuertes: ${strongPats || 'ninguno'}
-Fed: ${macroIndicators?.fedRate?.current?.toFixed(2) ?? '?'}% | CPI: ${macroIndicators?.cpi?.yoy?.toFixed(1) ?? '?'}% | Liquidez global: ${globalLiquidity?.trend ?? 'N/A'}
-IV Rank: ${optionsData?.iv?.ivRank ?? 'N/A'}/100 | Max Pain: $${optionsData?.maxPain ? Math.round(optionsData.maxPain).toLocaleString() : 'N/A'}
+Fed: ${deepFed}% (HOLD sin cambio reciente) | CPI: ${deepCPI}% — ${Number(deepCPI) >= 4.0 ? 'ALTO — Fed no puede recortar' : 'elevado'} | Liquidez global: ${globalLiquidity?.trend ?? 'N/A'}
 Señales activas: ${activeSigTxt}
 Rendimiento: ${perfStats?.total > 0 ? `${perfStats.total} señales | WR ${perfStats.winRate}% | P&L ${perfStats.totalPnl >= 0 ? '+' : ''}${perfStats.totalPnl?.toFixed(1)}%` : 'sin historial suficiente'}
+
+PROHIBICIONES ABSOLUTAS — No mencionar bajo ningún contexto:
+- "Max Pain" ni valores de opciones — no tienes fuente verificada de Deribit
+- "IV Rank" ni "DVOL" — sin fuente verificada
+- CPI 0.0% — el CPI real es ${deepCPI}% (usa exactamente este número)
+- "Fed bajó" o "Fed recortó" — la Fed está en HOLD sin cambio reciente
 
 Escribe análisis profundo de 4H en máximo 20 líneas:
 1. Narrativa de la estructura actual (qué está haciendo el mercado realmente)
 2. Los 2-3 factores más relevantes ahora conectados entre sí
-3. Macro y su impacto específico en BTC esta semana
+3. Macro y su impacto específico en BTC esta semana (usa CPI ${deepCPI}%, Fed HOLD)
 4. Estado de las señales activas (si las hay)
-5. Sesgo y los niveles clave que cambian el escenario
+5. Sesgo UNO y claro (alcista/bajista/neutral) con los niveles que cambian el escenario
 Sin headers tipo ═══. Sin bullets. Párrafos cortos. Primera persona con opinión.`
 
     try {
