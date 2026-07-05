@@ -4,6 +4,7 @@ import { getCapitalState, DEFAULT_CAPITAL_CONFIG } from '@/lib/capitalManager'
 import { getMacroSnapshot, updateMacroOverride } from '@/lib/macroData'
 import { getSupabaseServer } from '@/lib/supabase'
 import { fetchBTCNews, formatNewsForTelegram } from '@/lib/newsFetcher'
+import { sendNtfy } from '@/lib/ntfy'
 
 type RawSignal = { side: string; trade_type: string; entry: number; sl: number; tp1: number; tp2: number; tp3: number; pnl: number | null; status: string }
 function getSb() { return getSupabaseServer() }
@@ -233,6 +234,25 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    else if (text === '/test' || text === '/ping') {
+      const start      = Date.now()
+      const ntfyTopic  = process.env.NTFY_TOPIC ?? ''
+      let ntfyStatus = '⚠️ NTFY_TOPIC no configurado'
+      if (ntfyTopic) {
+        const ok = await sendNtfy(ntfyTopic, 'APEX /test desde Telegram', 'Si ves esto, NTFY funciona ✅', 3, ['white_check_mark'])
+          .catch(() => false)
+        ntfyStatus = ok ? '✅ OK' : '❌ Falló al enviar'
+      }
+      await sendTelegram(
+        `✅ <b>APEX Bot — Test OK</b>\n\n` +
+        `Telegram: ✅ OK\n` +
+        `NTFY: ${ntfyStatus}\n` +
+        `Latencia: ${Date.now() - start}ms\n` +
+        `<i>${new Date().toLocaleString('es-DO', { timeZone: 'America/Santo_Domingo' })}</i>`,
+        chatId,
+      )
+    }
+
     else if (text === '/news' || text === '/n') {
       try {
         const snap = await fetchBTCNews()
@@ -388,6 +408,8 @@ export async function POST(req: NextRequest) {
         `/pause — Pausar apertura de nuevos trades\n` +
         `/resume — Reanudar el agente\n` +
         `/close_all — ⚠️ Cerrar señales en Supabase\n\n` +
+        `🔧 <b>Diagnóstico</b>\n` +
+        `/test — Verificar que Telegram y NTFY funcionan\n\n` +
         `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb`,
         chatId,
       )

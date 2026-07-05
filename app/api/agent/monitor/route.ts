@@ -7,7 +7,23 @@ import { withLock }                                  from '@/lib/runLock'
 import { getSupabaseServer, transformSignal }         from '@/lib/supabase'
 import { saveSignalToCloud }                          from '@/lib/supabase'
 import { sendTelegram, tgTP, tgBreakeven, tgSLFloor } from '@/lib/telegram'
+import { sendNtfy }                                   from '@/lib/ntfy'
 import type { SignalRecord }                          from '@/lib/types'
+
+// Fire Telegram + NTFY in parallel — neither blocks the other
+async function notify(
+  tgMsg:  string,
+  topic:  string,
+  title:  string,
+  body:   string,
+  prio:   1|2|3|4|5 = 3,
+  tags:   string[] = [],
+): Promise<void> {
+  await Promise.all([
+    sendTelegram(tgMsg),
+    topic ? sendNtfy(topic, title, body, prio, tags) : Promise.resolve(),
+  ])
+}
 
 // ── Minimal price fetch (Binance → Bybit → Kraken) ───────────────────────────
 async function getBtcPrice(): Promise<number | null> {
@@ -33,7 +49,7 @@ async function getBtcPrice(): Promise<number | null> {
 }
 
 // ── Core: process one signal's price events ───────────────────────────────────
-async function processSignal(sig: SignalRecord, price: number): Promise<string | null> {
+async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string): Promise<string | null> {
   if (!['active', 'tp1_hit', 'tp2_hit'].includes(sig.status)) return null
 
   const isLong  = sig.idea.side === 'LONG'
@@ -57,7 +73,13 @@ async function processSignal(sig: SignalRecord, price: number): Promise<string |
         closeReason: `SL piso en TP1 tocado tras TP2. TP1+TP2 banqueados.`,
       }
       await saveSignalToCloud(updated)
-      await sendTelegram(tgSLFloor(updated, finalPnl))
+      await notify(
+        tgSLFloor(updated, finalPnl),
+        ntfyTopic,
+        `SL PISO TOCADO -- ${sig.idea.side} BTC ganancia asegurada`,
+        `TP1+TP2 banqueados. SL piso en TP1 tocado.\nP&L total: +${finalPnl.toFixed(2)}%\nTipo: ${sig.idea.tradeType}`,
+        4, ['white_check_mark', 'moneybag'],
+      )
       console.log(`[MONITOR] TP1-floor SL hit: ${sig.id} P&L ${finalPnl.toFixed(2)}%`)
       return `SL_FLOOR:${sig.id}`
     }
@@ -74,7 +96,13 @@ async function processSignal(sig: SignalRecord, price: number): Promise<string |
         closeReason: `SL breakeven tocado. TP1 banqueado: +${banked.toFixed(2)}%`,
       }
       await saveSignalToCloud(updated)
-      await sendTelegram(tgBreakeven(updated, banked))
+      await notify(
+        tgBreakeven(updated, banked),
+        ntfyTopic,
+        `BREAKEVEN TOCADO -- ${sig.idea.side} BTC sin perdida`,
+        `TP1 banqueado: +${banked.toFixed(2)}%\nResto cerrado en breakeven.\nP&L total: +${finalPnl.toFixed(2)}%`,
+        3, ['shield'],
+      )
       console.log(`[MONITOR] Breakeven SL hit: ${sig.id} P&L ${finalPnl.toFixed(2)}%`)
       return `BREAKEVEN:${sig.id}`
     }
@@ -86,14 +114,21 @@ async function processSignal(sig: SignalRecord, price: number): Promise<string |
       closedAt: new Date().toISOString(), exitPrice: sig.idea.sl,
       closeReason: `Stop loss ejecutado en $${Math.round(sig.idea.sl).toLocaleString()}`,
     }
-    await saveSignalToCloud(updated)
-    await sendTelegram(
+    const slTgMsg = (
       `❌ <b>STOP LOSS — ${sig.idea.side} ${sig.idea.tradeType}</b>\n\n` +
       `⚙️ SL ejecutado automáticamente\n\n` +
       `Entry: <code>$${Math.round(entry).toLocaleString()}</code>\n` +
       `SL: <code>$${Math.round(sig.idea.sl).toLocaleString()}</code>\n` +
       `P&L: <b>${slRawPnl.toFixed(2)}%</b>\n\n` +
-      `Capital libre para próxima señal.`,
+      `Capital libre para próxima señal.`
+    )
+    await saveSignalToCloud(updated)
+    await notify(
+      slTgMsg,
+      ntfyTopic,
+      `STOP LOSS -- ${sig.idea.side} BTC ${slRawPnl.toFixed(2)}%`,
+      `${sig.idea.side} ${sig.idea.tradeType} cerrado\nEntry: $${Math.round(entry).toLocaleString()}\nSL: $${Math.round(sig.idea.sl).toLocaleString()}\nP&L: ${slRawPnl.toFixed(2)}%`,
+      5, ['x', 'red_circle'],
     )
     console.log(`[MONITOR] SL hit: ${sig.id} P&L ${slRawPnl.toFixed(2)}%`)
     return `SL_HIT:${sig.id}`
@@ -110,10 +145,17 @@ async function processSignal(sig: SignalRecord, price: number): Promise<string |
       closedAt: new Date().toISOString(), exitPrice: sig.idea.tp3,
       closeReason: 'TP3 objetivo máximo alcanzado',
     }
-    await saveSignalToCloud(updated)
-    await sendTelegram(
+    const tp3TgMsg = (
       `🏆 <b>TP3 ALCANZADO — ${sig.idea.side} ${sig.idea.tradeType}</b>\n` +
-      `P&L total: <b>+${finalPnl.toFixed(2)}%</b>`,
+      `P&L total: <b>+${finalPnl.toFixed(2)}%</b>`
+    )
+    await saveSignalToCloud(updated)
+    await notify(
+      tp3TgMsg,
+      ntfyTopic,
+      `TP3 MAXIMO -- ${sig.idea.side} BTC +${finalPnl.toFixed(2)}%`,
+      `Objetivo maximo alcanzado.\n${sig.idea.side} ${sig.idea.tradeType}\nP&L total: +${finalPnl.toFixed(2)}%`,
+      5, ['trophy'],
     )
     console.log(`[MONITOR] TP3 hit: ${sig.id}`)
     return `TP3_HIT:${sig.id}`
@@ -139,7 +181,13 @@ async function processSignal(sig: SignalRecord, price: number): Promise<string |
       // suppress unused-var for buffer (only used in TP1 below)
       void buffer
       await saveSignalToCloud(updated)
-      await sendTelegram(tgTP(updated, 2, tp2Banked))
+      await notify(
+        tgTP(updated, 2, tp2Banked),
+        ntfyTopic,
+        `TP2 ALCANZADO -- ${sig.idea.side} BTC`,
+        `Banqueado: +${tp2Banked.toFixed(2)}%\nSL movido a TP1 (profit garantizado)\nRestante: ${newRemaining}%`,
+        4, ['white_check_mark', 'white_check_mark'],
+      )
       console.log(`[MONITOR] TP2 hit: ${sig.id} banked ${tp2Banked.toFixed(2)}%`)
       return `TP2_HIT:${sig.id}`
     }
@@ -161,7 +209,13 @@ async function processSignal(sig: SignalRecord, price: number): Promise<string |
         idea: { ...sig.idea, sl: newSL },
       }
       await saveSignalToCloud(updated)
-      await sendTelegram(tgTP(updated, 1, tp1Banked))
+      await notify(
+        tgTP(updated, 1, tp1Banked),
+        ntfyTopic,
+        `TP1 ALCANZADO -- ${sig.idea.side} BTC`,
+        `Banqueado: +${tp1Banked.toFixed(2)}%\nSL movido a breakeven (trade gratuito)\nRestante: ${newRemaining}%`,
+        4, ['white_check_mark'],
+      )
       console.log(`[MONITOR] TP1 hit: ${sig.id} banked ${tp1Banked.toFixed(2)}%, new SL $${Math.round(newSL).toLocaleString()}`)
       return `TP1_HIT:${sig.id}`
     }
@@ -176,6 +230,8 @@ export async function GET(req: Request): Promise<NextResponse> {
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const ntfyTopic = process.env.NTFY_TOPIC ?? ''
 
   const result = await withLock('monitor', async () => {
     const price = await getBtcPrice()
@@ -199,7 +255,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 
     for (const sig of signals) {
       try {
-        const r = await processSignal(sig, price)
+        const r = await processSignal(sig, price, ntfyTopic)
         if (r) processed.push(r)
       } catch (e) {
         console.error(`[MONITOR] Error on signal ${sig.id}:`, e instanceof Error ? e.message : e)

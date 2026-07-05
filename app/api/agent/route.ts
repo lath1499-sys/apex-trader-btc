@@ -172,7 +172,10 @@ async function handleSignalEvent(
     )
     if (v.warning) {
       console.error('[APEX Validator]', v.warning)
-      void sendTelegram(`⚠️ <b>Auto-corrección detectada</b>\n<code>${v.warning}</code>`)
+      void Promise.all([
+        sendTelegram(`⚠️ <b>Auto-corrección detectada</b>\n<code>${v.warning}</code>`),
+        ntfyTopic ? ntfy(ntfyTopic, sanitizeHdr('APEX Auto-corrección detectada'), v.warning.slice(0, 300), 4, 'warning') : Promise.resolve(),
+      ])
     }
   }
 
@@ -1393,8 +1396,18 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
     // ── 7. BB Squeeze alert — max once per 4 hours ────────────────────────────
     // Fires when BB Width 4H drops below 0.8% (extreme compression — breakout imminent)
     // Spam guard: piggyback on 4H deep analysis cadence
-    if (regime && regime.bbWidthPct < 0.8 && hrsSinceDeep >= 4 && ntfyTopic) {
-      await ntfyBBSqueeze(price, regime.bbWidthPct, ntfyTopic)
+    if (regime && regime.bbWidthPct < 0.8 && hrsSinceDeep >= 4) {
+      await Promise.all([
+        ntfyTopic ? ntfyBBSqueeze(price, regime.bbWidthPct, ntfyTopic) : Promise.resolve(),
+        sendTelegram(
+          `⚡ <b>BB SQUEEZE BTC 4H</b>\n\n` +
+          `Bandas de Bollinger comprimidas al máximo.\n` +
+          `BB Width: <b>${regime.bbWidthPct.toFixed(2)}%</b> — umbral 0.8%\n` +
+          `Precio: <code>$${Math.round(price).toLocaleString()}</code>\n\n` +
+          `⚠️ Movimiento explosivo inminente en cualquier dirección.\n` +
+          `Prepara órdenes en soporte y resistencia clave.`,
+        ),
+      ])
     }
 
     return NextResponse.json({ status: 'ok', ...results })
@@ -1415,13 +1428,21 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
         const lastErrAt = (lastErrData as { data: { last_error_alert_at?: string } | null }).data?.last_error_alert_at
         const minsSince = lastErrAt ? (Date.now() - new Date(lastErrAt).getTime()) / 60_000 : Infinity
         if (minsSince >= 30) {
-          await ntfy(
-            ntfyTopic,
-            sanitizeHdr('APEX AGENTE ERROR CRITICO'),
-            `El agente falló y no completó este ciclo.\n\nError: ${msg.slice(0, 300)}\n\nRevisa los logs de Vercel.`,
-            5,
-            'warning,rotating_light',
-          )
+          await Promise.all([
+            ntfyTopic ? ntfy(
+              ntfyTopic,
+              sanitizeHdr('APEX AGENTE ERROR CRITICO'),
+              `El agente falló y no completó este ciclo.\n\nError: ${msg.slice(0, 300)}\n\nRevisa los logs de Vercel.`,
+              5,
+              'warning,rotating_light',
+            ) : Promise.resolve(),
+            sendTelegram(
+              `🚨 <b>APEX — Error Crítico</b>\n\n` +
+              `El agente falló y no completó este ciclo.\n\n` +
+              `<code>${msg.slice(0, 300)}</code>\n\n` +
+              `<i>Revisa los logs de Vercel.</i>`,
+            ),
+          ])
           if (errSb) {
             await Promise.resolve(errSb.from('apex_agent_state')
               .update({ last_error_alert_at: new Date().toISOString() })

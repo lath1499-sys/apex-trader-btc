@@ -5,9 +5,12 @@ const CHAT_ID   = process.env.TELEGRAM_CHAT_ID   ?? ''
 const BASE      = `https://api.telegram.org/bot${BOT_TOKEN}`
 
 export async function sendTelegram(text: string, chatId?: string): Promise<void> {
-  if (!BOT_TOKEN || !CHAT_ID) return
+  if (!BOT_TOKEN || !CHAT_ID) {
+    console.warn('[TG] SKIPPED — BOT_TOKEN or CHAT_ID not set')
+    return
+  }
   try {
-    await fetch(`${BASE}/sendMessage`, {
+    const res = await fetch(`${BASE}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -17,8 +20,14 @@ export async function sendTelegram(text: string, chatId?: string): Promise<void>
         disable_web_page_preview: true,
       }),
     })
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '')
+      console.error('[TG] Send failed:', res.status, errBody.slice(0, 200))
+    } else {
+      console.log('[TG] Sent:', text.slice(0, 80).replace(/\n/g, ' '))
+    }
   } catch (err: unknown) {
-    console.error('[TG] Send error:', err instanceof Error ? err.message : String(err))
+    console.error('[TG] Exception:', err instanceof Error ? err.message : String(err))
   }
 }
 
