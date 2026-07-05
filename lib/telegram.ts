@@ -50,8 +50,8 @@ export function tgSignal(sig: SignalRecord): string {
   const emoji     = idea.side === 'LONG' ? '🟢' : '🔴'
   const confLabel = idea.confidence === 'ALTA' ? 'ALTA 🔥' : idea.confidence === 'MEDIA' ? 'MEDIA' : 'BAJA'
   const reasons   = idea.reasons.slice(0, 3).map(r => `• ${r.txt}`).join('\n')
-  const scoreStr  = (idea.bull != null && idea.maxSc != null)
-    ? `📊 Score: ${idea.bull + idea.bear}/${idea.maxSc * 2}`
+  const scoreStr  = (idea.bull != null && idea.maxSc != null && idea.maxSc > 0)
+    ? `📊 Score: ${idea.bull + idea.bear}/${idea.maxSc}`
     : ''
   return [
     `${emoji} <b>${idea.side} ${idea.tradeType.toUpperCase()}</b> — Confianza: <b>${confLabel}</b>`,

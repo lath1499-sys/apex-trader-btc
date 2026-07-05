@@ -595,6 +595,8 @@ export async function GET(req: Request): Promise<NextResponse> {
     if (!rawSignals) results.errors.push('[Signals] Both clients failed — check Supabase project status/URL')
     const allSignals: SignalRecord[] = Array.isArray(rawSignals) ? rawSignals.map((s) => transformSignal(s)) : []
     const active     = allSignals.filter(s => s.status === 'active' || s.status === 'tp1_hit' || s.status === 'tp2_hit')
+    // Tracks signals created in THIS run — injected into the brief to avoid DB replication lag
+    const thisRunSignals: SignalRecord[] = []
     results.signalsLoaded = allSignals.length
     results.signalsActive = active.length
     console.log(`[APEX] Signals loaded: ${allSignals.length} total, ${active.length} active`)
@@ -1158,6 +1160,8 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
           } else {
           const partialCfg = getPartialCloseConfig(recType, tp1RR, tp2RR)
 
+          const recBull = recSide === 'LONG' ? recReasons.length : 0
+          const recBear = recSide === 'SHORT' ? recReasons.length : 0
           const rec: SignalRecord = {
             id: recId, createdAt: time, status: 'active', ntfySent: true,
             exitPrice: null, exitTs: null, pnl: null, pnlR: null, closedAt: null, closeReason: null,
@@ -1167,7 +1171,7 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
             idea: {
               side: recSide, tradeType: recType, confidence: recConf,
               price: recEntry, sl: recSL, tp1: recTP1, tp2: recTP2, tp3: recTP3,
-              maxLev: recLev, bull: 0, bear: 0, maxSc: 10,
+              maxLev: recLev, bull: recBull, bear: recBear, maxSc: 10,
               reasons: recReasons, analysis: [opinionNote, recAnalysis].filter(Boolean).join('\n\n'),
               ts: new Date(time),
             },
@@ -1194,6 +1198,7 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
           if (recSaveErr) {
             results.errors.push(`[SignalSave] ${(recSaveErr as {message?:string}).message ?? recSaveErr}`)
           } else {
+            thisRunSignals.push(rec)
             await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
             results.signals.push({ type: recType, side: recSide, confidence: recConf })
             // Section 7: If Claude justified coexistence with opposite positions, say so
@@ -1233,6 +1238,8 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
       const hTP3RR  = hSlDist > 0 ? +(Math.abs(cand.tp3 - cand.entry) / hSlDist).toFixed(2) : 0
       const hCfg    = getPartialCloseConfig(cand.tradeType, hTP1RR, hTP2RR)
 
+      const hBull = cand.side === 'LONG' ? cand.reasons.length : 0
+      const hBear = cand.side === 'SHORT' ? cand.reasons.length : 0
       const rec: SignalRecord = {
         id: cand.id, createdAt: time, status: 'active', ntfySent: true,
         exitPrice: null, exitTs: null, pnl: null, pnlR: null, closedAt: null, closeReason: null,
@@ -1242,7 +1249,7 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
         idea: {
           side: cand.side, tradeType: cand.tradeType, confidence: cand.confidence,
           price: cand.entry, sl: cand.sl, tp1: cand.tp1, tp2: cand.tp2, tp3: cand.tp3,
-          maxLev: cand.maxLev, bull: 0, bear: 0, maxSc: 10,
+          maxLev: cand.maxLev, bull: hBull, bear: hBear, maxSc: 10,
           reasons: cand.reasons, analysis: cand.analysis, ts: new Date(time),
         },
       }
@@ -1267,6 +1274,7 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
       if (hErr) {
         results.errors.push(`[HarmonicSave] ${(hErr as { message?: string }).message ?? hErr}`)
       } else {
+        thisRunSignals.push(rec)
         await handleSignalEvent(rec, 'new', rec.idea.price, ntfyTopic)
         results.signals.push({ type: cand.tradeType, side: cand.side, confidence: cand.confidence })
       }
@@ -1313,6 +1321,19 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
           ? await getFreshSignalState(freshSb)
           : { activeSignals: activeSigData, recentlyClosed: [] }
 
+        // Merge signals created in this run — guards against Supabase replication lag
+        // where a just-upserted signal may not be visible to a new select within ms.
+        const freshIds = new Set((freshState.activeSignals as { id: string }[]).map(s => s.id))
+        const mergedActive = [
+          ...freshState.activeSignals,
+          ...thisRunSignals.filter(s => !freshIds.has(s.id)).map(s => ({
+            ...s, _justOpened: true,
+          })),
+        ]
+        if (thisRunSignals.length > 0 && mergedActive.length > freshState.activeSignals.length) {
+          console.log(`[BRIEF] Injected ${thisRunSignals.length} thisRun signal(s) not yet visible in DB read`)
+        }
+
         const updateParams: AgentUpdateParams = {
           price,
           prevPrice:       prevStateForVoice?.lastPrice ?? price,
@@ -1328,7 +1349,7 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
           elliottWaves:    ewMap,
           fvgs:            fvgsMap,
           liquidity,
-          activeSignals:   freshState.activeSignals,
+          activeSignals:   mergedActive,
           recentlyClosed:  freshState.recentlyClosed,
           capitalState:    capitalState ?? undefined,
           opinionChanges:  opinionLines,
