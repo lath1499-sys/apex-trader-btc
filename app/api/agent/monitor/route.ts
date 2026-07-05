@@ -221,6 +221,41 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
     }
   }
 
+  // ── 4. Expiry — force-close signals past their max trade duration ────────────
+  const maxHours = sig.idea.tradeType === 'Scalp'    ? 3
+                 : sig.idea.tradeType === 'DayTrade'  ? 26
+                 : 0  // Swing: no auto-expiry
+  if (maxHours > 0) {
+    const openedHrs = (Date.now() - new Date(sig.createdAt).getTime()) / 3_600_000
+    if (openedHrs >= maxHours) {
+      const rawPnl   = isLong ? (price - entry) / entry * 100 : (entry - price) / entry * 100
+      const banked   = sig.totalBankedPnl ?? 0
+      const remain   = (sig.remainingSizePct ?? 100) / 100
+      const finalPnl = parseFloat((banked + remain * rawPnl).toFixed(3))
+      const updated: SignalRecord = {
+        ...sig, status: 'closed_manual', pnl: finalPnl,
+        closedAt: new Date().toISOString(), exitPrice: price,
+        closeReason: `Expirado: ${openedHrs.toFixed(1)}h (máx ${maxHours}h para ${sig.idea.tradeType})`,
+      }
+      await saveSignalToCloud(updated)
+      const expiryMsg = (
+        `⏰ <b>SEÑAL EXPIRADA — ${sig.idea.side} ${sig.idea.tradeType}</b>\n\n` +
+        `Duración: ${openedHrs.toFixed(1)}h (máx ${maxHours}h)\n` +
+        `Cerrada en: <code>$${Math.round(price).toLocaleString()}</code>\n` +
+        `P&L: <b>${finalPnl >= 0 ? '+' : ''}${finalPnl.toFixed(2)}%</b>`
+      )
+      await notify(
+        expiryMsg,
+        ntfyTopic,
+        `SEÑAL EXPIRADA -- ${sig.idea.side} BTC ${finalPnl.toFixed(2)}%`,
+        `${sig.idea.tradeType} expirado tras ${openedHrs.toFixed(1)}h. P&L: ${finalPnl.toFixed(2)}%`,
+        3, ['alarm_clock'],
+      )
+      console.log(`[MONITOR] Expired: ${sig.id} after ${openedHrs.toFixed(1)}h P&L ${finalPnl.toFixed(2)}%`)
+      return `EXPIRED:${sig.id}`
+    }
+  }
+
   return null
 }
 
