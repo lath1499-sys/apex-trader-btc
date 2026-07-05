@@ -31,6 +31,17 @@ export async function sendTelegram(text: string, chatId?: string): Promise<void>
   }
 }
 
+export async function sendTyping(chatId: string): Promise<void> {
+  if (!BOT_TOKEN) return
+  try {
+    await fetch(`${BASE}/sendChatAction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
+    })
+  } catch { /* non-blocking */ }
+}
+
 export async function setWebhook(url: string): Promise<unknown> {
   const res = await fetch(`${BASE}/setWebhook`, {
     method: 'POST',

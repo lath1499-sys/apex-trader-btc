@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { sendTelegram, tgStatus, authorizedChatId } from '@/lib/telegram'
+import { sendTelegram, tgStatus, authorizedChatId, sendTyping } from '@/lib/telegram'
 import { getCapitalState, DEFAULT_CAPITAL_CONFIG } from '@/lib/capitalManager'
 import { getMacroSnapshot, updateMacroOverride } from '@/lib/macroData'
 import { getSupabaseServer } from '@/lib/supabase'
 import { fetchBTCNews, formatNewsForTelegram } from '@/lib/newsFetcher'
 import { sendNtfy } from '@/lib/ntfy'
+import { getLiveSignalStates, formatLiveSignal } from '@/lib/liveSignal'
+import type { RawSignalRow } from '@/lib/liveSignal'
+import { chatWithAPEX } from '@/lib/apexChat'
+import type { ChatActionType } from '@/lib/apexChat'
 
-type RawSignal = { side: string; trade_type: string; entry: number; sl: number; tp1: number; tp2: number; tp3: number; pnl: number | null; status: string }
 function getSb() { return getSupabaseServer() }
 
 async function dbUpdate(table: string, data: Record<string, unknown>, id = 'current'): Promise<void> {
@@ -15,14 +18,65 @@ async function dbUpdate(table: string, data: Record<string, unknown>, id = 'curr
   await Promise.resolve(sb.from(table).update(data).eq('id', id)).catch(() => {})
 }
 
+async function executeChatAction(
+  action:     ChatActionType,
+  actionData: { newSL?: number; signalId?: string } | undefined,
+  chatId:     string,
+): Promise<void> {
+  switch (action) {
+    case 'PAUSE':
+      await dbUpdate('apex_agent_state', {
+        is_paused:    true,
+        paused_at:    new Date().toISOString(),
+        pause_reason: 'Pausado por chat Telegram',
+      })
+      await sendTelegram('⏸ <b>Agente pausado.</b> No se abrirán nuevos trades.\nUsa /resume para reanudar.', chatId)
+      break
+
+    case 'RESUME':
+      await dbUpdate('apex_agent_state', { is_paused: false, paused_at: null, pause_reason: null })
+      await sendTelegram('▶️ <b>Agente reanudado.</b> Buscando setups...', chatId)
+      break
+
+    case 'CLOSE_ALL':
+      await sendTelegram(
+        `⚠️ <b>Confirmar cierre de emergencia</b>\n\n` +
+        `Para cerrar TODAS las señales activas en Supabase, usa el comando:\n` +
+        `<code>/close_all</code>`,
+        chatId,
+      )
+      break
+
+    case 'MOVE_SL': {
+      const sb    = getSb()
+      const newSL = actionData?.newSL
+      const sigId = actionData?.signalId
+      if (sb && newSL && sigId) {
+        await Promise.resolve(
+          sb.from('apex_signals').update({ sl: newSL }).eq('id', sigId),
+        ).catch(() => {})
+        await sendTelegram(
+          `📐 SL actualizado a <code>$${Math.round(newSL).toLocaleString()}</code>`,
+          chatId,
+        )
+      }
+      break
+    }
+
+    default:
+      break
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json() as { message?: { chat?: { id: number }; text?: string } }
     const msg  = body.message
     if (!msg) return NextResponse.json({ ok: true })
 
-    const chatId = String(msg.chat?.id ?? '')
-    const text   = (msg.text ?? '').trim().toLowerCase()
+    const chatId  = String(msg.chat?.id ?? '')
+    const rawText = (msg.text ?? '').trim()
+    const text    = rawText.toLowerCase()
 
     if (chatId !== authorizedChatId()) {
       await sendTelegram('⛔ No autorizado.', chatId)
@@ -66,22 +120,19 @@ export async function POST(req: NextRequest) {
       if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
       const { data } = await Promise.resolve(
         sb.from('apex_signals')
-          .select('side, trade_type, entry, sl, tp1, tp2, tp3, pnl, status')
+          .select('id, side, trade_type, entry, sl, tp1, tp2, tp3, status, created_at, tp1_banked_pnl, total_banked_pnl')
           .in('status', ['active', 'tp1_hit', 'tp2_hit'])
           .order('created_at', { ascending: false })
-      ).catch(() => ({ data: null })) as { data: RawSignal[] | null }
+      ).catch(() => ({ data: null })) as { data: RawSignalRow[] | null }
       const sigs = data ?? []
       if (sigs.length === 0) { await sendTelegram('📋 Sin señales activas.', chatId); return NextResponse.json({ ok: true }) }
-      for (const s of sigs) {
-        const emoji = s.side === 'LONG' ? '🟢' : '🔴'
-        const pnl   = s.pnl ?? 0
-        await sendTelegram(
-          `${emoji} <b>${s.side} ${s.trade_type}</b>\n` +
-          `Entry: <code>$${Math.round(s.entry).toLocaleString()}</code>  SL: <code>$${Math.round(s.sl).toLocaleString()}</code>\n` +
-          `TP1: <code>$${Math.round(s.tp1).toLocaleString()}</code>  P&amp;L: <b>${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</b>\n` +
-          `Estado: ${s.status}`,
-          chatId,
-        )
+      const liveStates = await getLiveSignalStates(sigs)
+      if (liveStates.length === 0) {
+        await sendTelegram('⚠️ No se pudo obtener precio actual para calcular P&amp;L.', chatId)
+        return NextResponse.json({ ok: true })
+      }
+      for (const live of liveStates) {
+        await sendTelegram(formatLiveSignal(live), chatId)
       }
     }
 
@@ -386,8 +437,44 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    else if (text === '/history' || text === '/chat') {
+      const sb = getSb()
+      if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
+      const { data } = await Promise.resolve(
+        sb.from('apex_chat_history')
+          .select('user_msg, apex_reply, created_at')
+          .eq('chat_id', chatId)
+          .order('created_at', { ascending: false })
+          .limit(5)
+      ).catch(() => ({ data: null })) as {
+        data: Array<{ user_msg: string; apex_reply: string; created_at: string }> | null
+      }
+      if (!data?.length) {
+        await sendTelegram('📋 Sin conversaciones previas.\nEscribe cualquier mensaje (sin /) para chatear con APEX.', chatId)
+      } else {
+        const tz    = 'America/Santo_Domingo'
+        const lines = data.reverse().map(m => {
+          const time = new Date(m.created_at).toLocaleTimeString('es-DO', {
+            timeZone: tz, hour: '2-digit', minute: '2-digit',
+          })
+          return `[${time}] 👤 ${m.user_msg.slice(0, 60)}\n🤖 ${m.apex_reply.slice(0, 100)}`
+        })
+        await sendTelegram(
+          `💬 <b>Últimas conversaciones</b>\n\n${lines.join('\n\n')}`,
+          chatId,
+        )
+      }
+    }
+
     else if (text === '/help' || text === '/h' || text === '/start') {
       await sendTelegram(
+        `💬 <b>Chat directo con APEX</b>\n` +
+        `Escribe cualquier mensaje (sin /) para hablar con APEX.\n` +
+        `Ejemplos:\n` +
+        `  "qué piensas del precio ahora?"\n` +
+        `  "cómo va el short?"\n` +
+        `  "cuánto capital tengo libre?"\n` +
+        `  "pausa los trades"\n\n` +
         `🤖 <b>APEX Trader — Comandos</b>\n\n` +
         `📊 <b>Info</b>\n` +
         `/status — Estado completo del agente\n` +
@@ -409,14 +496,29 @@ export async function POST(req: NextRequest) {
         `/resume — Reanudar el agente\n` +
         `/close_all — ⚠️ Cerrar señales en Supabase\n\n` +
         `🔧 <b>Diagnóstico</b>\n` +
-        `/test — Verificar que Telegram y NTFY funcionan\n\n` +
+        `/test — Verificar que Telegram y NTFY funcionan\n` +
+        `/history — Últimas 5 conversaciones con APEX\n\n` +
         `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb`,
         chatId,
       )
     }
 
-    else if (text.startsWith('/')) {
-      await sendTelegram(`❓ Comando no reconocido: <code>${text}</code>\nUsa /help para ver todos los comandos.`, chatId)
+    else if (!rawText.startsWith('/')) {
+      // Free-form message → APEX chat with full context
+      void sendTyping(chatId)
+      const resp = await chatWithAPEX(rawText, chatId)
+      await sendTelegram(resp.text, chatId)
+      if (resp.action !== 'NONE') await executeChatAction(resp.action, resp.actionData, chatId)
+    }
+
+    else {
+      // Unknown command — forward intent to APEX
+      void sendTyping(chatId)
+      const resp = await chatWithAPEX(
+        `El usuario intentó el comando "${rawText}" que no existe. Responde brevemente.`,
+        chatId,
+      )
+      await sendTelegram(resp.text, chatId)
     }
 
     return NextResponse.json({ ok: true })
