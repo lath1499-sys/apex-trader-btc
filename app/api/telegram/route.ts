@@ -128,7 +128,20 @@ export async function POST(req: NextRequest) {
       if (sigs.length === 0) { await sendTelegram('📋 Sin señales activas.', chatId); return NextResponse.json({ ok: true }) }
       const liveStates = await getLiveSignalStates(sigs)
       if (liveStates.length === 0) {
-        await sendTelegram('⚠️ No se pudo obtener precio actual para calcular P&amp;L.', chatId)
+        // Price unavailable — show static info without live P&L
+        for (const s of sigs) {
+          const emoji = s.side === 'LONG' ? '🟢' : '🔴'
+          const statusLabel =
+            s.status === 'tp1_hit' ? '✅ TP1 tocado' :
+            s.status === 'tp2_hit' ? '✅✅ TP2 tocado' : 'Activa'
+          await sendTelegram(
+            `${emoji} <b>${s.side} ${s.trade_type}</b> — ${statusLabel}\n` +
+            `Entry: <code>$${Math.round(s.entry).toLocaleString()}</code>  SL: <code>$${Math.round(s.sl).toLocaleString()}</code>\n` +
+            `TP1: <code>$${Math.round(s.tp1).toLocaleString()}</code>  TP2: <code>$${Math.round(s.tp2).toLocaleString()}</code>\n` +
+            `<i>P&amp;L: precio de mercado no disponible</i>`,
+            chatId,
+          )
+        }
         return NextResponse.json({ ok: true })
       }
       for (const live of liveStates) {

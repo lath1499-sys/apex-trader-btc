@@ -38,16 +38,38 @@ export interface LiveSignalState {
   totalBankedPnl:  number
 }
 
+type BybitTicker = { result?: { list?: Array<{ lastPrice: string }> } }
+type KrakenTicker = { result?: Record<string, { c: [string] }> }
+
 async function fetchBtcSpotPrice(): Promise<number | null> {
-  try {
-    const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT', {
-      signal: AbortSignal.timeout(5000),
-    })
-    if (!r.ok) return null
-    const d = (await r.json()) as { price?: string }
-    const p = parseFloat(d.price ?? '')
-    return isNaN(p) ? null : p
-  } catch { return null }
+  const safe = async <T>(url: string): Promise<T | null> => {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(6000) })
+      return r.ok ? (r.json() as Promise<T>) : null
+    } catch { return null }
+  }
+
+  const [bin, bybit, kraken] = await Promise.all([
+    safe<{ price?: string }>('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT'),
+    safe<BybitTicker>('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT'),
+    safe<KrakenTicker>('https://api.kraken.com/0/public/Ticker?pair=XBTUSD'),
+  ])
+
+  if (bin?.price) {
+    const p = parseFloat(bin.price)
+    if (!isNaN(p)) return p
+  }
+  const bybitRow = bybit?.result?.list?.[0]
+  if (bybitRow?.lastPrice) {
+    const p = parseFloat(bybitRow.lastPrice)
+    if (!isNaN(p)) return p
+  }
+  const krakenEntry = Object.values(kraken?.result ?? {})[0]
+  if (krakenEntry?.c?.[0]) {
+    const p = parseFloat(krakenEntry.c[0])
+    if (!isNaN(p)) return p
+  }
+  return null
 }
 
 export async function getLiveSignalStates(signals: RawSignalRow[]): Promise<LiveSignalState[]> {

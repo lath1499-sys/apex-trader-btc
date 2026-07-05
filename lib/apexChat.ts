@@ -129,9 +129,8 @@ export async function chatWithAPEX(
   // ── 3. Build system prompt ───────────────────────────────────────────────────
   const P = (n: number) => `$${Math.round(n).toLocaleString()}`
 
-  const signalsSummary = liveSignals.length === 0
-    ? 'Ninguna — capital libre'
-    : liveSignals.map(live => {
+  const signalsSummary = liveSignals.length > 0
+    ? liveSignals.map(live => {
         const pnlStr = `${live.pnlPct >= 0 ? '+' : ''}${live.pnlPct.toFixed(2)}%`
         const warn   = live.isNearSL  ? ' ⚠️CERCA SL'
                      : live.isNearTP1 ? ' 🎯CERCA TP1'
@@ -143,6 +142,12 @@ export async function chatWithAPEX(
           `Abierto: ${live.openSince}`
         )
       }).join('\n')
+    : rawActive.length > 0
+    // Price fetch failed — still show signal info without live P&L
+    ? rawActive.map(s =>
+        `${s.side} ${s.trade_type} @ ${P(s.entry)} | SL: ${P(s.sl)} | TP1: ${P(s.tp1)} | P&L: precio no disponible | Estado: ${s.status}`
+      ).join('\n')
+    : 'Ninguna — capital libre'
 
   const closedSummary = closedData.length === 0
     ? 'Ninguna reciente'
