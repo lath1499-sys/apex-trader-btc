@@ -103,24 +103,13 @@ const CONF_RANK: Record<string, number> = { ALTA: 3, MEDIA: 2, BAJA: 1 }
 
 export function shouldGenerateSignal(
   tradeType: 'Scalp' | 'DayTrade' | 'Swing',
-  confidence: string,
+  _confidence: string,
 ): boolean {
-  // Block during macro events (FOMC / CPI / NFP)
+  // No session-based restrictions — trading is allowed 24/7 on all session types.
+  // Only hard block: active macro event (FOMC / CPI / NFP) for Scalp and DayTrade.
   const macroBlock = getActiveBlockingEvent()
-  if (macroBlock) {
-    // Swing trades survive macro events — only Scalp and DayTrade are blocked
-    if (tradeType !== 'Swing') return false
-  }
-
-  const session = getCurrentTradingSession()
-
-  if (tradeType === 'Scalp'    && !session.allowScalp)    return false
-  if (tradeType === 'DayTrade' && !session.allowDayTrade)  return false
-  if (tradeType === 'Swing'    && !session.allowSwing)     return false
-
-  const minRank    = CONF_RANK[session.minConfidence] ?? 1
-  const signalRank = CONF_RANK[confidence]            ?? 1
-  return signalRank >= minRank
+  if (macroBlock && tradeType !== 'Swing') return false
+  return true
 }
 
 export function getSessionAdvice(session: TradingSession): string {

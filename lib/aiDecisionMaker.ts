@@ -111,12 +111,20 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
     perfStats, klines4h,
     daysSinceLastSignal = 0,
     forceScalpEvaluation = false,
+    recentSignalTypes = [],
+    activeScalps = 0,
   } = ctx
+  const recentTypes  = recentSignalTypes as string[]
+  const scalpsOpen   = activeScalps as number
 
   const i15 = inds?.['15m']
   const i1  = inds?.['1h']
   const i4  = inds?.['4h']
   const i1d = inds?.['1d']
+
+  // Contra-trend block: SHORT banned when 4H strongly bullish + 1D bullish (and vice versa)
+  const shortBanned = i4?.bias === 'ALCISTA' && (i4?.score ?? 0) >= 8 && i1d?.bias === 'ALCISTA'
+  const longBanned  = i4?.bias === 'BAJISTA' && (i4?.score ?? 0) >= 8 && i1d?.bias === 'BAJISTA'
   const ew4h = elliottWaves?.['4h']
   const ew1d = elliottWaves?.['1d']
 
@@ -186,7 +194,7 @@ IMPORTANTE: Posiciones opuestas existentes NO son razón para WAIT. Son una deci
 
 ═══ MERCADO ACTUAL ═══
 Precio: $${Math.round(price).toLocaleString()} (${priceChangePct}% vs hace 30min)
-Sesión: ${session?.name ?? 'N/A'} (${session?.quality ?? 'N/A'})
+Sesión: ${session?.name ?? 'N/A'} — INFORMACIÓN SOLO. Trading permitido las 24h en todas las sesiones sin excepción. NO uses la sesión como motivo de WAIT.
 Régimen: ${regime?.regime?.replace(/_/g, ' ') ?? 'N/A'} | ADX ${regime?.adx?.toFixed(1) ?? '?'} | BB ${regime?.bbSqueezing ? 'SQUEEZE ⚡' : 'Normal'}
 
 ═══ ESTRUCTURA MULTI-TIMEFRAME ═══
@@ -287,15 +295,30 @@ BIAS DE ACCIÓN: Si ves 2+ confluencias técnicas (ABCD en PRZ, estructura rota,
 ${daysSinceLastSignal >= 3 ? `⚡ ALERTA CRÍTICA: Han pasado ${daysSinceLastSignal} días sin generar ninguna señal. Esto es inaceptable. Busca activamente cualquier setup con 2+ confluencias. Un setup imperfecto con gestión de riesgo correcta es SIEMPRE mejor que la inacción prolongada.` : ''}
 ${forceScalpEvaluation ? `🎯 MODO SCALP FORZADO: Tu tarea ahora es encontrar UN scalp operable en 15M o 1H. Busca: RSI extremo + estructura clara, o BOS/CHoCH + FVG cercano, o soporte/resistencia clave con confluencia. Si hay cualquier setup de calidad media o superior → ENTRA. No digas WAIT.` : ''}
 
-═══ AUDITORÍA DE SESGO ═══
-${(ctx as any)?.recentSignalTypes?.every((t: string) => t === 'Scalp') ? `
-⚠️ ALERTA DE SESGO: Los últimos trades generados fueron todos Scalps.
-Para este ciclo, evalúa PRIMERO el 1D y 4H:
-1. ¿Hay estructura Swing en 1D? Si SÍ → tradeType="Swing"
-2. ¿Hay setup DayTrade en 4H? Si SÍ → tradeType="DayTrade"
-3. Solo si ambas respuestas son genuinamente NO → evalúa el Scalp en 15M/1H
-Si el 4H tiene un setup igual o mejor que el 15M → usa el 4H y clasifica como DayTrade.
-` : ''}
+═══ FILTRO CONTRA-TENDENCIA ═══
+${shortBanned
+  ? `⛔ SHORT PROHIBIDO: 4H ALCISTA ${i4?.score ?? '?'}/9 + 1D ALCISTA. Ir corto contra esta tendencia es estadísticamente perdedor (como el trade que tocó SL esta sesión).
+ÚNICO setup válido: LONG o ESPERAR rotura de estructura bajista clara.`
+  : ''}
+${longBanned
+  ? `⛔ LONG PROHIBIDO: 4H BAJISTA ${i4?.score ?? '?'}/9 + 1D BAJISTA. Ir largo contra esta tendencia es estadísticamente perdedor.
+ÚNICO setup válido: SHORT o ESPERAR rotura de estructura alcista clara.`
+  : ''}
+${!shortBanned && !longBanned ? 'Tendencias alineadas — ambas direcciones evaluables.' : ''}
+
+═══ AUDITORÍA DE TIPO ═══
+${recentTypes.length > 0
+  ? `Últimos ${recentTypes.length} trades: ${recentTypes.join(' → ')}
+Distribución: Scalp×${recentTypes.filter(t => t === 'Scalp').length} | DayTrade×${recentTypes.filter(t => t === 'DayTrade').length} | Swing×${recentTypes.filter(t => t === 'Swing').length}`
+  : 'Sin historial de tipos aún.'}
+${scalpsOpen >= 1 ? `\n⛔ YA HAY ${scalpsOpen} SCALP(S) ACTIVO(S). PROHIBIDO abrir otro Scalp. Solo evalúa DayTrade o Swing este ciclo.` : ''}
+${recentTypes.length >= 3 && recentTypes.slice(0, 3).every(t => t === 'Scalp')
+  ? `\n⚠️ SESGO CRÍTICO: Los últimos 3 trades fueron todos Scalp. Protocolo OBLIGATORIO:
+1. Evalúa 1D primero — ¿hay estructura Swing limpia? → tradeType="Swing"
+2. Evalúa 4H — ¿hay trend claro con confirmación 1H? → tradeType="DayTrade"
+3. Solo si AMBAS son NO con justificación → evalúa Scalp en 15M/1H.
+Si no puedes justificar por qué NO es DayTrade/Swing → usa DayTrade o Swing.`
+  : ''}
 REGLA FINAL DE TIPO: El tipo de trade DEBE coincidir con el SL en % del precio:
 - SL < 1%   → Scalp (max 10x leverage)
 - SL 1-3%   → DayTrade (max 5x leverage)

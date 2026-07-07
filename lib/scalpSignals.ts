@@ -263,7 +263,7 @@ export function detectScalpSignals(
   const b  = (t: string) => { bull++; reasons.push(t) }
   const be = (t: string) => { bear++; reasons.push(t) }
 
-  // ── FILTER 0: Trading session gate ────────────────────────────────────────
+  // ── FILTER 0: Macro event gate (session restrictions removed — 24/7 trading allowed)
   if (!shouldGenerateSignal('Scalp', 'MEDIA')) return null
 
   // ── FILTER 1: Killzone bonus (no longer a hard gate — KZ raises signal quality)

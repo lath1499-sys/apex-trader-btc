@@ -139,11 +139,23 @@ export function tgStatus(
   ].join('\n')
 }
 
-export function tgBrief(analysis: string, price: number, change: number): string {
+export function tgBrief(
+  analysis:      string,
+  price:         number,
+  change:        number,
+  activeSignals?: Array<{ side: string; trade_type?: string; entry: number }>,
+): string {
   const time = new Date().toLocaleTimeString('es-DO', {
     timeZone: 'America/Santo_Domingo', hour: '2-digit', minute: '2-digit',
   })
-  return `📊 <b>APEX — ${time}</b>\nBTC: <code>${P(price)}</code> ${change >= 0 ? '▲' : '▼'} ${Math.abs(change).toFixed(2)}%\n\n${analysis}`
+  const sigHeader = activeSignals && activeSignals.length > 0
+    ? '\n📋 <b>Posición activa:</b> ' +
+      activeSignals.map(s => {
+        const emoji = s.side === 'LONG' ? '🟢' : '🔴'
+        return `${emoji} ${s.side} ${s.trade_type ?? ''} @${P(s.entry)}`
+      }).join(' | ')
+    : ''
+  return `📊 <b>APEX — ${time}</b>\nBTC: <code>${P(price)}</code> ${change >= 0 ? '▲' : '▼'} ${Math.abs(change).toFixed(2)}%${sigHeader}\n\n${analysis}`
 }
 
 export function tgBreakeven(sig: SignalRecord, bankedPnl: number): string {
@@ -179,6 +191,31 @@ export function tgSLFloor(sig: SignalRecord, finalPnl: number): string {
     ``,
     `💰 P&amp;L total: <b>+${finalPnl.toFixed(2)}%</b>`,
     `<i>TP1+TP2 banqueados. El sistema de parciales garantizó ganancia.</i>`,
+  ].join('\n')
+}
+
+export function tgSLCorrection(sig: SignalRecord, pnl: number): string {
+  const side      = sig.idea.side
+  const type      = sig.idea.tradeType
+  const entryFmt  = P(sig.idea.price)
+  const slFmt     = P(sig.idea.sl)
+  const pnlStr    = `${pnl.toFixed(2)}%`
+  const sessionTz = new Date().toLocaleTimeString('es-DO', {
+    timeZone: 'America/Santo_Domingo', hour: '2-digit', minute: '2-digit',
+  })
+  return [
+    `❌ <b>SL EJECUTADO — ${side} ${type} | ${sessionTz}</b>`,
+    ``,
+    `⚠️ <b>Me corrijo:</b> reporté esta operación como activa con un P&amp;L estimado. El precio alcanzó mi stop loss y fue cerrada automáticamente.`,
+    ``,
+    `📊 <b>Resultado real:</b>`,
+    `Entrada: <code>${entryFmt}</code>`,
+    `SL tocado: <code>${slFmt}</code>`,
+    `P&amp;L final: <b>${pnlStr}</b>`,
+    ``,
+    `🔄 <b>Sesgo actualizado:</b> Las confluencias que identifiqué no materializaron como esperaba. Revisaré qué falló antes de generar la próxima señal.`,
+    ``,
+    `<i>Capital protegido. Sistema de stop automático funcionó correctamente.</i>`,
   ].join('\n')
 }
 

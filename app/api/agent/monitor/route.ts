@@ -6,7 +6,7 @@ import { NextResponse }                              from 'next/server'
 import { withLock }                                  from '@/lib/runLock'
 import { getSupabaseServer, transformSignal }         from '@/lib/supabase'
 import { saveSignalToCloud }                          from '@/lib/supabase'
-import { sendTelegram, tgTP, tgBreakeven, tgSLFloor } from '@/lib/telegram'
+import { sendTelegram, tgTP, tgBreakeven, tgSLFloor, tgSLCorrection } from '@/lib/telegram'
 import { sendNtfy }                                   from '@/lib/ntfy'
 import type { SignalRecord }                          from '@/lib/types'
 
@@ -46,6 +46,38 @@ async function getBtcPrice(): Promise<number | null> {
   const krakenVal = Object.values((kraken?.result ?? {}) as Record<string, { c: [string] }>)[0]
   if (krakenVal)   return +krakenVal.c[0]
   return null
+}
+
+// ── TP sequential validator — called before any TP event fires ────────────────
+function validateTPEvent(
+  sig:     SignalRecord,
+  tp:      1 | 2 | 3,
+  price:   number,
+): { valid: boolean; reason: string } {
+  const isLong   = sig.idea.side === 'LONG'
+  const tpPrice  = tp === 1 ? sig.idea.tp1 : tp === 2 ? sig.idea.tp2 : sig.idea.tp3
+  const entry    = sig.idea.price
+
+  if (tp === 2 && !sig.tp1Hit)
+    return { valid: false, reason: `TP2 disparado sin TP1 previo (status: ${sig.status})` }
+  if (tp === 3 && !sig.tp1Hit)
+    return { valid: false, reason: `TP3 disparado sin TP1 previo (status: ${sig.status})` }
+  if (tp === 3 && !sig.tp2Hit)
+    return { valid: false, reason: `TP3 disparado sin TP2 previo (status: ${sig.status})` }
+
+  const priceReached = isLong ? price >= tpPrice : price <= tpPrice
+  if (!priceReached)
+    return { valid: false, reason: `TP${tp} price $${Math.round(tpPrice).toLocaleString()} not yet reached at $${Math.round(price).toLocaleString()}` }
+
+  const pnlAtTP = isLong ? (tpPrice - entry) / entry * 100 : (entry - tpPrice) / entry * 100
+  if (pnlAtTP <= 0)
+    return { valid: false, reason: `TP${tp} P&L would be ${pnlAtTP.toFixed(2)}% — TPs must be positive` }
+
+  const expectedStatus = tp === 1 ? 'active' : tp === 2 ? 'tp1_hit' : 'tp2_hit'
+  if (sig.status !== expectedStatus)
+    return { valid: false, reason: `TP${tp} requires status '${expectedStatus}', got '${sig.status}'` }
+
+  return { valid: true, reason: 'OK' }
 }
 
 // ── Core: process one signal's price events ───────────────────────────────────
@@ -114,17 +146,9 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
       closedAt: new Date().toISOString(), exitPrice: sig.idea.sl,
       closeReason: `Stop loss ejecutado en $${Math.round(sig.idea.sl).toLocaleString()}`,
     }
-    const slTgMsg = (
-      `❌ <b>STOP LOSS — ${sig.idea.side} ${sig.idea.tradeType}</b>\n\n` +
-      `⚙️ SL ejecutado automáticamente\n\n` +
-      `Entry: <code>$${Math.round(entry).toLocaleString()}</code>\n` +
-      `SL: <code>$${Math.round(sig.idea.sl).toLocaleString()}</code>\n` +
-      `P&L: <b>${slRawPnl.toFixed(2)}%</b>\n\n` +
-      `Capital libre para próxima señal.`
-    )
     await saveSignalToCloud(updated)
     await notify(
-      slTgMsg,
+      tgSLCorrection(updated, slRawPnl),
       ntfyTopic,
       `STOP LOSS -- ${sig.idea.side} BTC ${slRawPnl.toFixed(2)}%`,
       `${sig.idea.side} ${sig.idea.tradeType} cerrado\nEntry: $${Math.round(entry).toLocaleString()}\nSL: $${Math.round(sig.idea.sl).toLocaleString()}\nP&L: ${slRawPnl.toFixed(2)}%`,
@@ -134,42 +158,58 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
     return `SL_HIT:${sig.id}`
   }
 
-  // ── 1. TP3 ────────────────────────────────────────────────────────────────
-  const tp3Hit = isLong ? price >= sig.idea.tp3 : price <= sig.idea.tp3
-  if (tp3Hit) {
-    const tp3ClosePct  = sig.tp3ClosePct ?? 25
-    const tp3Banked    = parseFloat(((tp3ClosePct / 100) * tp3Pnl).toFixed(3))
-    const finalPnl     = parseFloat(((sig.totalBankedPnl ?? 0) + tp3Banked).toFixed(3))
-    const updated: SignalRecord = {
-      ...sig, status: 'tp3_hit', pnl: finalPnl,
-      closedAt: new Date().toISOString(), exitPrice: sig.idea.tp3,
-      closeReason: 'TP3 objetivo máximo alcanzado',
+  // ── 1. TP3 — ONLY if both TP1 and TP2 were already hit ──────────────────
+  if (sig.tp1Hit && sig.tp2Hit) {
+    const v3 = validateTPEvent(sig, 3, price)
+    if (!v3.valid) {
+      console.error(`[MONITOR] TP3 BLOCKED: ${v3.reason} | ${sig.id}`)
+      await sendTelegram(
+        `🚨 <b>TP3 bloqueado — validación secuencial</b>\n` +
+        `Razón: <i>${v3.reason}</i>\n` +
+        `Signal: <code>${sig.id}</code>`,
+      ).catch(() => {})
+      return null
     }
-    const tp3TgMsg = (
-      `🏆 <b>TP3 ALCANZADO — ${sig.idea.side} ${sig.idea.tradeType}</b>\n` +
-      `P&L total: <b>+${finalPnl.toFixed(2)}%</b>`
-    )
-    await saveSignalToCloud(updated)
-    await notify(
-      tp3TgMsg,
-      ntfyTopic,
-      `TP3 MAXIMO -- ${sig.idea.side} BTC +${finalPnl.toFixed(2)}%`,
-      `Objetivo maximo alcanzado.\n${sig.idea.side} ${sig.idea.tradeType}\nP&L total: +${finalPnl.toFixed(2)}%`,
-      5, ['trophy'],
-    )
-    console.log(`[MONITOR] TP3 hit: ${sig.id}`)
-    return `TP3_HIT:${sig.id}`
+    const tp3Hit = isLong ? price >= sig.idea.tp3 : price <= sig.idea.tp3
+    if (tp3Hit) {
+      const tp3ClosePct = sig.tp3ClosePct ?? 25
+      const tp3Banked   = parseFloat(((tp3ClosePct / 100) * tp3Pnl).toFixed(3))
+      const finalPnl    = parseFloat(((sig.totalBankedPnl ?? 0) + tp3Banked).toFixed(3))
+      const updated: SignalRecord = {
+        ...sig, status: 'tp3_hit', pnl: finalPnl,
+        closedAt: new Date().toISOString(), exitPrice: sig.idea.tp3,
+        closeReason: 'TP3 objetivo máximo alcanzado',
+      }
+      const tp3TgMsg = (
+        `🏆 <b>TP3 ALCANZADO — ${sig.idea.side} ${sig.idea.tradeType}</b>\n` +
+        `P&L total: <b>+${finalPnl.toFixed(2)}%</b>`
+      )
+      await saveSignalToCloud(updated)
+      await notify(
+        tp3TgMsg,
+        ntfyTopic,
+        `TP3 MAXIMO -- ${sig.idea.side} BTC +${finalPnl.toFixed(2)}%`,
+        `Objetivo maximo alcanzado.\n${sig.idea.side} ${sig.idea.tradeType}\nP&L total: +${finalPnl.toFixed(2)}%`,
+        5, ['trophy'],
+      )
+      console.log(`[MONITOR] TP3 hit: ${sig.id}`)
+      return `TP3_HIT:${sig.id}`
+    }
   }
 
   // ── 2. TP2 (only if TP1 hit and TP2 not yet hit) ─────────────────────────
   if (sig.tp1Hit && !sig.tp2Hit) {
+    const v2 = validateTPEvent(sig, 2, price)
+    if (!v2.valid) {
+      console.error(`[MONITOR] TP2 BLOCKED: ${v2.reason} | ${sig.id}`)
+      return null
+    }
     const tp2Hit = isLong ? price >= sig.idea.tp2 : price <= sig.idea.tp2
     if (tp2Hit) {
       const tp2ClosePct    = sig.tp2ClosePct ?? 35
       const tp2Banked      = parseFloat(((tp2ClosePct / 100) * tp2Pnl).toFixed(3))
       const newTotalBanked = parseFloat(((sig.tp1BankedPnl ?? 0) + tp2Banked).toFixed(3))
       const newRemaining   = (sig.remainingSizePct ?? 60) - tp2ClosePct
-      const buffer         = entry * 0.0015
       const newSL          = sig.idea.tp1  // SL moves to TP1 floor
       const updated: SignalRecord = {
         ...sig, status: 'tp2_hit', tp2Hit: true,
@@ -178,8 +218,6 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
         idea: { ...sig.idea, sl: newSL },
         tp1BankedPnl: sig.tp1BankedPnl ?? 0,
       }
-      // suppress unused-var for buffer (only used in TP1 below)
-      void buffer
       await saveSignalToCloud(updated)
       await notify(
         tgTP(updated, 2, tp2Banked),
@@ -195,6 +233,11 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
 
   // ── 3. TP1 (only if not yet hit) ─────────────────────────────────────────
   if (!sig.tp1Hit) {
+    const v1 = validateTPEvent(sig, 1, price)
+    if (!v1.valid) {
+      console.error(`[MONITOR] TP1 BLOCKED: ${v1.reason} | ${sig.id}`)
+      return null
+    }
     const tp1Hit = isLong ? price >= sig.idea.tp1 : price <= sig.idea.tp1
     if (tp1Hit) {
       const tp1ClosePct = sig.tp1ClosePct ?? 40

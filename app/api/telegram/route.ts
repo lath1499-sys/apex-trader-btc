@@ -5,7 +5,7 @@ import { getMacroSnapshot, updateMacroOverride } from '@/lib/macroData'
 import { getSupabaseServer } from '@/lib/supabase'
 import { fetchBTCNews, formatNewsForTelegram } from '@/lib/newsFetcher'
 import { sendNtfy } from '@/lib/ntfy'
-import { getLiveSignalStates, formatLiveSignal } from '@/lib/liveSignal'
+import { getLiveSignalStates, formatLiveSignal, fetchBtcPriceAllSources } from '@/lib/liveSignal'
 import type { RawSignalRow } from '@/lib/liveSignal'
 import { chatWithAPEX } from '@/lib/apexChat'
 import type { ChatActionType } from '@/lib/apexChat'
@@ -479,6 +479,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    else if (text === '/price' || text === '/px') {
+      const sources = await fetchBtcPriceAllSources()
+      const lines   = sources.map(s => {
+        const priceStr = s.price ? `<code>$${Math.round(s.price).toLocaleString()}</code>` : '<i>no disponible</i>'
+        const statusEmoji = s.ok ? '✅' : '❌'
+        return `${statusEmoji} <b>${s.source}</b>: ${priceStr} (${s.ms}ms)`
+      })
+      const best = sources.find(s => s.ok)
+      const summary = best?.price ? `\nMejor precio: <code>$${Math.round(best.price).toLocaleString()}</code> (${best.source})` : '\n⚠️ Ninguna fuente disponible'
+      await sendTelegram(`💰 <b>BTC — Estado de fuentes de precio</b>\n\n${lines.join('\n')}${summary}`, chatId)
+    }
+
     else if (text === '/help' || text === '/h' || text === '/start') {
       await sendTelegram(
         `💬 <b>Chat directo con APEX</b>\n` +
@@ -503,17 +515,105 @@ export async function POST(req: NextRequest) {
         `/newsraw — Debug de fuentes y sentimiento\n` +
         `/verify — Datos exactos que usa el agente\n` +
         `/stats — Performance por tipo de trade\n` +
-        `/lastbrief — Últimos 5 análisis del agente\n\n` +
+        `/lastbrief — Últimos 5 análisis del agente\n` +
+        `/price — Estado de las 5 fuentes de precio BTC\n\n` +
         `⚙️ <b>Control</b>\n` +
         `/pause — Pausar apertura de nuevos trades\n` +
         `/resume — Reanudar el agente\n` +
-        `/close_all — ⚠️ Cerrar señales en Supabase\n\n` +
+        `/close_all — ⚠️ Cerrar señales en Supabase\n` +
+        `/fix sl — Corregir último trade → SL (P&amp;L automático)\n` +
+        `/fix be — Corregir último trade → Breakeven\n` +
+        `/fix sl [id] — Corregir trade específico por ID\n\n` +
         `🔧 <b>Diagnóstico</b>\n` +
         `/test — Verificar que Telegram y NTFY funcionan\n` +
         `/history — Últimas 5 conversaciones con APEX\n\n` +
-        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb`,
+        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb /px`,
         chatId,
       )
+    }
+
+    else if (text.startsWith('/fix')) {
+      // /fix sl | /fix be | /fix tp1 | /fix tp2 | /fix tp3 [optional: signal_id]
+      const parts   = text.split(/\s+/)
+      const subCmd  = (parts[1] ?? '').toLowerCase()
+      const fixId   = parts[2] ?? null
+      const VALID   = ['sl', 'be', 'breakeven', 'tp1', 'tp2', 'tp3']
+      if (!VALID.includes(subCmd)) {
+        await sendTelegram(
+          `⚠️ <b>Uso:</b> /fix [sl|be|tp1|tp2|tp3] [id_opcional]\n\nEjemplos:\n` +
+          `/fix sl — marca el último trade como SL con P&amp;L calculado automáticamente\n` +
+          `/fix be — marca como breakeven (P&amp;L: 0%)\n` +
+          `/fix sl abc123 — corrige el trade con id abc123`,
+          chatId,
+        )
+      } else {
+        const sb = getSb()
+        if (!sb) { await sendTelegram('❌ DB no disponible', chatId); }
+        else {
+          // Fetch target signal: by id or most recent non-pending
+          const query = fixId
+            ? sb.from('apex_signals').select('*').eq('id', fixId).single()
+            : sb.from('apex_signals').select('*').not('status', 'in', '("pending_confirmation")')
+                .order('updated_at', { ascending: false }).limit(1).single()
+          const { data: raw, error: fetchErr } = await Promise.resolve(query).catch(() => ({ data: null, error: { message: 'fetch failed' } })) as { data: Record<string, unknown> | null; error: { message: string } | null }
+          if (fetchErr || !raw) {
+            await sendTelegram(`❌ No se encontró la señal${fixId ? ` con id ${fixId}` : ''}`, chatId)
+          } else {
+            const idea    = raw.idea as { side: string; price: number; sl: number; tp1: number; tp2: number; tp3: number }
+            const isLong  = idea.side === 'LONG'
+            const entry   = idea.price
+            const riskPct = Math.abs(idea.sl - entry) / entry * 100
+            let newStatus: string
+            let pnl: number
+            let pnlR: number
+            let exitPrice: number
+            if (subCmd === 'sl') {
+              newStatus = 'sl_hit'
+              pnl       = isLong ? (idea.sl - entry) / entry * 100 : (entry - idea.sl) / entry * 100
+              pnlR      = -1.0
+              exitPrice = idea.sl
+            } else if (subCmd === 'be' || subCmd === 'breakeven') {
+              newStatus = 'breakeven'
+              pnl       = 0
+              pnlR      = 0
+              exitPrice = entry
+            } else {
+              // tp1/tp2/tp3
+              const tpN  = subCmd === 'tp1' ? idea.tp1 : subCmd === 'tp2' ? idea.tp2 : idea.tp3
+              newStatus  = `${subCmd}_hit`
+              pnl        = isLong ? (tpN - entry) / entry * 100 : (entry - tpN) / entry * 100
+              pnlR       = riskPct > 0 ? parseFloat((pnl / riskPct).toFixed(2)) : 0
+              exitPrice  = tpN
+            }
+            const { error: updErr } = await Promise.resolve(
+              sb.from('apex_signals').update({
+                status:       newStatus,
+                pnl:          parseFloat(pnl.toFixed(3)),
+                pnl_r:        pnlR,
+                exit_price:   exitPrice,
+                close_reason: `Corregido por agente/operador → ${newStatus}`,
+                closed_at:    raw.closed_at ?? new Date().toISOString(),
+                updated_at:   new Date().toISOString(),
+              }).eq('id', raw.id as string)
+            ).catch(() => ({ error: { message: 'update failed' } })) as { error: { message: string } | null }
+            if (updErr) {
+              await sendTelegram(`❌ Error al corregir: ${updErr.message}`, chatId)
+            } else {
+              const pnlStr  = `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
+              const pnlRStr = `${pnlR >= 0 ? '+' : ''}${pnlR.toFixed(2)}R`
+              await sendTelegram(
+                `✅ <b>ESTADO CORREGIDO</b>\n\n` +
+                `Señal: <code>${raw.id}</code>\n` +
+                `${idea.side} ${(raw.trade_type as string) ?? ''} @ <code>$${Math.round(entry).toLocaleString()}</code>\n\n` +
+                `Nuevo estado: <b>${newStatus.replace('_', ' ').toUpperCase()}</b>\n` +
+                `P&amp;L real: <b>${pnlStr}</b> (${pnlRStr})\n\n` +
+                `<i>Registro actualizado en base de datos.</i>`,
+                chatId,
+              )
+            }
+          }
+        }
+      }
     }
 
     else if (!rawText.startsWith('/')) {

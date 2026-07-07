@@ -221,6 +221,9 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
   const [showClose, setShowClose] = useState(false)
   const [closePrice, setClosePrice] = useState('')
   const [closeReason, setCloseReason] = useState(CLOSE_REASONS[0])
+  const [showCorrect, setShowCorrect]   = useState(false)
+  const [correctStatus, setCorrectStatus] = useState<'sl_hit' | 'breakeven' | 'closed_manual'>('sl_hit')
+  const [correctPnl, setCorrectPnl]     = useState('')
   const [alertPhone] = useState(() => { try { return localStorage.getItem('apex_alert_phone') ?? '' } catch { return '' } })
   const [alertEmail] = useState(() => { try { return localStorage.getItem('apex_alert_email') ?? '' } catch { return '' } })
   const [capitalConfig, setCapitalConfig] = useState<CapitalConfig>(DEFAULT_CONFIG)
@@ -312,6 +315,39 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
     const price = parseFloat(closePrice) || mkt.price || idea.price
     if (rec?.id && onClose) onClose(rec.id, price, closeReason)
     setShowClose(false)
+  }
+
+  async function handleCorrectStatus() {
+    if (!rec?.id) return
+    const pnlVal  = parseFloat(correctPnl)
+    const finalPnl = isNaN(pnlVal) ? (rec.pnl ?? 0) : pnlVal
+    // pnlR: SL = -1R always; breakeven = 0R; manual = derive from pnl vs risk distance
+    const riskPct  = Math.abs(idea.sl - idea.price) / idea.price * 100
+    const finalPnlR = correctStatus === 'sl_hit'
+      ? -1.0
+      : correctStatus === 'breakeven'
+        ? 0.0
+        : riskPct > 0 ? parseFloat((finalPnl / riskPct).toFixed(2)) : 0
+    const exitP   = correctStatus === 'sl_hit' ? idea.sl : (rec.exitPrice ?? idea.sl)
+    const body = {
+      id:          rec.id,
+      exitPrice:   exitP,
+      closeReason: `Corregido manualmente → ${correctStatus}`,
+      pnl:         finalPnl,
+      pnlR:        finalPnlR,
+      closedAt:    rec.closedAt ?? new Date().toISOString(),
+      status:      correctStatus,
+    }
+    // Update local store immediately so UI reflects change without refresh
+    const setSignalHistory = useApexStore.getState().setSignalHistory
+    setSignalHistory(prev => prev.map(s => s.id !== rec.id ? s : {
+      ...s, status: correctStatus, pnl: finalPnl, pnlR: finalPnlR,
+      exitPrice: exitP, closeReason: body.closeReason,
+    }))
+    try {
+      await fetch('/api/close-signal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    } catch { /* non-blocking */ }
+    setShowCorrect(false)
   }
 
   return (
@@ -600,6 +636,63 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
                   Confirmar Cierre
                 </button>
                 <button onClick={() => setShowClose(false)}
+                  style={{ background: 'transparent', border: `1px solid ${T.border}`, color: T.textSec,
+                    borderRadius: 5, padding: '7px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Correct status — for closed signals with wrong status */}
+          {!isActive && rec && onClose && !showCorrect && (
+            <button onClick={() => { setCorrectPnl(String(rec.pnl ?? '')); setShowCorrect(true) }}
+              style={{ width: '100%', background: '#f97316' + '18', border: `1px solid #f97316`, color: '#f97316',
+                borderRadius: 6, padding: '5px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 9, fontWeight: 700, marginTop: 4 }}>
+              ⚠️ Corregir estado
+            </button>
+          )}
+          {!isActive && rec && showCorrect && (
+            <div style={{ background: T.bg, border: `1px solid #f97316`, borderRadius: 8, padding: '10px', marginTop: 4 }}>
+              <div style={{ fontSize: 8, color: '#f97316', letterSpacing: '.1em', marginBottom: 8 }}>CORREGIR ESTADO DEL TRADE</div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 8, color: T.muted, marginBottom: 3 }}>Estado correcto</div>
+                  <select value={correctStatus} onChange={e => {
+                    const s = e.target.value as typeof correctStatus
+                    setCorrectStatus(s)
+                    if (s === 'sl_hit') {
+                      const isLong = idea.side === 'LONG'
+                      const auto = isLong
+                        ? (idea.sl - idea.price) / idea.price * 100
+                        : (idea.price - idea.sl) / idea.price * 100
+                      setCorrectPnl(auto.toFixed(2))
+                    } else if (s === 'breakeven') {
+                      setCorrectPnl('0.00')
+                    }
+                  }}
+                    style={{ width: '100%', background: T.card, border: `1px solid ${T.border}`, color: T.text,
+                      borderRadius: 5, padding: '5px 8px', fontFamily: 'inherit', fontSize: 10, boxSizing: 'border-box' }}>
+                    <option value="sl_hit">SL ✗ (pérdida)</option>
+                    <option value="breakeven">Breakeven</option>
+                    <option value="closed_manual">Cerrado manual</option>
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 8, color: T.muted, marginBottom: 3 }}>P&L real (%)</div>
+                  <input value={correctPnl} onChange={e => setCorrectPnl(e.target.value)}
+                    placeholder={String(rec.pnl ?? '')}
+                    style={{ width: '100%', background: T.card, border: `1px solid ${T.border}`, color: T.text,
+                      borderRadius: 5, padding: '5px 8px', fontFamily: 'inherit', fontSize: 11, boxSizing: 'border-box' }} />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={handleCorrectStatus}
+                  style={{ flex: 1, background: '#f97316', color: '#fff', border: 'none', borderRadius: 5,
+                    padding: '7px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, fontWeight: 700 }}>
+                  Confirmar corrección
+                </button>
+                <button onClick={() => setShowCorrect(false)}
                   style={{ background: 'transparent', border: `1px solid ${T.border}`, color: T.textSec,
                     borderRadius: 5, padding: '7px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
                   Cancelar
@@ -1031,6 +1124,10 @@ function ConfluencePanel({ idea, inds, T, analysisText }: {
 
   const card = { background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: '12px 14px' }
 
+  const ageMin   = idea.ts ? Math.round((Date.now() - new Date(idea.ts).getTime()) / 60_000) : null
+  const ageLabel = ageMin === null ? null : ageMin < 60 ? `hace ${ageMin}min` : `hace ${(ageMin / 60).toFixed(1)}h`
+  const ageStale = ageMin !== null && ageMin > 30
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
 
@@ -1115,7 +1212,14 @@ function ConfluencePanel({ idea, inds, T, analysisText }: {
 
       {/* Analysis text */}
       <div style={card}>
-        <div style={{ fontSize: 8, color: T.muted, letterSpacing: '.1em', marginBottom: 6 }}>HIPÓTESIS</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <span style={{ fontSize: 8, color: T.muted, letterSpacing: '.1em' }}>HIPÓTESIS</span>
+          {ageLabel && (
+            <span style={{ fontSize: 7, color: ageStale ? T.warn : T.muted, letterSpacing: '.05em' }}>
+              {ageStale ? '⚠️ ' : ''}{ageLabel}
+            </span>
+          )}
+        </div>
         <div style={{ fontSize: 10, color: T.text, lineHeight: 1.8 }}>{analysisText ?? idea.analysis}</div>
       </div>
     </div>

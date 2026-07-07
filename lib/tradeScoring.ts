@@ -269,10 +269,9 @@ export function scoreTradeIdea(
     return null
   }
 
-  // 3b. Trading session gate — don't trade during low-liquidity hours
+  // 3b. Macro event gate only (session restrictions removed — 24/7 trading allowed)
   if (!shouldGenerateSignal(tradeType, confidence)) {
-    const sess = getCurrentTradingSession()
-    console.log(`[SESSION REJECT] ${side} ${tradeType} conf=${confidence} session="${sess.name}" allowDT=${sess.allowDayTrade} minConf=${sess.minConfidence}`)
+    console.log(`[MACRO REJECT] ${side} ${tradeType} blocked by active macro event (FOMC/CPI/NFP)`)
     return null
   }
 

@@ -38,8 +38,17 @@ export interface LiveSignalState {
   totalBankedPnl:  number
 }
 
-type BybitTicker = { result?: { list?: Array<{ lastPrice: string }> } }
-type KrakenTicker = { result?: Record<string, { c: [string] }> }
+type BybitTicker    = { result?: { list?: Array<{ lastPrice: string }> } }
+type KrakenTicker   = { result?: Record<string, { c: [string] }> }
+type GeckoTicker    = { bitcoin?: { usd?: number } }
+type PaprikaTicker  = { quotes?: { USD?: { price?: number } } }
+
+export interface PriceSourceResult {
+  source: string
+  price:  number | null
+  ok:     boolean
+  ms:     number
+}
 
 async function fetchBtcSpotPrice(): Promise<number | null> {
   const safe = async <T>(url: string): Promise<T | null> => {
@@ -69,7 +78,65 @@ async function fetchBtcSpotPrice(): Promise<number | null> {
     const p = parseFloat(krakenEntry.c[0])
     if (!isNaN(p)) return p
   }
+
+  // Secondary fallbacks — slower but highly available
+  const [gecko, paprika] = await Promise.all([
+    safe<GeckoTicker>('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'),
+    safe<PaprikaTicker>('https://api.coinpaprika.com/v1/tickers/btc-bitcoin'),
+  ])
+  const geckoPrice   = gecko?.bitcoin?.usd
+  if (geckoPrice)                        return geckoPrice
+  const paprikaPrice = paprika?.quotes?.USD?.price
+  if (paprikaPrice)                      return paprikaPrice
+
   return null
+}
+
+export async function fetchBtcPriceAllSources(): Promise<PriceSourceResult[]> {
+  const t = () => Date.now()
+  const results: PriceSourceResult[] = []
+
+  const trySource = async (name: string, fn: () => Promise<number | null>): Promise<PriceSourceResult> => {
+    const start = t()
+    try {
+      const price = await fn()
+      return { source: name, price, ok: price !== null, ms: t() - start }
+    } catch {
+      return { source: name, price: null, ok: false, ms: t() - start }
+    }
+  }
+
+  const all = await Promise.all([
+    trySource('Binance', async () => {
+      const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT', { signal: AbortSignal.timeout(5000) })
+      const d = r.ok ? (await r.json() as { price?: string }) : null
+      return d?.price ? parseFloat(d.price) : null
+    }),
+    trySource('Bybit', async () => {
+      const r  = await fetch('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT', { signal: AbortSignal.timeout(5000) })
+      const d  = r.ok ? (await r.json() as BybitTicker) : null
+      const lp = d?.result?.list?.[0]?.lastPrice
+      return lp ? parseFloat(lp) : null
+    }),
+    trySource('Kraken', async () => {
+      const r = await fetch('https://api.kraken.com/0/public/Ticker?pair=XBTUSD', { signal: AbortSignal.timeout(5000) })
+      const d = r.ok ? (await r.json() as KrakenTicker) : null
+      const e = Object.values(d?.result ?? {})[0]
+      return e?.c?.[0] ? parseFloat(e.c[0]) : null
+    }),
+    trySource('CoinGecko', async () => {
+      const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd', { signal: AbortSignal.timeout(6000) })
+      const d = r.ok ? (await r.json() as GeckoTicker) : null
+      return d?.bitcoin?.usd ?? null
+    }),
+    trySource('CoinPaprika', async () => {
+      const r = await fetch('https://api.coinpaprika.com/v1/tickers/btc-bitcoin', { signal: AbortSignal.timeout(6000) })
+      const d = r.ok ? (await r.json() as PaprikaTicker) : null
+      return d?.quotes?.USD?.price ?? null
+    }),
+  ])
+  results.push(...all)
+  return results
 }
 
 export async function getLiveSignalStates(signals: RawSignalRow[]): Promise<LiveSignalState[]> {

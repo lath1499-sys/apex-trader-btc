@@ -258,6 +258,25 @@ ${focusInstructions[selectedFocus]}
 - NO decir "Fed bajó", "Fed recortó" ni "Fed podría recortar pronto" — la Fed está en HOLD con CPI en ${macro?.cpi_yoy ?? 4.2}% (> 3% = sin margen para recortar)
 - NO terminar con sesgo ambiguo ("neutral-bajista con sesgo alcista") — elige UNO
 
+═══ REGLA #1 — COHERENCIA CON SEÑALES ACTIVAS (MÁS IMPORTANTE) ═══
+
+${activeSignals.length > 0
+  ? `⚠️ TIENES ${activeSignals.length} SEÑAL(ES) ACTIVA(S) EN ESTE MOMENTO:
+${activeSignals.map((s: any) => {
+    const entry = s.entry ?? s.idea_entry ?? 0
+    const pnl   = s.side === 'LONG' ? (price - entry) / entry * 100 : (entry - price) / entry * 100
+    return `  • ${s.side} ${s.trade_type ?? s.tradeType} @$${Math.round(entry).toLocaleString()} | P&L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% | ${s.status}`
+  }).join('\n')}
+
+REGLAS ABSOLUTAS (violar cualquiera de estas es un error crítico):
+1. Menciona esta señal en el CUERPO del análisis — no solo en la sección de posiciones
+2. Tu sesgo final DEBE ser coherente con la señal:
+   - SHORT activo → sesgo BAJISTA o NEUTRAL solamente
+   - LONG activo  → sesgo ALCISTA o NEUTRAL solamente
+3. PROHIBIDO cuando hay señales activas: "no hay trade", "no voy a forzar", "sin señales abiertas", "manos en los bolsillos", "capital libre", "el sistema guarda silencio"
+4. Si el mercado parece contradecir la señal → explica POR QUÉ la tienes abierta, no la ignores`
+  : '(Sin señales activas — puedes usar sesgo libre según el análisis)'}
+
 ═══ ANTI-REPETICIÓN ═══
 
 Los últimos 3 briefs cubrieron: ${recentFocuses.length > 0 ? recentFocuses.join(', ') : 'ninguno todavía'}.
@@ -325,14 +344,115 @@ Escribe el reporte ahora.`
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Brief coherence validator — catches "no trade" when signals exist, bias mismatch
+// ─────────────────────────────────────────────────────────────────────────────
+
+const NO_TRADE_PATTERNS = [
+  /no tengo señales activas/i,
+  /no voy a forzar/i,
+  /no hay trade/i,
+  /no voy a operar/i,
+  /manos en los bolsillos/i,
+  /sin señales abiertas/i,
+  /no hay señal/i,
+  /capital libre/i,
+  /el sistema guarda silencio/i,
+]
+
+async function correctBriefIfNeeded(text: string, p: AgentUpdateParams): Promise<string> {
+  const { activeSignals, price } = p
+  if (!activeSignals || activeSignals.length === 0) return text
+
+  const issues: string[] = []
+
+  const noTradeHits = NO_TRADE_PATTERNS.filter(re => re.test(text))
+  if (noTradeHits.length > 0) {
+    const sigSummary = activeSignals.map((s: any) =>
+      `${s.side} ${s.trade_type ?? s.tradeType} @$${Math.round(s.entry ?? 0).toLocaleString()}`
+    ).join(', ')
+    issues.push(`Dice "no hay trade/señal" pero SÍ hay: ${sigSummary}`)
+  }
+
+  const hasBullBias = /sesgo.*alcista|alcista.*sesgo|bias.*alcista|inclinación.*alcista/i.test(text)
+  const hasBearBias = /sesgo.*bajista|bajista.*sesgo|bias.*bajista|inclinación.*bajista/i.test(text)
+  const hasShort    = activeSignals.some((s: any) => s.side === 'SHORT')
+  const hasLong     = activeSignals.some((s: any) => s.side === 'LONG')
+
+  if (hasBullBias && !hasBearBias && hasShort) {
+    const sig = activeSignals.find((s: any) => s.side === 'SHORT')
+    issues.push(`Sesgo ALCISTA pero hay SHORT activo @$${Math.round(sig?.entry ?? 0).toLocaleString()}. Debe ser bajista o neutral.`)
+  }
+  if (hasBearBias && !hasBullBias && hasLong) {
+    const sig = activeSignals.find((s: any) => s.side === 'LONG')
+    issues.push(`Sesgo BAJISTA pero hay LONG activo @$${Math.round(sig?.entry ?? 0).toLocaleString()}. Debe ser alcista o neutral.`)
+  }
+
+  if (issues.length === 0) return text
+
+  console.warn('[BRIEF VALIDATOR] Issues found — regenerating:', issues)
+
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return text
+
+  const signalContext = activeSignals.map((s: any) => {
+    const entry   = s.entry ?? 0
+    const pnl     = s.side === 'LONG' ? (price - entry) / entry * 100 : (entry - price) / entry * 100
+    return `• ${s.side} ${s.trade_type ?? s.tradeType} @$${Math.round(entry).toLocaleString()} | P&L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% | SL $${Math.round(s.sl ?? 0).toLocaleString()} | Estado: ${s.status}`
+  }).join('\n')
+
+  const correctionPrompt = `El análisis tiene errores críticos que debes corregir:
+
+ANÁLISIS ORIGINAL:
+${text}
+
+PROBLEMAS DETECTADOS:
+${issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n')}
+
+SEÑALES REALMENTE ABIERTAS AHORA:
+${signalContext}
+
+REESCRIBE el análisis completo corrigiendo exactamente esos puntos.
+REGLAS ABSOLUTAS:
+- Menciona las señales activas en el cuerpo del análisis
+- SHORT activo = sesgo bajista o neutral SOLAMENTE
+- LONG activo  = sesgo alcista o neutral SOLAMENTE
+- NUNCA "no hay trade" cuando hay señales abiertas
+- Mantén el mismo enfoque, estilo y longitud del original`
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6', max_tokens: 800,
+        messages: [{ role: 'user', content: correctionPrompt }],
+      }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (res.ok) {
+      const data = await res.json() as { content?: Array<{ text?: string }> }
+      const corrected = data.content?.[0]?.text
+      if (corrected) {
+        console.log('[BRIEF VALIDATOR] Brief corrected successfully')
+        return corrected
+      }
+    }
+  } catch (err) {
+    console.error('[BRIEF VALIDATOR] Correction failed:', err instanceof Error ? err.message : err)
+  }
+  return text
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 30-min conversational update — async (Claude API with deterministic fallback)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function generateAgentUpdate(params: AgentUpdateParams): Promise<string> {
-  // Try Claude API first — rich, intelligent, non-repetitive
   const claudeText = await callClaudeForUpdate(params).catch(() => null)
-  if (claudeText) return claudeText
-  // Fallback to deterministic template
+  if (claudeText) {
+    const validated = await correctBriefIfNeeded(claudeText, params)
+    return validated
+  }
   console.log('[APEX Voice] Using fallback template')
   return buildDeterministicUpdate(params)
 }

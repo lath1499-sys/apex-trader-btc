@@ -38,6 +38,7 @@ import type { Kline, MarketData, IndicatorMap, SignalRecord } from '@/lib/types'
 import { sendTelegram, tgSignal, tgClose, tgTP, tgBrief, tgBreakeven, tgSLFloor } from '@/lib/telegram'
 import { validateSignalClose } from '@/lib/signalValidator'
 import { calculateLeverage, getLeverageConfig, DEFAULT_LEVERAGE_CONFIG } from '@/lib/leverageCalculator'
+import { fetchBTCNews } from '@/lib/newsFetcher'
 
 export const runtime    = 'nodejs'
 export const maxDuration = 60   // Vercel Hobby max; agent needs ~20-40s for all API calls
@@ -172,10 +173,10 @@ async function handleSignalEvent(
     )
     if (v.warning) {
       console.error('[APEX Validator]', v.warning)
-      void Promise.all([
+      Promise.all([
         sendTelegram(`⚠️ <b>Auto-corrección detectada</b>\n<code>${v.warning}</code>`),
         ntfyTopic ? ntfy(ntfyTopic, sanitizeHdr('APEX Auto-corrección detectada'), v.warning.slice(0, 300), 4, 'warning') : Promise.resolve(),
-      ])
+      ]).catch(e => console.error('[APEX Validator notify]', e instanceof Error ? e.message : String(e)))
     }
   }
 
@@ -466,7 +467,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     // ── 1c. All external API calls in one parallel batch ─────────────────────────
     // fetchFedExpectations needs fedRate, so we run macroIndicators first in a
     // sub-parallel group, then merge — still all non-blocking relative to each other.
-    const [globalMarkets, macroIndicators, globalLiquidity, upcomingEvents, socialSentiment, whaleAlert, optionsData] = await Promise.all([
+    const [globalMarkets, macroIndicators, globalLiquidity, upcomingEvents, socialSentiment, whaleAlert, optionsData, newsSnap] = await Promise.all([
       fetchGlobalMarkets().catch(() => null),
       fetchMacroIndicators().catch(() => null),
       fetchGlobalLiquidity().catch(() => null),
@@ -474,6 +475,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       fetchSocialSentiment().catch(() => null),
       fetchWhaleAlert().catch(() => null),
       fetchOptionsData().catch(() => null),
+      fetchBTCNews().catch(() => null),
     ])
 
     // Fed expectations — depends on fedRate from macroIndicators (already resolved above)
@@ -888,7 +890,9 @@ export async function GET(req: Request): Promise<NextResponse> {
     const capitalState = await getCapitalState(DEFAULT_CAPITAL_CONFIG, ntfyTopic).catch(() => null)
 
     // ── 4. Generate new Normal signal ─────────────────────────────────────────
-    const activeCount  = active.filter(s => s.idea.tradeType !== 'Scalp').length
+    const activeCount       = active.length
+    const activeScalps      = active.filter(s => s.idea.tradeType === 'Scalp').length
+    const recentSignalTypes = allSignals.slice(0, 10).map(s => s.idea.tradeType)
     const rawK = { '1d': klines['1d'], '4h': klines['4h'], '1h': klines['1h'], '15m': klines['15m'] }
 
     // Permissive mode: lower thresholds by 1 if no signal generated in 48+ hours
@@ -916,7 +920,7 @@ export async function GET(req: Request): Promise<NextResponse> {
         price,
         prevPrice:       prevStateForVoice?.lastPrice ?? price,
         inds, regime, session,
-        news:            [],   // not fetched server-side
+        news:            (newsSnap?.items ?? []).slice(0, 8).map(n => ({ title: n.title, tag: n.sentiment })),
         activeSignals:   activeSigData,
         mkt,
         elliottWaves:    ewMap,
@@ -933,6 +937,8 @@ export async function GET(req: Request): Promise<NextResponse> {
         perfStats,
         klines4h:        klines['4h'],
         daysSinceLastSignal,
+        recentSignalTypes,
+        activeScalps,
         capitalContext: capitalState ? (() => {
           const stageLabels: Record<number, string> = { 1: 'NORMAL (5% riesgo)', 2: 'SURVIVAL (2% riesgo)', 3: 'HARD STOP' }
           const dynTarget = capitalState.monthlyProfitTarget ?? capitalState.monthlyStartBalance * 0.15
@@ -1255,6 +1261,7 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
       }
 
       const hSb = getDbClient()
+      if (!hSb) { console.error('[Harmonic] DB client null — skipping upsert'); continue }
       const { error: hErr } = await Promise.resolve(
         hSb.from('apex_signals').upsert({
           id: rec.id, side: rec.idea.side, trade_type: rec.idea.tradeType,
@@ -1324,15 +1331,29 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
         // Merge signals created in this run — guards against Supabase replication lag
         // where a just-upserted signal may not be visible to a new select within ms.
         const freshIds = new Set((freshState.activeSignals as { id: string }[]).map(s => s.id))
-        const mergedActive = [
+        const mergedActiveFull = [
           ...freshState.activeSignals,
           ...thisRunSignals.filter(s => !freshIds.has(s.id)).map(s => ({
             ...s, _justOpened: true,
           })),
         ]
-        if (thisRunSignals.length > 0 && mergedActive.length > freshState.activeSignals.length) {
+        if (thisRunSignals.length > 0 && mergedActiveFull.length > freshState.activeSignals.length) {
           console.log(`[BRIEF] Injected ${thisRunSignals.length} thisRun signal(s) not yet visible in DB read`)
         }
+
+        // SL pre-check: if current price already crossed a signal's SL, exclude it from
+        // the brief so we never report stale P&L. Monitor will close it within seconds.
+        const mergedActive = mergedActiveFull.filter((s: { idea?: { side?: string; sl?: number; price?: number }; side?: string; sl?: number }) => {
+          const idea   = (s as { idea?: { side: string; sl: number; price: number } }).idea
+          const isLong = (idea?.side ?? (s as { side?: string }).side) === 'LONG'
+          const sl     = idea?.sl ?? (s as { sl?: number }).sl ?? null
+          if (!sl) return true
+          const crossed = isLong ? price <= sl : price >= sl
+          if (crossed) {
+            console.warn(`[BRIEF] SL pre-check: excluding signal — price $${Math.round(price)} crossed SL $${Math.round(sl)}`)
+          }
+          return !crossed
+        })
 
         const updateParams: AgentUpdateParams = {
           price,
@@ -1343,7 +1364,7 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
           macroSentiment,
           macroIndicators,
           fedExpectations,
-          news:            [],
+          news:            (newsSnap?.items ?? []).slice(0, 6).map((n: { title: string; sentiment: string }) => ({ title: n.title, tag: n.sentiment })),
           whaleAlert,
           realDelta:       null,
           elliottWaves:    ewMap,
@@ -1373,7 +1394,7 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
         const briefText = update + upcomingNote
         await Promise.all([
           ntfyTopic ? ntfy(ntfyTopic, sanitizeHdr(`APEX ${session.name} — $${Math.round(price).toLocaleString()}`), briefText, 2, 'bar_chart') : Promise.resolve(),
-          sendTelegram(tgBrief(briefText, price, mkt.change ?? 0)),
+          sendTelegram(tgBrief(briefText, price, mkt.change ?? 0, mergedActive.map((s: any) => ({ side: s.side, trade_type: s.idea?.tradeType ?? s.trade_type, entry: s.idea?.price ?? s.entry ?? 0 })))),
         ])
         results.update30minSent = true
       }
