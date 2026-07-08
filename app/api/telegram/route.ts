@@ -456,12 +456,12 @@ export async function POST(req: NextRequest) {
       const since24h = new Date(Date.now() - 24 * 60 * 60_000).toISOString()
       const { data: rows } = await Promise.resolve(
         sb.from('apex_brief_history')
-          .select('focus, success, error_msg, duration_ms, created_at')
+          .select('brief_type, success, error_msg, duration_ms, created_at')
           .gte('created_at', since24h)
           .order('created_at', { ascending: false })
           .limit(50)
       ).catch(() => ({ data: null })) as {
-        data: Array<{ focus: string | null; success: boolean | null; error_msg: string | null; duration_ms: number | null; created_at: string }> | null
+        data: Array<{ brief_type: string | null; success: boolean | null; error_msg: string | null; duration_ms: number | null; created_at: string }> | null
       }
       if (!rows || rows.length === 0) {
         await sendTelegram('📋 Sin briefs en las últimas 24h.\n\n<i>Verifica que el cron /api/agent esté activo y que han pasado 28+ min desde el inicio.</i>', chatId)

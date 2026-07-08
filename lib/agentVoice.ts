@@ -451,7 +451,8 @@ async function recordBriefHealth(success: boolean, errorMsg: string | null, dura
   const sb = getVoiceSb()
   if (!sb) return
   await Promise.resolve(sb.from('apex_brief_history').insert({
-    focus:       success ? 'AUTO' : 'ERROR',
+    brief_type:  success ? 'AUTO' : 'ERROR',
+    analysis:    success ? 'ok' : (errorMsg?.slice(0, 200) ?? 'error'),
     success,
     error_msg:   errorMsg?.slice(0, 200) ?? null,
     duration_ms: durationMs,
