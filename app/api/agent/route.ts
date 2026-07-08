@@ -1300,6 +1300,7 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
 
     // 30-min market update — fire if 28+ minutes since last send (Telegram always, ntfy optional)
     if (minsSinceUpdate >= 28) {
+      console.log(`[BRIEF] Firing — ${minsSinceUpdate.toFixed(1)}min since last send`)
       // Atomic claim: write last_analysis_at BEFORE generating content.
       // Optimistic lock on last_analysis_at prevents two concurrent runs both firing.
       const claimSb   = getDbClient()
@@ -1317,7 +1318,7 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
       }
 
       if (!slotClaimed) {
-        console.log('[APEX] Update slot already claimed by concurrent run — skipping')
+        console.log('[BRIEF] Slot already claimed by concurrent run — skipping')
         results.update30minSkipped = 'slot_claimed_concurrent'
       } else {
         const upcoming     = getUpcomingEvent(Date.now(), 4 * 60 * 60_000)
@@ -1386,17 +1387,30 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
                 lastAnalysisAt: prevStateForVoice.lastAnalysisAt, changeReason: prevStateForVoice.changeReason }
             : null,
         }
-        const update = await generateAgentUpdate(updateParams)
-        console.log('[APEX Update Preview]', update?.slice(0, 200))
-        const upcomingNote = upcoming
-          ? `\n\n⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución`
-          : ''
-        const briefText = update + upcomingNote
-        await Promise.all([
-          ntfyTopic ? ntfy(ntfyTopic, sanitizeHdr(`APEX ${session.name} — $${Math.round(price).toLocaleString()}`), briefText, 2, 'bar_chart') : Promise.resolve(),
-          sendTelegram(tgBrief(briefText, price, mkt.change ?? 0, mergedActive.map((s: any) => ({ side: s.side, trade_type: s.idea?.tradeType ?? s.trade_type, entry: s.idea?.price ?? s.entry ?? 0 })))),
-        ])
-        results.update30minSent = true
+        console.log('[BRIEF] Params built — calling generateAgentUpdate...')
+        let update: string
+        try {
+          update = await generateAgentUpdate(updateParams)
+        } catch (briefErr: unknown) {
+          const errMsg = briefErr instanceof Error ? briefErr.message : String(briefErr)
+          console.error('[BRIEF] generateAgentUpdate FAILED — sending error notification:', errMsg)
+          await sendTelegram(`⚠️ <b>APEX Brief Error</b>\n\n<code>${errMsg.slice(0, 300)}</code>\n\n<i>El brief no pudo enviarse. Revisá los logs de Vercel.</i>`)
+          results.update30minSkipped = `brief_error: ${errMsg.slice(0, 80)}`
+          update = ''
+        }
+        if (update) {
+          console.log('[BRIEF] Content ready — sending to Telegram...')
+          const upcomingNote = upcoming
+            ? `\n\n⚠️ ${upcoming.name} en ${minutesUntilEvent(upcoming)}min — precaución`
+            : ''
+          const briefText = update + upcomingNote
+          await Promise.all([
+            ntfyTopic ? ntfy(ntfyTopic, sanitizeHdr(`APEX ${session.name} — $${Math.round(price).toLocaleString()}`), briefText, 2, 'bar_chart') : Promise.resolve(),
+            sendTelegram(tgBrief(briefText, price, mkt.change ?? 0, mergedActive.map((s: any) => ({ side: s.side, trade_type: s.idea?.tradeType ?? s.trade_type, entry: s.idea?.price ?? s.entry ?? 0 })))),
+          ])
+          console.log('[BRIEF] Sent ✅')
+          results.update30minSent = true
+        }
       }
     } else if (!results.update30minSent) {
       results.update30minSkipped = `minsSince: ${minsSinceUpdate.toFixed(1)}, session: ${session.quality}`

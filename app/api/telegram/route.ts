@@ -450,6 +450,46 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    else if (text === '/briefstatus' || text === '/bs') {
+      const sb = getSb()
+      if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
+      const since24h = new Date(Date.now() - 24 * 60 * 60_000).toISOString()
+      const { data: rows } = await Promise.resolve(
+        sb.from('apex_brief_history')
+          .select('focus, success, error_msg, duration_ms, created_at')
+          .gte('created_at', since24h)
+          .order('created_at', { ascending: false })
+          .limit(50)
+      ).catch(() => ({ data: null })) as {
+        data: Array<{ focus: string | null; success: boolean | null; error_msg: string | null; duration_ms: number | null; created_at: string }> | null
+      }
+      if (!rows || rows.length === 0) {
+        await sendTelegram('📋 Sin briefs en las últimas 24h.\n\n<i>Verifica que el cron /api/agent esté activo y que han pasado 28+ min desde el inicio.</i>', chatId)
+        return NextResponse.json({ ok: true })
+      }
+      const tz        = 'America/Santo_Domingo'
+      const total     = rows.length
+      const successes = rows.filter(r => r.success !== false).length
+      const errors    = rows.filter(r => r.success === false)
+      const lastRow   = rows[0]
+      const lastTime  = new Date(lastRow.created_at).toLocaleTimeString('es-DO', { timeZone: tz, hour: '2-digit', minute: '2-digit' })
+      const avgMs     = rows.filter(r => r.duration_ms).reduce((a, r) => a + (r.duration_ms ?? 0), 0) / (rows.filter(r => r.duration_ms).length || 1)
+
+      let msg = `📊 <b>Brief Health — últimas 24h</b>\n\n`
+      msg += `✅ Exitosos: <b>${successes}/${total}</b>\n`
+      msg += `❌ Errores: <b>${errors.length}</b>\n`
+      msg += `⏱ Tiempo promedio: <b>${avgMs > 0 ? (avgMs / 1000).toFixed(1) + 's' : 'N/A'}</b>\n`
+      msg += `🕐 Último: <b>${lastTime}</b>`
+      if (errors.length > 0) {
+        msg += `\n\n⚠️ <b>Errores recientes:</b>`
+        for (const e of errors.slice(0, 3)) {
+          const t = new Date(e.created_at).toLocaleTimeString('es-DO', { timeZone: tz, hour: '2-digit', minute: '2-digit' })
+          msg += `\n[${t}] <code>${(e.error_msg ?? 'error desconocido').slice(0, 150)}</code>`
+        }
+      }
+      await sendTelegram(msg, chatId)
+    }
+
     else if (text === '/history' || text === '/chat') {
       const sb = getSb()
       if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
@@ -516,6 +556,7 @@ export async function POST(req: NextRequest) {
         `/verify — Datos exactos que usa el agente\n` +
         `/stats — Performance por tipo de trade\n` +
         `/lastbrief — Últimos 5 análisis del agente\n` +
+        `/briefstatus — Health check: briefs enviados/errores últimas 24h\n` +
         `/price — Estado de las 5 fuentes de precio BTC\n\n` +
         `⚙️ <b>Control</b>\n` +
         `/pause — Pausar apertura de nuevos trades\n` +
@@ -527,7 +568,7 @@ export async function POST(req: NextRequest) {
         `🔧 <b>Diagnóstico</b>\n` +
         `/test — Verificar que Telegram y NTFY funcionan\n` +
         `/history — Últimas 5 conversaciones con APEX\n\n` +
-        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb /px`,
+        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb /bs /px`,
         chatId,
       )
     }

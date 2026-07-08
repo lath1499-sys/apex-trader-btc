@@ -447,14 +447,49 @@ REGLAS ABSOLUTAS:
 // 30-min conversational update — async (Claude API with deterministic fallback)
 // ─────────────────────────────────────────────────────────────────────────────
 
+async function recordBriefHealth(success: boolean, errorMsg: string | null, durationMs: number): Promise<void> {
+  const sb = getVoiceSb()
+  if (!sb) return
+  await Promise.resolve(sb.from('apex_brief_history').insert({
+    focus:       success ? 'AUTO' : 'ERROR',
+    success,
+    error_msg:   errorMsg?.slice(0, 200) ?? null,
+    duration_ms: durationMs,
+    created_at:  new Date().toISOString(),
+  })).catch(() => {})
+}
+
 export async function generateAgentUpdate(params: AgentUpdateParams): Promise<string> {
-  const claudeText = await callClaudeForUpdate(params).catch(() => null)
-  if (claudeText) {
-    const validated = await correctBriefIfNeeded(claudeText, params)
-    return validated
+  const startedAt = Date.now()
+  console.log('[BRIEF] generateAgentUpdate started')
+
+  try {
+    console.log('[BRIEF] Calling Claude...')
+    const claudeText = await callClaudeForUpdate(params).catch((err: unknown) => {
+      console.warn('[BRIEF] Claude call failed:', err instanceof Error ? err.message : String(err))
+      return null
+    })
+
+    if (claudeText) {
+      console.log(`[BRIEF] Claude responded: ${claudeText.length} chars`)
+      console.log('[BRIEF] Validating brief coherence...')
+      const validated = await correctBriefIfNeeded(claudeText, params)
+      console.log('[BRIEF] Brief ready ✅')
+      void recordBriefHealth(true, null, Date.now() - startedAt)
+      return validated
+    }
+
+    console.log('[BRIEF] Claude returned null — using fallback template')
+    const fallback = buildDeterministicUpdate(params)
+    void recordBriefHealth(true, null, Date.now() - startedAt)
+    return fallback
+
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[BRIEF] generateAgentUpdate CRASHED:', msg)
+    void recordBriefHealth(false, msg, Date.now() - startedAt)
+    throw err
   }
-  console.log('[APEX Voice] Using fallback template')
-  return buildDeterministicUpdate(params)
 }
 
 function buildDeterministicUpdate(params: AgentUpdateParams): string {
