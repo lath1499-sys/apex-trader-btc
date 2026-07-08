@@ -1298,8 +1298,8 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
     const minsSinceUpdate = (now - lastAnalysis)   / 60_000
     const hrsSinceDeep    = (now - lastDeep)       / 3_600_000
 
-    // 30-min market update — fire if 28+ minutes since last send
-    if (minsSinceUpdate >= 28 && ntfyTopic) {
+    // 30-min market update — fire if 28+ minutes since last send (Telegram always, ntfy optional)
+    if (minsSinceUpdate >= 28) {
       // Atomic claim: write last_analysis_at BEFORE generating content.
       // Optimistic lock on last_analysis_at prevents two concurrent runs both firing.
       const claimSb   = getDbClient()
@@ -1399,11 +1399,11 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
         results.update30minSent = true
       }
     } else if (!results.update30minSent) {
-      results.update30minSkipped = `minsSince: ${minsSinceUpdate.toFixed(1)}, ntfyTopic: ${ntfyTopic ? 'set' : 'MISSING'}, session: ${session.quality}`
+      results.update30minSkipped = `minsSince: ${minsSinceUpdate.toFixed(1)}, session: ${session.quality}`
     }
 
     // 4H deep analysis — fire if 4+ hours since last deep send
-    if (hrsSinceDeep >= 4 && ntfyTopic) {
+    if (hrsSinceDeep >= 4) {
       const deepAnalysis = await generateDeepAnalysis(
         price,
         inds,
