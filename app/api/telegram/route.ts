@@ -490,6 +490,87 @@ export async function POST(req: NextRequest) {
       await sendTelegram(msg, chatId)
     }
 
+    else if (text === '/signalhealth' || text === '/health' || text === '/sh') {
+      const sb = getSb()
+      if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
+
+      const [stateRes, capitalRes, locksRes, lastSigRes] = await Promise.allSettled([
+        Promise.resolve(sb.from('apex_agent_state').select('is_paused, pause_reason, last_bias, last_confidence, updated_at').eq('id', 'current').maybeSingle()),
+        Promise.resolve(sb.from('apex_capital_config').select('drawdown_stage, risk_per_trade_pct, monthly_start_balance').eq('id', 'default').maybeSingle()),
+        Promise.resolve(sb.from('apex_run_locks').select('job_type, locked, last_run_at, run_count, error_count').order('job_type')),
+        Promise.resolve(sb.from('apex_signals').select('id, side, trade_type, status, created_at').order('created_at', { ascending: false }).limit(1)),
+      ])
+
+      const state   = stateRes.status   === 'fulfilled' ? (stateRes.value.data   as { is_paused: boolean | null; pause_reason: string | null; last_bias: string | null; last_confidence: number | null; updated_at: string | null } | null) : null
+      const capital = capitalRes.status === 'fulfilled' ? (capitalRes.value.data as { drawdown_stage: number | null; risk_per_trade_pct: number | null; monthly_start_balance: number | null } | null) : null
+      const locks   = locksRes.status   === 'fulfilled' ? (locksRes.value.data   as Array<{ job_type: string; locked: boolean; last_run_at: string | null; run_count: number; error_count: number }> | null) : null
+      const lastSig = lastSigRes.status === 'fulfilled' ? (lastSigRes.value.data as Array<{ created_at: string; side: string; trade_type: string }> | null) : null
+
+      const daysSinceSig = lastSig?.[0]?.created_at
+        ? Math.floor((Date.now() - new Date(lastSig[0].created_at).getTime()) / 86_400_000)
+        : 999
+
+      const issues: string[] = []
+      const ok: string[]     = []
+
+      if (state?.is_paused) {
+        issues.push(`⏸ Agente PAUSADO: ${state.pause_reason ?? 'sin razón'}`)
+      } else {
+        ok.push('✅ Agente activo')
+      }
+
+      const stage = capital?.drawdown_stage ?? 1
+      if (stage >= 3) {
+        issues.push('🔴 HARD STOP (drawdown stage 3) — sin nuevos trades')
+      } else {
+        ok.push(`✅ Risk stage: ${stage === 1 ? 'NORMAL 5%' : 'SURVIVAL 2%'}`)
+      }
+
+      const decideLock = locks?.find(l => l.job_type === 'decide')
+      if (decideLock?.locked) {
+        issues.push(`🔒 Lock decide ATASCADO desde ${decideLock.last_run_at ?? '?'}`)
+      } else {
+        const lastRun = decideLock?.last_run_at
+          ? new Date(decideLock.last_run_at).toLocaleTimeString('es-DO', { timeZone: 'America/Santo_Domingo', hour: '2-digit', minute: '2-digit' })
+          : 'nunca'
+        ok.push(`✅ Decide libre | último: ${lastRun} | runs: ${decideLock?.run_count ?? 0}`)
+      }
+
+      if (daysSinceSig >= 2) {
+        issues.push(`📉 ${daysSinceSig} días sin señal — modo búsqueda activa activo`)
+      } else if (daysSinceSig === 999) {
+        issues.push('📉 Sin señales en DB — tabla puede estar vacía')
+      } else {
+        ok.push(`✅ Última señal: hace ${daysSinceSig}d`)
+      }
+
+      let msg = `🏥 <b>Signal Health</b>\n\n`
+      if (issues.length) {
+        msg += `🚨 <b>Problemas (${issues.length}):</b>\n${issues.join('\n')}\n\n`
+      }
+      msg += `<b>OK:</b>\n${ok.join('\n')}\n\n`
+      msg += `Sesgo actual: ${state?.last_bias ?? '?'} | Confianza: ${state?.last_confidence ?? '?'}\n`
+      msg += `Días sin señal: <b>${daysSinceSig === 999 ? 'sin datos' : daysSinceSig}</b>\n\n`
+      if (issues.length === 0) {
+        msg += `Todo parece correcto. Usa /forcecheck para forzar análisis ahora.`
+      } else {
+        msg += `Usa /resume si el agente está pausado, o revisa logs de Vercel.`
+      }
+      await sendTelegram(msg, chatId)
+    }
+
+    else if (text === '/forcecheck' || text === '/scan' || text === '/fc') {
+      // Fire-and-forget /api/agent — signal will arrive in Telegram if found
+      void fetch(
+        `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://apex-trader-btc.vercel.app'}/api/agent`,
+        { headers: { Authorization: `Bearer ${process.env.CRON_SECRET ?? ''}` } },
+      ).catch(() => {})
+      await sendTelegram(
+        '🔍 <b>Forzando análisis de señal...</b>\n\nSi hay un setup válido, la señal llegará en ~30 segundos.\nSi Claude devuelve WAIT, no llegará nada — usa /signalhealth para ver por qué.',
+        chatId,
+      )
+    }
+
     else if (text === '/briefnow' || text === '/bn') {
       // Quick cooldown check first
       const sb = getSb()
@@ -588,6 +669,8 @@ export async function POST(req: NextRequest) {
         `/lastbrief — Últimos 5 análisis del agente\n` +
         `/briefstatus — Health check: briefs enviados/errores últimas 24h\n` +
         `/briefnow — Generar análisis de mercado ahora mismo\n` +
+        `/signalhealth — Diagnóstico completo del generador de señales\n` +
+        `/forcecheck — Forzar análisis de señal ahora mismo\n` +
         `/price — Estado de las 5 fuentes de precio BTC\n\n` +
         `⚙️ <b>Control</b>\n` +
         `/pause — Pausar apertura de nuevos trades\n` +
@@ -599,7 +682,7 @@ export async function POST(req: NextRequest) {
         `🔧 <b>Diagnóstico</b>\n` +
         `/test — Verificar que Telegram y NTFY funcionan\n` +
         `/history — Últimas 5 conversaciones con APEX\n\n` +
-        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb /bs /bn /px`,
+        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb /bs /bn /sh /fc /px`,
         chatId,
       )
     }

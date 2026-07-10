@@ -447,17 +447,29 @@ REGLAS ABSOLUTAS:
 // 30-min conversational update — async (Claude API with deterministic fallback)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function recordBriefHealth(success: boolean, errorMsg: string | null, durationMs: number): Promise<void> {
+async function recordBriefHealth(
+  success: boolean,
+  errorMsg: string | null,
+  durationMs: number,
+  briefText?: string,
+  price?: number,
+): Promise<void> {
   const sb = getVoiceSb()
   if (!sb) return
-  await Promise.resolve(sb.from('apex_brief_history').insert({
-    brief_type:  success ? 'AUTO' : 'ERROR',
-    analysis:    success ? 'ok' : (errorMsg?.slice(0, 200) ?? 'error'),
+  const { error } = await Promise.resolve(sb.from('apex_brief_history').insert({
+    brief_type:    success ? 'AUTO' : 'ERROR',
+    analysis:      briefText?.slice(0, 500) ?? (success ? 'ok' : (errorMsg?.slice(0, 200) ?? 'error')),
+    price_at_brief: price ?? null,
     success,
-    error_msg:   errorMsg?.slice(0, 200) ?? null,
-    duration_ms: durationMs,
-    created_at:  new Date().toISOString(),
-  })).catch(() => {})
+    error_msg:     errorMsg?.slice(0, 200) ?? null,
+    duration_ms:   durationMs,
+    created_at:    new Date().toISOString(),
+  }))
+  if (error) {
+    console.error('[BRIEF] Failed to save history:', (error as { message?: string }).message ?? error)
+  } else {
+    console.log('[BRIEF] History saved to apex_brief_history ✅')
+  }
 }
 
 export async function generateAgentUpdate(params: AgentUpdateParams): Promise<string> {
@@ -476,13 +488,13 @@ export async function generateAgentUpdate(params: AgentUpdateParams): Promise<st
       console.log('[BRIEF] Validating brief coherence...')
       const validated = await correctBriefIfNeeded(claudeText, params)
       console.log('[BRIEF] Brief ready ✅')
-      void recordBriefHealth(true, null, Date.now() - startedAt)
+      void recordBriefHealth(true, null, Date.now() - startedAt, validated, params.price)
       return validated
     }
 
     console.log('[BRIEF] Claude returned null — using fallback template')
     const fallback = buildDeterministicUpdate(params)
-    void recordBriefHealth(true, null, Date.now() - startedAt)
+    void recordBriefHealth(true, null, Date.now() - startedAt, fallback, params.price)
     return fallback
 
   } catch (err: unknown) {
@@ -894,7 +906,7 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
   const text = await callClaudeStandalone({ price, change24h, macroTxt, activeSignals, focus })
   console.log('[BRIEF:voice] Claude responded:', text.length, 'chars')
 
-  void recordBriefHealth(true, null, Date.now() - startedAt)
+  void recordBriefHealth(true, null, Date.now() - startedAt, text, price)
   return { text, price, change24h, activeSignals }
 }
 

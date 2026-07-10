@@ -3,6 +3,10 @@
 # Claude Code local settings (may contain secrets)
 .claude/settings.local.json
 
+# Accidental temp files from Vercel CLI checks
+Users*AppData*Temp*vercel-env-check.txt
+vercel-env-check.txt
+
 # dependencies
 /node_modules
 /.pnp

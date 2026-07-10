@@ -58,36 +58,38 @@ async function fetchBtcSpotPrice(): Promise<number | null> {
     } catch { return null }
   }
 
-  const [bin, bybit, kraken] = await Promise.all([
-    safe<{ price?: string }>('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT'),
-    safe<BybitTicker>('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT'),
+  // Try Kraken and CoinGecko first — confirmed working from Vercel IPs
+  // Binance/Bybit may be geo-blocked on Vercel's serverless infra
+  const [kraken, gecko] = await Promise.all([
     safe<KrakenTicker>('https://api.kraken.com/0/public/Ticker?pair=XBTUSD'),
+    safe<GeckoTicker>('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'),
   ])
 
+  const krakenEntry = Object.values(kraken?.result ?? {})[0]
+  if (krakenEntry?.c?.[0]) {
+    const p = parseFloat(krakenEntry.c[0])
+    if (!isNaN(p) && p > 1000) return p
+  }
+  const geckoPrice = gecko?.bitcoin?.usd
+  if (geckoPrice && geckoPrice > 1000) return geckoPrice
+
+  // Secondary — CoinPaprika, then Binance/Bybit as last resort
+  const [paprika, bin, bybit] = await Promise.all([
+    safe<PaprikaTicker>('https://api.coinpaprika.com/v1/tickers/btc-bitcoin'),
+    safe<{ price?: string }>('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT'),
+    safe<BybitTicker>('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT'),
+  ])
+  const paprikaPrice = paprika?.quotes?.USD?.price
+  if (paprikaPrice && paprikaPrice > 1000) return paprikaPrice
   if (bin?.price) {
     const p = parseFloat(bin.price)
-    if (!isNaN(p)) return p
+    if (!isNaN(p) && p > 1000) return p
   }
   const bybitRow = bybit?.result?.list?.[0]
   if (bybitRow?.lastPrice) {
     const p = parseFloat(bybitRow.lastPrice)
-    if (!isNaN(p)) return p
+    if (!isNaN(p) && p > 1000) return p
   }
-  const krakenEntry = Object.values(kraken?.result ?? {})[0]
-  if (krakenEntry?.c?.[0]) {
-    const p = parseFloat(krakenEntry.c[0])
-    if (!isNaN(p)) return p
-  }
-
-  // Secondary fallbacks — slower but highly available
-  const [gecko, paprika] = await Promise.all([
-    safe<GeckoTicker>('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'),
-    safe<PaprikaTicker>('https://api.coinpaprika.com/v1/tickers/btc-bitcoin'),
-  ])
-  const geckoPrice   = gecko?.bitcoin?.usd
-  if (geckoPrice)                        return geckoPrice
-  const paprikaPrice = paprika?.quotes?.USD?.price
-  if (paprikaPrice)                      return paprikaPrice
 
   return null
 }

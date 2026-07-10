@@ -95,21 +95,41 @@ export async function getMacroSnapshot(): Promise<MacroSnapshot> {
         total_crypto_mcap: Math.round((d.data?.total_market_cap?.usd ?? 0) / 1e9),
       })),
 
-    fetch('https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=1d', { signal: AbortSignal.timeout(5000) })
-      .then(r => r.json() as Promise<YahooResp>)
-      .then(d => ({ dxy: parseFloat((d.chart?.result?.[0]?.meta?.regularMarketPrice ?? 100).toFixed(2)) })),
+    // DXY — Stooq (works from Vercel; Yahoo is blocked)
+    fetch('https://stooq.com/q/l/?s=dx.f&f=sd2t2ohlcv&h&e=csv', { signal: AbortSignal.timeout(6000) })
+      .then(r => r.text())
+      .then(txt => {
+        const cols = txt.trim().split('\n')[1]?.split(',') ?? []
+        const c = parseFloat(cols[4] ?? '0')
+        return { dxy: c > 50 ? parseFloat(c.toFixed(2)) : 100 }
+      }),
 
-    fetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=1d', { signal: AbortSignal.timeout(5000) })
-      .then(r => r.json() as Promise<YahooResp>)
-      .then(d => ({ sp500_change: parseFloat((d.chart?.result?.[0]?.meta?.regularMarketChangePercent ?? 0).toFixed(2)) })),
+    // S&P 500 — Stooq
+    fetch('https://stooq.com/q/l/?s=^spx&f=sd2t2ohlcv&h&e=csv', { signal: AbortSignal.timeout(6000) })
+      .then(r => r.text())
+      .then(txt => {
+        const cols = txt.trim().split('\n')[1]?.split(',') ?? []
+        const c = parseFloat(cols[4] ?? '0'), o = parseFloat(cols[3] ?? '0')
+        return { sp500_change: c > 0 && o > 0 ? parseFloat(((c - o) / o * 100).toFixed(2)) : NaN }
+      }),
 
-    fetch('https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1d&range=1d', { signal: AbortSignal.timeout(5000) })
-      .then(r => r.json() as Promise<YahooResp>)
-      .then(d => ({ gold_price: Math.round(d.chart?.result?.[0]?.meta?.regularMarketPrice ?? 2000) })),
+    // Gold — Stooq
+    fetch('https://stooq.com/q/l/?s=gc.f&f=sd2t2ohlcv&h&e=csv', { signal: AbortSignal.timeout(6000) })
+      .then(r => r.text())
+      .then(txt => {
+        const cols = txt.trim().split('\n')[1]?.split(',') ?? []
+        const c = parseFloat(cols[4] ?? '0')
+        return { gold_price: c > 500 ? Math.round(c) : 2350 }
+      }),
 
-    fetch('https://query1.finance.yahoo.com/v8/finance/chart/%5ETNX?interval=1d&range=1d', { signal: AbortSignal.timeout(5000) })
-      .then(r => r.json() as Promise<YahooResp>)
-      .then(d => ({ us10y_yield: parseFloat((d.chart?.result?.[0]?.meta?.regularMarketPrice ?? 4.5).toFixed(2)) })),
+    // US 10Y — Stooq
+    fetch('https://stooq.com/q/l/?s=10ys.b&f=sd2t2ohlcv&h&e=csv', { signal: AbortSignal.timeout(6000) })
+      .then(r => r.text())
+      .then(txt => {
+        const cols = txt.trim().split('\n')[1]?.split(',') ?? []
+        const c = parseFloat(cols[4] ?? '0')
+        return { us10y_yield: c > 0 ? parseFloat(c.toFixed(2)) : 4.5 }
+      }),
   ])
 
   for (const r of [fgRes, cgRes, dxyRes, spxRes, goldRes, t10yRes]) {

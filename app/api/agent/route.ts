@@ -959,8 +959,8 @@ Drawdown stage: ${stageLabels[capitalState.drawdownStage ?? 1]} | Riesgo efectiv
           results.aiReasoning = aiDecision.reasoning
           console.log(`[APEX AI] WAIT — ${aiDecision.waitingFor ?? aiDecision.reasoning.slice(0, 80)}`)
 
-          // WAIT override: after 7+ days without a signal, force-look for a scalp
-          if (daysSinceLastSignal >= 7) {
+          // WAIT override: after 2+ days without a signal, force-look for a scalp
+          if (daysSinceLastSignal >= 2) {
             console.log(`[APEX] ${daysSinceLastSignal}d without signal — re-prompting Claude to find a scalp`)
             const forced = await askClaudeForDecision({ ...claudeCtx, forceScalpEvaluation: true })
             if (forced && forced.action !== 'WAIT') {
