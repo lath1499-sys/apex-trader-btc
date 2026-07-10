@@ -1,3 +1,20 @@
 {
-  "crons": []
+  "crons": [
+    {
+      "path": "/api/agent/monitor",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/agent/decide",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/agent/evaluate",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/agent/brief",
+      "schedule": "2,32 * * * *"
+    }
+  ]
 }

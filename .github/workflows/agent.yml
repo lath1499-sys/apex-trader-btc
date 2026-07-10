@@ -46,11 +46,32 @@ jobs:
           response=$(curl -s -w "\n%{http_code}" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             --max-time 90 \
-            https://apex-trader-btc.vercel.app/api/agent)
+            https://apex-trader-btc.vercel.app/api/agent/decide)
           http_code=$(echo "$response" | tail -1)
           body=$(echo "$response" | head -1)
           echo "Decide HTTP $http_code: $body"
-          if [ "$http_code" != "200" ]; then echo "Agent call failed: $http_code"; exit 1; fi
+          if [ "$http_code" != "200" ]; then echo "Decide call failed: $http_code"; exit 1; fi
+
+  # ── Evaluate: every 10th minute — expiry + trailing SL, no new signals ──────
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if 10th minute
+        id: check
+        run: |
+          MINUTE=$(date +%-M)
+          if [ $((MINUTE % 10)) -eq 0 ]; then echo "run=true" >> $GITHUB_OUTPUT
+          else echo "run=false" >> $GITHUB_OUTPUT; fi
+      - name: Evaluate trades
+        if: steps.check.outputs.run == 'true'
+        run: |
+          response=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            --max-time 60 \
+            https://apex-trader-btc.vercel.app/api/agent/evaluate)
+          http_code=$(echo "$response" | tail -1)
+          body=$(echo "$response" | head -1)
+          echo "Evaluate HTTP $http_code: $body"
 
   # ── Brief: at :00 and :30 every hour — dedicated, independent of decide ─────
   brief:
