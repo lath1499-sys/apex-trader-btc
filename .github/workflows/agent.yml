@@ -52,6 +52,27 @@ jobs:
           echo "Decide HTTP $http_code: $body"
           if [ "$http_code" != "200" ]; then echo "Agent call failed: $http_code"; exit 1; fi
 
+  # ── Brief: at :00 and :30 every hour — dedicated, independent of decide ─────
+  brief:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if brief minute
+        id: check
+        run: |
+          MINUTE=$(date +%-M)
+          if [ "$MINUTE" -eq 0 ] || [ "$MINUTE" -eq 30 ]; then echo "run=true" >> $GITHUB_OUTPUT
+          else echo "run=false" >> $GITHUB_OUTPUT; fi
+      - name: Generate brief
+        if: steps.check.outputs.run == 'true'
+        run: |
+          response=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            --max-time 75 \
+            https://apex-trader-btc.vercel.app/api/agent/brief)
+          http_code=$(echo "$response" | tail -1)
+          body=$(echo "$response" | head -1)
+          echo "Brief HTTP $http_code: $body"
+
   # ── Keep-alive: every 5th minute — prevents workflow from sleeping ──────────
   keep-alive:
     runs-on: ubuntu-latest

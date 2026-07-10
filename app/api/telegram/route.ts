@@ -490,6 +490,36 @@ export async function POST(req: NextRequest) {
       await sendTelegram(msg, chatId)
     }
 
+    else if (text === '/briefnow' || text === '/bn') {
+      // Quick cooldown check first
+      const sb = getSb()
+      let minsSince = Infinity
+      if (sb) {
+        const { data: st } = await Promise.resolve(
+          sb.from('apex_agent_state')
+            .select('last_analysis_at')
+            .eq('id', 'current')
+            .maybeSingle()
+        ).catch(() => ({ data: null })) as { data: { last_analysis_at: string | null } | null }
+        if (st?.last_analysis_at) {
+          minsSince = (Date.now() - new Date(st.last_analysis_at).getTime()) / 60_000
+        }
+      }
+      if (minsSince < 26) {
+        await sendTelegram(
+          `⏸ Último brief hace ${minsSince.toFixed(0)}min. Próximo en ~${Math.ceil(30 - minsSince)}min.\n\nUsa /briefnow cuando falten menos de 4 min.`,
+          chatId,
+        )
+      } else {
+        // Fire-and-forget — brief sends itself to Telegram when done
+        void fetch(
+          `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://apex-trader-btc.vercel.app'}/api/agent/brief`,
+          { headers: { Authorization: `Bearer ${process.env.CRON_SECRET ?? ''}` } },
+        ).catch(() => {})
+        await sendTelegram('⏳ Brief generándose... llegará en ~20 segundos.', chatId)
+      }
+    }
+
     else if (text === '/history' || text === '/chat') {
       const sb = getSb()
       if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
@@ -557,6 +587,7 @@ export async function POST(req: NextRequest) {
         `/stats — Performance por tipo de trade\n` +
         `/lastbrief — Últimos 5 análisis del agente\n` +
         `/briefstatus — Health check: briefs enviados/errores últimas 24h\n` +
+        `/briefnow — Generar análisis de mercado ahora mismo\n` +
         `/price — Estado de las 5 fuentes de precio BTC\n\n` +
         `⚙️ <b>Control</b>\n` +
         `/pause — Pausar apertura de nuevos trades\n` +
@@ -568,7 +599,7 @@ export async function POST(req: NextRequest) {
         `🔧 <b>Diagnóstico</b>\n` +
         `/test — Verificar que Telegram y NTFY funcionan\n` +
         `/history — Últimas 5 conversaciones con APEX\n\n` +
-        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb /bs /px`,
+        `💡 Atajos: /s /b /sig /p /r /ca /cap /lev /n /v /lb /bs /bn /px`,
         chatId,
       )
     }

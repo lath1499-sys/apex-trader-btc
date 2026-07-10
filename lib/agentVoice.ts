@@ -813,3 +813,141 @@ Sin headers tipo ═══. Sin bullets. Párrafos cortos. Primera persona con o
   }
   return lines.join('\n')
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Standalone brief — self-contained, used by /api/agent/brief dedicated endpoint
+// Does NOT depend on AgentUpdateParams — fetches everything it needs itself.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface StandaloneBriefResult {
+  text:          string
+  price:         number
+  change24h:     number
+  activeSignals: Array<{ side: string; trade_type: string; entry: number }>
+}
+
+export async function generateBriefStandalone(): Promise<StandaloneBriefResult> {
+  const startedAt = Date.now()
+  console.log('[BRIEF:voice] Starting standalone brief...')
+
+  // A: Price (futures → spot fallback)
+  let price = 0, change24h = 0
+  try {
+    const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT')
+    const d = await r.json() as { lastPrice?: string; priceChangePercent?: string }
+    price     = parseFloat(d.lastPrice ?? '0')
+    change24h = parseFloat(d.priceChangePercent ?? '0')
+    console.log('[BRIEF:voice] Price:', price)
+  } catch (e: unknown) {
+    console.warn('[BRIEF:voice] Futures price failed:', e instanceof Error ? e.message : String(e))
+    try {
+      const r = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT')
+      const d = await r.json() as { lastPrice?: string; priceChangePercent?: string }
+      price     = parseFloat(d.lastPrice ?? '0')
+      change24h = parseFloat(d.priceChangePercent ?? '0')
+    } catch {}
+  }
+
+  // B: Macro snapshot
+  let macroTxt = ''
+  try {
+    const macro = await getMacroSnapshot()
+    macroTxt    = formatMacroForPrompt(macro)
+    console.log('[BRIEF:voice] Macro loaded')
+  } catch (e: unknown) {
+    console.warn('[BRIEF:voice] Macro failed:', e instanceof Error ? e.message : String(e))
+  }
+
+  // C: Active signals
+  const sb = getVoiceSb()
+  type SigRow = { side: string | null; trade_type: string | null; entry: number | null; pnl: number | null; idea: { side: string; tradeType: string; price: number } | null }
+  let rawSignals: SigRow[] = []
+  if (sb) {
+    try {
+      const { data } = await Promise.resolve(
+        sb.from('apex_signals')
+          .select('side, trade_type, entry, pnl, idea')
+          .in('status', ['active', 'tp1_hit', 'tp2_hit'])
+          .order('created_at', { ascending: false })
+      ) as { data: SigRow[] | null }
+      rawSignals = data ?? []
+      console.log('[BRIEF:voice] Active signals:', rawSignals.length)
+    } catch (e: unknown) {
+      console.warn('[BRIEF:voice] Signals query failed:', e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const activeSignals = rawSignals.map(s => ({
+    side:       s.idea?.side       ?? s.side       ?? 'LONG',
+    trade_type: s.idea?.tradeType  ?? s.trade_type ?? 'Scalp',
+    entry:      s.idea?.price      ?? s.entry      ?? 0,
+    pnl:        s.pnl ?? 0,
+  }))
+
+  // D: Focus rotation
+  const hourOfDay = new Date().getUTCHours()
+  const focus     = BRIEF_FOCUSES[Math.floor(hourOfDay / 4) % BRIEF_FOCUSES.length]
+  console.log('[BRIEF:voice] Focus:', focus)
+
+  // E: Call Claude
+  console.log('[BRIEF:voice] Calling Claude...')
+  const text = await callClaudeStandalone({ price, change24h, macroTxt, activeSignals, focus })
+  console.log('[BRIEF:voice] Claude responded:', text.length, 'chars')
+
+  void recordBriefHealth(true, null, Date.now() - startedAt)
+  return { text, price, change24h, activeSignals }
+}
+
+async function callClaudeStandalone(ctx: {
+  price:         number
+  change24h:     number
+  macroTxt:      string
+  activeSignals: Array<{ side: string; trade_type: string; entry: number; pnl: number }>
+  focus:         BriefFocus
+}): Promise<string> {
+  const { price, change24h, macroTxt, activeSignals, focus } = ctx
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set')
+
+  const priceStr  = `$${Math.round(price).toLocaleString()}`
+  const changeStr = `${change24h >= 0 ? '+' : ''}${change24h.toFixed(2)}%`
+  const hourLocal = new Date().toLocaleTimeString('es-DO', {
+    timeZone: 'America/Santo_Domingo', hour: '2-digit', minute: '2-digit',
+  })
+  const signalTxt = activeSignals.length === 0
+    ? 'NINGUNA — capital libre'
+    : activeSignals.map(s =>
+        `${s.side} ${s.trade_type} @ $${Math.round(s.entry).toLocaleString()} | P&L: ${s.pnl >= 0 ? '+' : ''}${s.pnl.toFixed(2)}%`
+      ).join('\n')
+
+  const systemPrompt = `Eres APEX, agente de trading BTC con 15 años de experiencia en futuros Binance.
+Mandas análisis de mercado cada 30 minutos en español. Estilo: directo, primera persona, trader profesional.
+Máximo 200 palabras. Sin markdown exagerado. Párrafos cortos. Siempre opinionado.
+ENFOQUE: ${focus.replace(/_/g, ' ')}
+PROHIBIDO: mencionar Max Pain o IV Rank sin datos reales, decir "Fed bajó" (está en HOLD), contradecir sesgo de señales activas.
+ESTRUCTURA: qué hace el mercado → factor principal → sesgo + niveles exactos`
+
+  const userPrompt = `HORA: ${hourLocal}
+BTC PERP: ${priceStr} (${changeStr} 24h)
+MACRO:\n${macroTxt || 'No disponible'}
+SEÑALES ACTIVAS:\n${signalTxt}
+Escribe el análisis enfocado en ${focus.replace(/_/g, ' ')}.`
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6', max_tokens: 600,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    }),
+  })
+
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Anthropic ${res.status}: ${errText.slice(0, 200)}`)
+  }
+  const data = await res.json() as { content?: Array<{ text: string }>; error?: { message: string } }
+  if (data.error) throw new Error(`Claude: ${data.error.message ?? 'unknown'}`)
+  return data.content?.[0]?.text ?? ''
+}
