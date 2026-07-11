@@ -116,6 +116,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ── Persist agent state — sesgo + confianza for /sh command ────────────────
+    if (sb && decision) {
+      await Promise.resolve(
+        sb.from('apex_agent_state').upsert({
+          id:              'current',
+          last_bias:       decision.action,
+          last_trade_type: decision.tradeType ?? null,
+          last_confidence: decision.confidence ?? null,
+          last_price:      price,
+          updated_at:      new Date().toISOString(),
+        }, { onConflict: 'id' }),
+      ).catch(() => {})
+    }
+
     if (!decision || decision.action === 'WAIT' || decision.action === 'CLOSE_EXISTING') {
       return { status: 'wait', reason: decision?.waitingFor ?? 'no setup' }
     }
