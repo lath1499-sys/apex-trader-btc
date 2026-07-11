@@ -849,26 +849,23 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
   const startedAt = Date.now()
   console.log('[BRIEF:voice] Starting standalone brief...')
 
-  // A: Price (futures → spot fallback)
+  // A: Price — Kraken (Binance IPs blocked on Vercel)
   let price = 0, change24h = 0
   try {
-    const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT', {
+    const r = await fetch('https://api.kraken.com/0/public/Ticker?pair=XBTUSD', {
       signal: AbortSignal.timeout(6000),
     })
-    const d = await r.json() as { lastPrice?: string; priceChangePercent?: string }
-    price     = parseFloat(d.lastPrice ?? '0')
-    change24h = parseFloat(d.priceChangePercent ?? '0')
+    const d = r.ok
+      ? (await r.json() as { result?: Record<string, { c: [string]; P: [string] }> })
+      : null
+    const v = Object.values(d?.result ?? {})[0]
+    if (v?.c?.[0]) {
+      price     = parseFloat(v.c[0])
+      change24h = parseFloat(v.P?.[0] ?? '0')
+    }
     console.log('[BRIEF:voice] Price:', price)
   } catch (e: unknown) {
-    console.warn('[BRIEF:voice] Futures price failed:', e instanceof Error ? e.message : String(e))
-    try {
-      const r = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT', {
-        signal: AbortSignal.timeout(6000),
-      })
-      const d = await r.json() as { lastPrice?: string; priceChangePercent?: string }
-      price     = parseFloat(d.lastPrice ?? '0')
-      change24h = parseFloat(d.priceChangePercent ?? '0')
-    } catch {}
+    console.warn('[BRIEF:voice] Price fetch failed:', e instanceof Error ? e.message : String(e))
   }
 
   // B: Macro snapshot
