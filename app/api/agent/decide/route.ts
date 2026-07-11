@@ -35,6 +35,7 @@ export async function GET(req: NextRequest) {
 
   console.log('[DECIDE] ===== Triggered', new Date().toISOString(), '=====')
 
+  const startedAt = Date.now()
   const result = await withLock('decide', async () => {
     // ── Price fetch ──────────────────────────────────────────────────────────
     const price = await getBtcPrice()
@@ -76,7 +77,66 @@ export async function GET(req: NextRequest) {
       ? Math.floor((Date.now() - new Date(lastSignalTs).getTime()) / 86_400_000)
       : 0
 
+    // ── C: Daily drawdown guard — auto-pause if 3+ SL hits or PnL < -5% ────
+    if (sb) {
+      const todayStart = new Date()
+      todayStart.setUTCHours(0, 0, 0, 0)
+      const { data: todayClosed } = await Promise.resolve(
+        sb.from('apex_signals')
+          .select('status, pnl')
+          .gte('closed_at', todayStart.toISOString())
+          .not('closed_at', 'is', null),
+      ).catch(() => ({ data: null })) as { data: Array<{ status: string; pnl: number | null }> | null }
+
+      const slHitsToday = (todayClosed ?? []).filter(r => r.status === 'sl_hit').length
+      const dailyPnl    = (todayClosed ?? []).reduce((s, r) => s + (r.pnl ?? 0), 0)
+
+      if (slHitsToday >= 3 || dailyPnl < -5) {
+        const reason = slHitsToday >= 3
+          ? `Auto-pausa: ${slHitsToday} SL hoy — límite diario alcanzado`
+          : `Auto-pausa: P&L diario ${dailyPnl.toFixed(2)}% < -5%`
+        console.warn('[DECIDE] Auto-pausing agent:', reason)
+        await Promise.resolve(
+          sb.from('apex_agent_state').upsert({
+            id: 'current', is_paused: true, pause_reason: reason,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'id' }),
+        ).catch(() => {})
+        await sendTelegram(
+          `🛑 <b>APEX AUTO-PAUSA</b>\n\n${reason}\n\n` +
+          `SL hoy: ${slHitsToday} | P&L: ${dailyPnl.toFixed(2)}%\n` +
+          `Usa /unpause para reanudar.`,
+        ).catch(() => {})
+        return { status: 'auto_paused', reason }
+      }
+      console.log(`[DECIDE] Daily check OK — SL hoy: ${slHitsToday}, P&L: ${dailyPnl.toFixed(2)}%`)
+    }
+
     console.log('[DECIDE] Active:', active.length, '| Days since last signal:', daysSinceLastSignal)
+
+    // ── A: perfStats — feedback from closed trades for Claude context ────────
+    const closed = (allSignals ?? []).filter(s =>
+      ['sl_hit','tp1_hit','tp2_hit','tp3_hit','breakeven','closed_manual'].includes(s.status)
+      && s.pnl != null,
+    )
+    const wins    = closed.filter(s => (s.pnl ?? 0) > 0)
+    const totalR  = closed.reduce((sum, s) => sum + (s.pnlR ?? 0), 0)
+    const byType  = (['Scalp','DayTrade','Swing'] as const).reduce<Record<string, { n: number; wr: number; avgR: number }>>((acc, tp) => {
+      const g = closed.filter(s => s.idea.tradeType === tp)
+      const w = g.filter(s => (s.pnl ?? 0) > 0)
+      return { ...acc, [tp]: { n: g.length, wr: g.length ? Math.round(w.length/g.length*100) : 0, avgR: g.length ? parseFloat((g.reduce((s2, s3) => s2 + (s3.pnlR ?? 0), 0)/g.length).toFixed(2)) : 0 } }
+    }, {})
+    const bySide  = (['LONG','SHORT'] as const).reduce<Record<string, { n: number; wr: number; avgR: number }>>((acc, sd) => {
+      const g = closed.filter(s => s.idea.side === sd)
+      const w = g.filter(s => (s.pnl ?? 0) > 0)
+      return { ...acc, [sd]: { n: g.length, wr: g.length ? Math.round(w.length/g.length*100) : 0, avgR: g.length ? parseFloat((g.reduce((s2, s3) => s2 + (s3.pnlR ?? 0), 0)/g.length).toFixed(2)) : 0 } }
+    }, {})
+    const recent5 = closed.slice(0, 5).map(s => ({ side: s.idea.side, type: s.idea.tradeType, pnlR: parseFloat((s.pnlR ?? 0).toFixed(2)) }))
+    const perfStats = closed.length >= 5 ? {
+      total: closed.length, winRate: Math.round(wins.length/closed.length*100),
+      totalR: parseFloat(totalR.toFixed(2)), byType, bySide, recent5,
+    } : null
+    if (perfStats) console.log(`[DECIDE] perfStats: ${perfStats.total} trades, WR ${perfStats.winRate}%, R ${perfStats.totalR}`)
 
     // ── Format active signals for Claude context ─────────────────────────────
     const activeSigData = active.map(s => ({
@@ -100,6 +160,7 @@ export async function GET(req: NextRequest) {
       activeSignals:      activeSigData,
       daysSinceLastSignal,
       news:               newsItems,
+      perfStats,
     }
 
     // ── Claude decision ──────────────────────────────────────────────────────
@@ -114,6 +175,23 @@ export async function GET(req: NextRequest) {
         decision = forced
         console.log('[DECIDE] Force-scalp succeeded:', forced.action, forced.tradeType)
       }
+    }
+
+    // ── B: Decision log — save to apex_brief_history for observability ──────
+    if (sb && decision) {
+      const logEntry = decision.action === 'WAIT'
+        ? `WAIT: ${decision.waitingFor ?? decision.reasoning?.slice(0, 300) ?? '—'}`
+        : `${decision.action} ${decision.tradeType} (${decision.confidence}) — ${decision.reasoning?.slice(0, 250) ?? '—'}`
+      await Promise.resolve(
+        sb.from('apex_brief_history').insert({
+          brief_type:     'DECIDE_LOG',
+          analysis:       logEntry.slice(0, 500),
+          price_at_brief: price,
+          success:        decision.action !== 'WAIT',
+          duration_ms:    Date.now() - startedAt,
+          created_at:     new Date().toISOString(),
+        }),
+      ).catch(() => {})
     }
 
     // ── Persist agent state — sesgo + confianza for /sh command ────────────────

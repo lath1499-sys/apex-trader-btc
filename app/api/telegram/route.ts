@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
       await sendTelegram('⏸ <b>Agente pausado.</b>\nNo se abrirán nuevos trades.\nUsa /resume para reanudar.', chatId)
     }
 
-    else if (text === '/resume' || text === '/r') {
+    else if (text === '/resume' || text === '/r' || text === '/unpause' || text === '/up') {
       await dbUpdate('apex_agent_state', { is_paused: false, paused_at: null, pause_reason: null })
       await sendTelegram('▶️ <b>Agente reanudado.</b>\nBuscando setups...', chatId)
     }

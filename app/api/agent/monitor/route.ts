@@ -155,6 +155,10 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
       5, ['x', 'red_circle'],
     )
     console.log(`[MONITOR] SL hit: ${sig.id} P&L ${slRawPnl.toFixed(2)}%`)
+
+    // C: Check daily SL limit — auto-pause if 3+ SL hits today
+    void checkDailySlLimit(ntfyTopic)
+
     return `SL_HIT:${sig.id}`
   }
 
@@ -300,6 +304,42 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
   }
 
   return null
+}
+
+// ── C: Auto-pause if 3+ SL hits in a single UTC day ──────────────────────────
+async function checkDailySlLimit(ntfyTopic: string): Promise<void> {
+  const sb = getSupabaseServer()
+  if (!sb) return
+  const todayStart = new Date()
+  todayStart.setUTCHours(0, 0, 0, 0)
+
+  const { data } = await Promise.resolve(
+    sb.from('apex_signals')
+      .select('status')
+      .eq('status', 'sl_hit')
+      .gte('closed_at', todayStart.toISOString()),
+  ).catch(() => ({ data: null })) as { data: Array<{ status: string }> | null }
+
+  const slCount = data?.length ?? 0
+  if (slCount < 3) return
+
+  const reason = `Auto-pausa: ${slCount} SL hoy — límite diario alcanzado`
+  console.warn('[MONITOR]', reason)
+
+  await Promise.resolve(
+    sb.from('apex_agent_state').upsert(
+      { id: 'current', is_paused: true, pause_reason: reason, updated_at: new Date().toISOString() },
+      { onConflict: 'id' },
+    ),
+  ).catch(() => {})
+
+  await sendTelegram(
+    `🛑 <b>APEX AUTO-PAUSA</b>\n\n${reason}\n\nUsa /unpause para reanudar.`,
+  ).catch(() => {})
+
+  if (ntfyTopic) {
+    await sendNtfy(ntfyTopic, 'AUTO-PAUSA APEX', reason, 5, ['no_entry']).catch(() => {})
+  }
 }
 
 // ── Route handler ─────────────────────────────────────────────────────────────

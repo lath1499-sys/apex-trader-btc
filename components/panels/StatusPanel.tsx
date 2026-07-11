@@ -1,8 +1,31 @@
 'use client'
+import { useEffect, useState } from 'react'
 import { useApexStore } from '@/store/apexStore'
 import { useTheme } from '@/hooks/useTheme'
 import type { IndicatorMap } from '@/lib/types'
 import type { VWAPResult, CVDResult, BOSCHoCHResult, ICTKillzone } from '@/lib/scalpSignals'
+
+// ── Agent health types ─────────────────────────────────────────────────────────
+interface AgentHealth {
+  briefs: {
+    last24h: number; success: number; errors: number
+    successRate: number | null; avgDurationMs: number | null
+    last: { ts: string; ok: boolean | null; errMsg: string | null; price: number | null; preview: string | null } | null
+  }
+  decides: Array<{ ts: string; summary: string | null; price: number | null; ok: boolean | null; ms: number | null }>
+  agentState: { last_bias: string | null; last_confidence: string | null; last_trade_type: string | null; last_price: number | null; updated_at: string | null; is_paused: boolean | null; pause_reason: string | null } | null
+  locks: Array<{ job_type: string; locked: boolean; last_run_at: string | null; last_run_ms: number | null; run_count: number }>
+  daily: { slHits: number; wins: number; totalPnl: number; trades: number }
+}
+
+function relativeTime(ts: string | null): string {
+  if (!ts) return 'nunca'
+  const ms = Date.now() - new Date(ts).getTime()
+  if (ms < 60_000)  return `${Math.round(ms / 1000)}s`
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}min`
+  if (ms < 86_400_000) return `${(ms / 3_600_000).toFixed(1)}h`
+  return `${Math.floor(ms / 86_400_000)}d`
+}
 
 const TFS = ['1d', '4h', '1h', '15m'] as const
 
@@ -38,6 +61,15 @@ export default function StatusPanel() {
   const bosChoch    = useApexStore(s => s.bosChoch) as BOSCHoCHResult
   const killzones   = useApexStore(s => s.killzones) as ICTKillzone[]
   const rawK        = useApexStore(s => s.rawK)
+
+  // ── Agent health fetch (60s interval) ────────────────────────────────────
+  const [health, setHealth] = useState<AgentHealth | null>(null)
+  useEffect(() => {
+    const load = () => fetch('/api/agent/health').then(r => r.json()).then(setHealth).catch(() => {})
+    load()
+    const id = setInterval(load, 60_000)
+    return () => clearInterval(id)
+  }, [])
 
   const checks: { label: string; ok: boolean; detail: string }[] = [
     { label: 'Binance Spot/Futures', ok: !!conn.binanceFut,  detail: conn.binanceFut ? 'Conectado · precio en vivo' : 'Sin conexión — reintentando...' },
@@ -137,6 +169,9 @@ export default function StatusPanel() {
       <ScalpSourcesCard T={T} scalpMode={scalpMode} vwap={vwap} cvdData={cvdData}
         bosChoch={bosChoch} killzones={killzones} rawK={rawK} />
 
+      {/* ── B: Brief health ────────────────────────────────────────────────── */}
+      <AgentHealthCard T={T} health={health} />
+
       <div style={{ fontSize: 8, color: T.muted, textAlign: 'center' }}>
         APEX Trader BTC · Datos: Binance + mempool.space + Bybit + Kraken
       </div>
@@ -220,6 +255,125 @@ function ScalpSourcesCard({ T, scalpMode, vwap, cvdData, bosChoch, killzones, ra
           <span style={{ fontSize: 8, fontWeight: 700, color: r.ok ? T.bull : T.danger }}>{r.ok ? 'OK' : '—'}</span>
         </div>
       ))}
+    </div>
+  )
+}
+
+// ── B/C: Agent health card — briefs, decisions, daily drawdown ────────────────
+function AgentHealthCard({ T, health }: { T: ReturnType<typeof useTheme>; health: AgentHealth | null }) {
+  if (!health) {
+    return (
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: 14 }}>
+        <div style={{ fontSize: 9, color: T.muted, letterSpacing: '.14em' }}>🤖 AGENTE — CARGANDO...</div>
+      </div>
+    )
+  }
+
+  const { briefs, decides, agentState, daily } = health
+  const paused    = agentState?.is_paused
+  const bias      = agentState?.last_bias ?? '?'
+  const conf      = agentState?.last_confidence ?? '?'
+  const biasColor = bias === 'LONG' ? T.bull : bias === 'SHORT' ? T.danger : T.textSec
+  const dayPnlColor = daily.totalPnl >= 0 ? T.bull : T.danger
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+
+      {/* Pause banner */}
+      {paused && (
+        <div style={{ background: T.danger + '22', border: `1px solid ${T.danger}55`, borderRadius: 8, padding: '10px 14px', fontSize: 10, color: T.danger, fontWeight: 700 }}>
+          🛑 AGENTE PAUSADO — {agentState?.pause_reason ?? 'sin razón'} · Usa /unpause
+        </div>
+      )}
+
+      {/* Agent state + daily stats */}
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: 14 }}>
+        <div style={{ fontSize: 9, color: T.muted, letterSpacing: '.14em', marginBottom: 10 }}>🤖 ESTADO DEL AGENTE</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 9 }}>
+          {([
+            ['Sesgo actual', <span key="b" style={{ color: biasColor, fontWeight: 700 }}>{bias}</span>],
+            ['Confianza',    conf],
+            ['Tipo',         agentState?.last_trade_type ?? '?'],
+            ['Precio visto', agentState?.last_price ? `$${Math.round(agentState.last_price).toLocaleString()}` : '?'],
+            ['Actualizado',  relativeTime(agentState?.updated_at ?? null)],
+            ['Status',       paused ? '⏸ PAUSADO' : '▶️ Activo'],
+          ] as [string, React.ReactNode][]).map(([l, v]) => (
+            <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: `1px solid ${T.border}` }}>
+              <span style={{ color: T.muted }}>{l}</span>
+              <span style={{ color: T.text, fontFamily: 'monospace' }}>{v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* C: Daily drawdown */}
+      <div style={{ background: T.card, border: `1px solid ${daily.slHits >= 3 ? T.danger + '66' : T.border}`, borderRadius: 8, padding: 14 }}>
+        <div style={{ fontSize: 9, color: T.muted, letterSpacing: '.14em', marginBottom: 10 }}>📅 CAPITAL HOY (UTC)</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 4, textAlign: 'center' }}>
+          {([
+            ['Trades', String(daily.trades)],
+            ['Wins', String(daily.wins)],
+            ['SL hits', String(daily.slHits)],
+            ['P&L', `${daily.totalPnl >= 0 ? '+' : ''}${daily.totalPnl.toFixed(2)}%`],
+          ] as [string, string][]).map(([l, v]) => (
+            <div key={l} style={{ padding: '6px 4px', background: T.bg, borderRadius: 5 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: l === 'SL hits' && daily.slHits >= 3 ? T.danger : l === 'P&L' ? dayPnlColor : T.text }}>{v}</div>
+              <div style={{ fontSize: 7, color: T.muted, marginTop: 2 }}>{l}</div>
+            </div>
+          ))}
+        </div>
+        {daily.slHits >= 2 && (
+          <div style={{ fontSize: 8, color: T.danger, marginTop: 6, textAlign: 'center' }}>
+            ⚠️ {daily.slHits}/3 SL hoy — {daily.slHits >= 3 ? 'LÍMITE ALCANZADO · Agente pausado' : '1 más y se pausa automáticamente'}
+          </div>
+        )}
+      </div>
+
+      {/* B: Brief health */}
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: 14 }}>
+        <div style={{ fontSize: 9, color: T.muted, letterSpacing: '.14em', marginBottom: 8 }}>📡 BRIEFS 24H</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+          {([
+            ['Enviados', String(briefs.last24h), T.text],
+            ['OK', String(briefs.success), T.bull],
+            ['Error', String(briefs.errors), briefs.errors > 0 ? T.danger : T.muted],
+            ['Tasa', briefs.successRate != null ? `${briefs.successRate}%` : '—', briefs.successRate != null && briefs.successRate >= 80 ? T.bull : T.warn],
+          ] as [string, string, string][]).map(([l, v, c]) => (
+            <div key={l} style={{ flex: 1, textAlign: 'center', padding: '6px 4px', background: T.bg, borderRadius: 5 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c }}>{v}</div>
+              <div style={{ fontSize: 7, color: T.muted, marginTop: 2 }}>{l}</div>
+            </div>
+          ))}
+        </div>
+        {briefs.last && (
+          <div style={{ fontSize: 8, color: T.textSec, padding: '6px 0', borderTop: `1px solid ${T.border}22` }}>
+            <span style={{ color: briefs.last.ok ? T.bull : T.danger }}>●</span>
+            {' '}Último brief: <b>{relativeTime(briefs.last.ts)}</b>
+            {briefs.avgDurationMs ? ` · Promedio ${(briefs.avgDurationMs / 1000).toFixed(1)}s` : ''}
+            {briefs.last.price ? ` · $${Math.round(briefs.last.price).toLocaleString()}` : ''}
+          </div>
+        )}
+      </div>
+
+      {/* B: Decision log */}
+      {decides.length > 0 && (
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: 14 }}>
+          <div style={{ fontSize: 9, color: T.muted, letterSpacing: '.14em', marginBottom: 8 }}>🧠 LOG DECISIONES (últimas {decides.length})</div>
+          {decides.slice(0, 5).map((d, i) => (
+            <div key={i} style={{ padding: '6px 0', borderBottom: `1px solid ${T.border}22`, fontSize: 8 }}>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 3 }}>
+                <span style={{ color: d.ok ? T.bull : T.warn, fontWeight: 700 }}>{d.ok ? '▲ SEÑAL' : '— WAIT'}</span>
+                <span style={{ color: T.muted }}>{relativeTime(d.ts)}</span>
+                {d.price && <span style={{ color: T.muted, marginLeft: 'auto' }}>${Math.round(d.price).toLocaleString()}</span>}
+              </div>
+              <div style={{ color: T.textSec, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                {d.summary ?? '—'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
     </div>
   )
 }
