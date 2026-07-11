@@ -24,8 +24,8 @@ export function evaluateStopManagement(
   const idea    = rec.idea
   const isLong  = idea.side === 'LONG'
   const entry   = idea.price
-  const sl      = idea.sl    // current SL (may have been updated already in rec)
-  const currentSL = (rec as { sl?: number }).sl ?? sl   // prefer patched SL if present
+  const sl        = idea.sl
+  const currentSL = sl
   const slDist  = Math.abs(entry - currentSL)
   if (slDist === 0) return null
 

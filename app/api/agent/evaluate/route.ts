@@ -4,7 +4,7 @@
 
 import { NextRequest, NextResponse }               from 'next/server'
 import { withLock }                                 from '@/lib/runLock'
-import { sendTelegram, tgBreakeven, tgClose }       from '@/lib/telegram'
+import { sendTelegram, tgBreakeven }                from '@/lib/telegram'
 import { saveSignalToCloud, loadSignalsFromCloud }  from '@/lib/supabase'
 import { evaluateStopManagement }                   from '@/lib/stopManagement'
 import type { SignalRecord, SignalStatus }           from '@/lib/types'
@@ -24,13 +24,6 @@ async function getBtcPrice(): Promise<number | null> {
     const p = v?.c?.[0] ? parseFloat(v.c[0]) : NaN
     return !isNaN(p) && p > 1000 ? p : null
   } catch { return null }
-}
-
-// Expiry rules per trade type
-const EXPIRY_MS: Record<string, number> = {
-  Scalp:    3  * 3_600_000,        // 3 hours
-  DayTrade: 26 * 3_600_000,        // 26 hours
-  Swing:    7  * 24 * 3_600_000,   // 7 days
 }
 
 export async function GET(req: NextRequest) {
@@ -63,35 +56,8 @@ export async function GET(req: NextRequest) {
 
     for (const sig of active) {
       try {
-        const openMs    = Date.now() - new Date(sig.createdAt).getTime()
-        const expiryMs  = EXPIRY_MS[sig.idea.tradeType]
-
-        // ── Time-based expiry ────────────────────────────────────────────────
-        if (expiryMs && openMs > expiryMs && sig.status === 'active') {
-          const isLong  = sig.idea.side === 'LONG'
-          const pnl     = isLong
-            ? (price - sig.idea.price) / sig.idea.price * 100
-            : (sig.idea.price - price)  / sig.idea.price * 100
-          const openHrs = Math.round(openMs / 3_600_000)
-          const reason  = `Expirado: ${sig.idea.tradeType} abierto ${openHrs}h sin alcanzar TP1`
-
-          const expired: SignalRecord = {
-            ...sig,
-            status:      'closed_manual',
-            exitPrice:   price,
-            exitTs:      new Date().toISOString(),
-            closedAt:    new Date().toISOString(),
-            closeReason: reason,
-            pnl:         parseFloat(pnl.toFixed(3)),
-          }
-          await saveSignalToCloud(expired)
-          await sendTelegram(tgClose(expired, pnl, reason)).catch(() => {})
-          console.log('[EVALUATE] Expired:', sig.id, `${openHrs}h open, P&L ${pnl.toFixed(2)}%`)
-          actions.push(`expired:${sig.id}`)
-          continue
-        }
-
         // ── Stop management (breakeven / trailing) — active signals only ─────
+        // Expiry is handled exclusively by monitor (every 1min) to prevent double-close.
         if (sig.status === 'active') {
           const update = evaluateStopManagement(sig, price, [])
           if (update) {

@@ -168,15 +168,19 @@ export async function saveSignalToCloud(signal: SignalRecord): Promise<void> {
   if (error) console.error('[Supabase] saveSignal error:', error.message)
 }
 
-export async function loadSignalsFromCloud(): Promise<SignalRecord[] | null> {
+export async function loadSignalsFromCloud(
+  opts?: { statuses?: string[]; limit?: number },
+): Promise<SignalRecord[] | null> {
   const sb = getDb()
   if (!sb) return null
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (sb.from('apex_signals') as any)
+  let q = (sb.from('apex_signals') as any)
     .select('*')
     .order('created_at', { ascending: false })
-    .limit(500)
+    .limit(opts?.limit ?? 100)
+  if (opts?.statuses?.length) q = q.in('status', opts.statuses)
+  const { data, error } = await q
 
   if (error) {
     console.error('[Supabase] loadSignals error:', error.message)

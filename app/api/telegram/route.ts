@@ -356,7 +356,8 @@ export async function POST(req: NextRequest) {
       ])
       const sb = getSb()
       const { data: winData } = await (sb
-        ? Promise.resolve(sb.from('apex_signals').select('pnl, status').eq('status', 'closed'))
+        ? Promise.resolve(sb.from('apex_signals').select('pnl, status')
+            .in('status', ['sl_hit', 'tp3_hit', 'breakeven', 'closed_manual']))
             .catch(() => ({ data: null }))
         : Promise.resolve({ data: null })) as { data: Array<{ pnl: number | null }> | null }
       const closed  = winData ?? []
@@ -386,7 +387,8 @@ export async function POST(req: NextRequest) {
       const sb = getSb()
       if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
       const { data: closed } = await Promise.resolve(
-        sb.from('apex_signals').select('pnl, trade_type, status, closed_at').eq('status', 'closed')
+        sb.from('apex_signals').select('pnl, trade_type, status, closed_at')
+          .in('status', ['sl_hit', 'tp3_hit', 'breakeven', 'closed_manual'])
           .order('closed_at', { ascending: false }).limit(100)
       ).catch(() => ({ data: null })) as {
         data: Array<{ pnl: number | null; trade_type: string; closed_at: string | null }> | null
@@ -560,9 +562,9 @@ export async function POST(req: NextRequest) {
     }
 
     else if (text === '/forcecheck' || text === '/scan' || text === '/fc') {
-      // Fire-and-forget /api/agent — signal will arrive in Telegram if found
+      // Fire-and-forget /api/agent/decide — signal will arrive in Telegram if found
       void fetch(
-        `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://apex-trader-btc.vercel.app'}/api/agent`,
+        `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://apex-trader-btc.vercel.app'}/api/agent/decide`,
         { headers: { Authorization: `Bearer ${process.env.CRON_SECRET ?? ''}` } },
       ).catch(() => {})
       await sendTelegram(
@@ -733,9 +735,10 @@ export async function POST(req: NextRequest) {
               pnlR      = 0
               exitPrice = entry
             } else {
-              // tp1/tp2/tp3
+              // tp1/tp2 → closed_manual (tp1/tp2 are intermediate; /fix means "closed here")
+              // tp3 → tp3_hit (naturally terminal)
               const tpN  = subCmd === 'tp1' ? idea.tp1 : subCmd === 'tp2' ? idea.tp2 : idea.tp3
-              newStatus  = `${subCmd}_hit`
+              newStatus  = subCmd === 'tp3' ? 'tp3_hit' : 'closed_manual'
               pnl        = isLong ? (tpN - entry) / entry * 100 : (entry - tpN) / entry * 100
               pnlR       = riskPct > 0 ? parseFloat((pnl / riskPct).toFixed(2)) : 0
               exitPrice  = tpN

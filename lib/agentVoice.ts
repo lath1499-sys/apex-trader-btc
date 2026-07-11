@@ -7,11 +7,16 @@
 import { createClient } from '@supabase/supabase-js'
 import { getMacroSnapshot, formatMacroForPrompt } from './macroData'
 
+// Fix 5: cached singleton — same pattern as getSupabaseServer() in supabase.ts
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _voiceSb: any = null
 function getVoiceSb() {
+  if (_voiceSb) return _voiceSb
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_KEY
   if (!url || !key) return null
-  return createClient(url, key)
+  _voiceSb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
+  return _voiceSb
 }
 
 const BRIEF_FOCUSES = [
@@ -453,6 +458,7 @@ async function recordBriefHealth(
   durationMs: number,
   briefText?: string,
   price?: number,
+  focus?: string,
 ): Promise<void> {
   const sb = getVoiceSb()
   if (!sb) return
@@ -463,6 +469,7 @@ async function recordBriefHealth(
     success,
     error_msg:     errorMsg?.slice(0, 200) ?? null,
     duration_ms:   durationMs,
+    focus:         focus ?? null,
     created_at:    new Date().toISOString(),
   }))
   if (error) {
@@ -845,7 +852,9 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
   // A: Price (futures → spot fallback)
   let price = 0, change24h = 0
   try {
-    const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT')
+    const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT', {
+      signal: AbortSignal.timeout(6000),
+    })
     const d = await r.json() as { lastPrice?: string; priceChangePercent?: string }
     price     = parseFloat(d.lastPrice ?? '0')
     change24h = parseFloat(d.priceChangePercent ?? '0')
@@ -853,7 +862,9 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
   } catch (e: unknown) {
     console.warn('[BRIEF:voice] Futures price failed:', e instanceof Error ? e.message : String(e))
     try {
-      const r = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT')
+      const r = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT', {
+        signal: AbortSignal.timeout(6000),
+      })
       const d = await r.json() as { lastPrice?: string; priceChangePercent?: string }
       price     = parseFloat(d.lastPrice ?? '0')
       change24h = parseFloat(d.priceChangePercent ?? '0')
@@ -896,9 +907,24 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
     pnl:        s.pnl ?? 0,
   }))
 
-  // D: Focus rotation
-  const hourOfDay = new Date().getUTCHours()
-  const focus     = BRIEF_FOCUSES[Math.floor(hourOfDay / 4) % BRIEF_FOCUSES.length]
+  // D: Focus rotation — avoid repeating the same angle as recent briefs
+  const hourOfDay    = new Date().getUTCHours()
+  const defaultFocus = BRIEF_FOCUSES[Math.floor(hourOfDay / 4) % BRIEF_FOCUSES.length]
+  let   focus: typeof BRIEF_FOCUSES[number] = defaultFocus
+  if (sb) {
+    const { data: recentRows } = await Promise.resolve(
+      sb.from('apex_brief_history')
+        .select('focus')
+        .not('focus', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(3),
+    ).catch(() => ({ data: null })) as { data: Array<{ focus: string }> | null }
+    const recentFocuses = (recentRows ?? []).map(r => r.focus)
+    if (recentFocuses.includes(defaultFocus)) {
+      const available = BRIEF_FOCUSES.filter(f => !recentFocuses.includes(f))
+      if (available.length > 0) focus = available[0]
+    }
+  }
   console.log('[BRIEF:voice] Focus:', focus)
 
   // E: Call Claude
@@ -906,7 +932,7 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
   const text = await callClaudeStandalone({ price, change24h, macroTxt, activeSignals, focus })
   console.log('[BRIEF:voice] Claude responded:', text.length, 'chars')
 
-  void recordBriefHealth(true, null, Date.now() - startedAt, text, price)
+  void recordBriefHealth(true, null, Date.now() - startedAt, text, price, focus)
   return { text, price, change24h, activeSignals }
 }
 
@@ -953,6 +979,7 @@ Escribe el análisis enfocado en ${focus.replace(/_/g, ' ')}.`
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     }),
+    signal: AbortSignal.timeout(45_000),
   })
 
   if (!res.ok) {

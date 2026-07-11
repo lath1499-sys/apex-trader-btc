@@ -60,19 +60,25 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // ── Load signals ─────────────────────────────────────────────────────────
-    const allSignals = await loadSignalsFromCloud()
-    const active = (allSignals ?? []).filter(s =>
-      ['active', 'tp1_hit', 'tp2_hit'].includes(s.status),
-    )
+    // ── Load signals — two targeted queries, not a full 500-row dump ────────
+    const [activeSignalsRaw, lastSigRaw, closedSignalsRaw] = await Promise.all([
+      loadSignalsFromCloud({ statuses: ['active', 'tp1_hit', 'tp2_hit'], limit: 10 }),
+      loadSignalsFromCloud({ limit: 1 }),
+      loadSignalsFromCloud({
+        statuses: ['sl_hit', 'tp3_hit', 'breakeven', 'closed_manual'],
+        limit: 50,
+      }),
+    ])
+
+    const active = activeSignalsRaw ?? []
 
     if (active.length >= 5) {
       console.log('[DECIDE] Max active signals (5) — skipping')
       return { status: 'blocked', reason: 'max_active_signals' }
     }
 
-    // Days since last signal (force-scalp threshold)
-    const lastSignalTs = (allSignals ?? [])[0]?.createdAt
+    // Days since last signal (any status, most recent)
+    const lastSignalTs = (lastSigRaw ?? [])[0]?.createdAt
     const daysSinceLastSignal = lastSignalTs
       ? Math.floor((Date.now() - new Date(lastSignalTs).getTime()) / 86_400_000)
       : 0
@@ -115,10 +121,7 @@ export async function GET(req: NextRequest) {
     console.log('[DECIDE] Active:', active.length, '| Days since last signal:', daysSinceLastSignal)
 
     // ── A: perfStats — feedback from closed trades for Claude context ────────
-    const closed = (allSignals ?? []).filter(s =>
-      ['sl_hit','tp1_hit','tp2_hit','tp3_hit','breakeven','closed_manual'].includes(s.status)
-      && s.pnl != null,
-    )
+    const closed = (closedSignalsRaw ?? []).filter(s => s.pnl != null)
     const wins    = closed.filter(s => (s.pnl ?? 0) > 0)
     const totalR  = closed.reduce((sum, s) => sum + (s.pnlR ?? 0), 0)
     const byType  = (['Scalp','DayTrade','Swing'] as const).reduce<Record<string, { n: number; wr: number; avgR: number }>>((acc, tp) => {
