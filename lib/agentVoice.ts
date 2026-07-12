@@ -462,15 +462,14 @@ async function recordBriefHealth(
 ): Promise<void> {
   const sb = getVoiceSb()
   if (!sb) return
+  const priceTag = price ? `$${Math.round(price).toLocaleString()} — ` : ''
   const { error } = await Promise.resolve(sb.from('apex_brief_history').insert({
-    brief_type:    success ? 'AUTO' : 'ERROR',
-    analysis:      briefText?.slice(0, 500) ?? (success ? 'ok' : (errorMsg?.slice(0, 200) ?? 'error')),
-    price_at_brief: price ?? null,
+    focus:       focus ?? 'GENERAL',
+    summary:     success ? `${priceTag}${briefText?.slice(0, 280) ?? 'ok'}` : (errorMsg?.slice(0, 200) ?? 'error'),
     success,
-    error_msg:     errorMsg?.slice(0, 200) ?? null,
-    duration_ms:   durationMs,
-    focus:         focus ?? null,
-    created_at:    new Date().toISOString(),
+    error_msg:   errorMsg?.slice(0, 200) ?? null,
+    duration_ms: durationMs,
+    created_at:  new Date().toISOString(),
   }))
   if (error) {
     console.error('[BRIEF] Failed to save history:', (error as { message?: string }).message ?? error)
@@ -885,14 +884,15 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
   let rawSignals: SigRow[] = []
   if (sb) {
     try {
-      const { data } = await Promise.resolve(
+      const { data, error } = await Promise.resolve(
         sb.from('apex_signals')
           .select('side, trade_type, entry, pnl, idea')
           .in('status', ['active', 'tp1_hit', 'tp2_hit'])
           .order('created_at', { ascending: false })
-      ) as { data: SigRow[] | null }
+      ) as { data: SigRow[] | null; error: { message: string } | null }
+      if (error) console.error('[BRIEF:voice] Signals query error:', error.message)
       rawSignals = data ?? []
-      console.log('[BRIEF:voice] Active signals:', rawSignals.length)
+      console.log('[BRIEF:voice] Active signals going into prompt:', JSON.stringify(rawSignals))
     } catch (e: unknown) {
       console.warn('[BRIEF:voice] Signals query failed:', e instanceof Error ? e.message : String(e))
     }

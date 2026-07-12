@@ -19,7 +19,7 @@ export async function GET() {
     // Brief health — last 24h
     Promise.resolve(
       sb.from('apex_brief_history')
-        .select('success, error_msg, duration_ms, created_at, analysis, price_at_brief, brief_type')
+        .select('success, error_msg, duration_ms, created_at, summary, focus')
         .gte('created_at', since24h)
         .order('created_at', { ascending: false })
         .limit(50),
@@ -28,8 +28,8 @@ export async function GET() {
     // Decision log — last 10 decide runs
     Promise.resolve(
       sb.from('apex_brief_history')
-        .select('analysis, price_at_brief, created_at, success, duration_ms')
-        .eq('brief_type', 'DECIDE_LOG')
+        .select('summary, created_at, success, duration_ms')
+        .eq('focus', 'DECIDE_LOG')
         .order('created_at', { ascending: false })
         .limit(10),
     ),
@@ -59,9 +59,9 @@ export async function GET() {
   ])
 
   // ── Brief health stats ────────────────────────────────────────────────────
-  type BriefRow = { success: boolean | null; error_msg: string | null; duration_ms: number | null; created_at: string; analysis: string | null; price_at_brief: number | null; brief_type: string | null }
+  type BriefRow = { success: boolean | null; error_msg: string | null; duration_ms: number | null; created_at: string; summary: string | null; focus: string | null }
   const briefRows: BriefRow[] = briefsRes.status === 'fulfilled' ? (briefsRes.value.data as BriefRow[] ?? []) : []
-  const autoBriefs   = briefRows.filter(r => r.brief_type === 'AUTO' || r.brief_type === 'ERROR')
+  const autoBriefs   = briefRows.filter(r => r.focus !== 'DECIDE_LOG')
   const briefSuccess = autoBriefs.filter(r => r.success).length
   const briefErrors  = autoBriefs.filter(r => !r.success).length
   const lastBrief    = autoBriefs[0] ?? null
@@ -70,7 +70,7 @@ export async function GET() {
     : null
 
   // ── Decision log ─────────────────────────────────────────────────────────
-  type DecideRow = { analysis: string | null; price_at_brief: number | null; created_at: string; success: boolean | null; duration_ms: number | null }
+  type DecideRow = { summary: string | null; created_at: string; success: boolean | null; duration_ms: number | null }
   const decides: DecideRow[] = decideLogRes.status === 'fulfilled' ? (decideLogRes.value.data as DecideRow[] ?? []) : []
 
   // ── Agent state ───────────────────────────────────────────────────────────
@@ -99,14 +99,14 @@ export async function GET() {
         ts:       lastBrief.created_at,
         ok:       lastBrief.success,
         errMsg:   lastBrief.error_msg,
-        price:    lastBrief.price_at_brief,
-        preview:  lastBrief.analysis?.slice(0, 120) ?? null,
+        price:    null,
+        preview:  lastBrief.summary?.slice(0, 120) ?? null,
       } : null,
     },
     decides: decides.map(d => ({
       ts:       d.created_at,
-      summary:  d.analysis?.slice(0, 200) ?? null,
-      price:    d.price_at_brief,
+      summary:  d.summary?.slice(0, 200) ?? null,
+      price:    null,
       ok:       d.success,
       ms:       d.duration_ms,
     })),

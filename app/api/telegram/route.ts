@@ -456,17 +456,34 @@ export async function POST(req: NextRequest) {
       const sb = getSb()
       if (!sb) { await sendTelegram('❌ DB no configurada.', chatId); return NextResponse.json({ ok: true }) }
       const since24h = new Date(Date.now() - 24 * 60 * 60_000).toISOString()
-      const { data: rows } = await Promise.resolve(
+      const { data: allRows } = await Promise.resolve(
         sb.from('apex_brief_history')
-          .select('brief_type, success, error_msg, duration_ms, created_at')
+          .select('focus, success, error_msg, duration_ms, created_at')
           .gte('created_at', since24h)
           .order('created_at', { ascending: false })
           .limit(50)
       ).catch(() => ({ data: null })) as {
-        data: Array<{ brief_type: string | null; success: boolean | null; error_msg: string | null; duration_ms: number | null; created_at: string }> | null
+        data: Array<{ focus: string | null; success: boolean | null; error_msg: string | null; duration_ms: number | null; created_at: string }> | null
       }
-      if (!rows || rows.length === 0) {
-        await sendTelegram('📋 Sin briefs en las últimas 24h.\n\n<i>Verifica que el cron /api/agent esté activo y que han pasado 28+ min desde el inicio.</i>', chatId)
+      const rows = (allRows ?? []).filter(r => r.focus !== 'DECIDE_LOG')
+      if (rows.length === 0) {
+        const { data: anyBrief } = await Promise.resolve(
+          sb.from('apex_brief_history')
+            .select('created_at')
+            .neq('focus', 'DECIDE_LOG')
+            .order('created_at', { ascending: false })
+            .limit(1)
+        ).catch(() => ({ data: null })) as { data: Array<{ created_at: string }> | null }
+        const lastEver = anyBrief?.[0]?.created_at
+          ? new Date(anyBrief[0].created_at).toLocaleString('es-DO', { timeZone: 'America/Santo_Domingo' })
+          : null
+        await sendTelegram(
+          `📋 Sin briefs en las últimas 24h.\n\n` +
+          (lastEver
+            ? `Último brief registrado (cualquier fecha): ${lastEver}`
+            : `No hay ningún brief registrado en la tabla — nunca se ha guardado uno.`),
+          chatId,
+        )
         return NextResponse.json({ ok: true })
       }
       const tz        = 'America/Santo_Domingo'

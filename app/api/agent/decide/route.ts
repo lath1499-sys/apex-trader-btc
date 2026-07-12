@@ -185,14 +185,14 @@ export async function GET(req: NextRequest) {
       const logEntry = decision.action === 'WAIT'
         ? `WAIT: ${decision.waitingFor ?? decision.reasoning?.slice(0, 300) ?? '—'}`
         : `${decision.action} ${decision.tradeType} (${decision.confidence}) — ${decision.reasoning?.slice(0, 250) ?? '—'}`
+      const priceTag = `$${Math.round(price).toLocaleString()} — `
       await Promise.resolve(
         sb.from('apex_brief_history').insert({
-          brief_type:     'DECIDE_LOG',
-          analysis:       logEntry.slice(0, 500),
-          price_at_brief: price,
-          success:        decision.action !== 'WAIT',
-          duration_ms:    Date.now() - startedAt,
-          created_at:     new Date().toISOString(),
+          focus:       'DECIDE_LOG',
+          summary:     `${priceTag}${logEntry}`.slice(0, 500),
+          success:     decision.action !== 'WAIT',
+          duration_ms: Date.now() - startedAt,
+          created_at:  new Date().toISOString(),
         }),
       ).catch(() => {})
     }
