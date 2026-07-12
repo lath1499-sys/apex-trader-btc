@@ -880,13 +880,13 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
 
   // C: Active signals
   const sb = getVoiceSb()
-  type SigRow = { side: string | null; trade_type: string | null; entry: number | null; pnl: number | null; idea: { side: string; tradeType: string; price: number } | null }
+  type SigRow = { side: string | null; trade_type: string | null; entry: number | null; pnl: number | null }
   let rawSignals: SigRow[] = []
   if (sb) {
     try {
       const { data, error } = await Promise.resolve(
         sb.from('apex_signals')
-          .select('side, trade_type, entry, pnl, idea')
+          .select('side, trade_type, entry, pnl')
           .in('status', ['active', 'tp1_hit', 'tp2_hit'])
           .order('created_at', { ascending: false })
       ) as { data: SigRow[] | null; error: { message: string } | null }
@@ -899,9 +899,9 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
   }
 
   const activeSignals = rawSignals.map(s => ({
-    side:       s.idea?.side       ?? s.side       ?? 'LONG',
-    trade_type: s.idea?.tradeType  ?? s.trade_type ?? 'Scalp',
-    entry:      s.idea?.price      ?? s.entry      ?? 0,
+    side:       s.side       ?? 'LONG',
+    trade_type: s.trade_type ?? 'Scalp',
+    entry:      s.entry      ?? 0,
     pnl:        s.pnl ?? 0,
   }))
 
