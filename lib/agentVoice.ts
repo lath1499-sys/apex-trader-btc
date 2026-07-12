@@ -856,12 +856,13 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
       signal: AbortSignal.timeout(6000),
     })
     const d = r.ok
-      ? (await r.json() as { result?: Record<string, { c: [string]; P: [string] }> })
+      ? (await r.json() as { result?: Record<string, { c: [string]; o: string }> })
       : null
     const v = Object.values(d?.result ?? {})[0]
     if (v?.c?.[0]) {
-      price     = parseFloat(v.c[0])
-      change24h = parseFloat(v.P?.[0] ?? '0')
+      price = parseFloat(v.c[0])
+      const open = v.o ? parseFloat(v.o) : 0
+      change24h = open > 0 ? ((price - open) / open) * 100 : 0
     }
     console.log('[BRIEF:voice] Price:', price)
   } catch (e: unknown) {
