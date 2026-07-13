@@ -33,49 +33,57 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // notify=true — used by /forcecheck so a manual trigger always gets a reply,
+  // even on WAIT/paused/blocked. The routine 5-min cron omits it to avoid spam.
+  const notify = req.nextUrl.searchParams.get('notify') === 'true'
+
   console.log('[DECIDE] ===== Triggered', new Date().toISOString(), '=====')
 
   const startedAt = Date.now()
-  const result = await withLock('decide', async () => {
-    // ── Price fetch ──────────────────────────────────────────────────────────
-    const price = await getBtcPrice()
-    if (!price) {
-      console.error('[DECIDE] Price fetch failed')
-      return { status: 'error', error: 'price_fetch_failed' }
-    }
-    console.log('[DECIDE] Price:', price)
-
-    // ── Pause check ──────────────────────────────────────────────────────────
-    const sb = getSupabaseServer()
-    if (sb) {
-      const { data: state } = await Promise.resolve(
-        sb.from('apex_agent_state')
-          .select('is_paused, pause_reason')
-          .eq('id', 'current')
-          .maybeSingle(),
-      ).catch(() => ({ data: null })) as { data: { is_paused?: boolean; pause_reason?: string } | null }
-      if (state?.is_paused) {
-        console.log('[DECIDE] Agent paused:', state.pause_reason)
-        return { status: 'paused', reason: state.pause_reason }
+  try {
+    const result = await withLock('decide', async () => {
+      // ── Price fetch ──────────────────────────────────────────────────────────
+      const price = await getBtcPrice()
+      if (!price) {
+        console.error('[DECIDE] Price fetch failed')
+        if (notify) await sendTelegram('⚠️ Forcecheck: no pude obtener el precio de BTC (Kraken no respondió). Intenta de nuevo.').catch(() => {})
+        return { status: 'error', error: 'price_fetch_failed' }
       }
-    }
+      console.log('[DECIDE] Price:', price)
 
-    // ── Load signals — two targeted queries, not a full 500-row dump ────────
-    const [activeSignalsRaw, lastSigRaw, closedSignalsRaw] = await Promise.all([
-      loadSignalsFromCloud({ statuses: ['active', 'tp1_hit', 'tp2_hit'], limit: 10 }),
-      loadSignalsFromCloud({ limit: 1 }),
-      loadSignalsFromCloud({
-        statuses: ['sl_hit', 'tp3_hit', 'breakeven', 'closed_manual'],
-        limit: 50,
-      }),
-    ])
+      // ── Pause check ──────────────────────────────────────────────────────────
+      const sb = getSupabaseServer()
+      if (sb) {
+        const { data: state } = await Promise.resolve(
+          sb.from('apex_agent_state')
+            .select('is_paused, pause_reason')
+            .eq('id', 'current')
+            .maybeSingle(),
+        ).catch(() => ({ data: null })) as { data: { is_paused?: boolean; pause_reason?: string } | null }
+        if (state?.is_paused) {
+          console.log('[DECIDE] Agent paused:', state.pause_reason)
+          if (notify) await sendTelegram(`⏸ Forcecheck: agente pausado — ${state.pause_reason ?? 'sin razón'}.\n\nUsa /unpause para reanudar.`).catch(() => {})
+          return { status: 'paused', reason: state.pause_reason }
+        }
+      }
 
-    const active = activeSignalsRaw ?? []
+      // ── Load signals — two targeted queries, not a full 500-row dump ────────
+      const [activeSignalsRaw, lastSigRaw, closedSignalsRaw] = await Promise.all([
+        loadSignalsFromCloud({ statuses: ['active', 'tp1_hit', 'tp2_hit'], limit: 10 }),
+        loadSignalsFromCloud({ limit: 1 }),
+        loadSignalsFromCloud({
+          statuses: ['sl_hit', 'tp3_hit', 'breakeven', 'closed_manual'],
+          limit: 50,
+        }),
+      ])
 
-    if (active.length >= 5) {
-      console.log('[DECIDE] Max active signals (5) — skipping')
-      return { status: 'blocked', reason: 'max_active_signals' }
-    }
+      const active = activeSignalsRaw ?? []
+
+      if (active.length >= 5) {
+        console.log('[DECIDE] Max active signals (5) — skipping')
+        if (notify) await sendTelegram('🚫 Forcecheck: ya hay 5 señales activas (máximo). No se genera una nueva hasta que se cierre alguna.').catch(() => {})
+        return { status: 'blocked', reason: 'max_active_signals' }
+      }
 
     // Days since last signal (any status, most recent)
     const lastSignalTs = (lastSigRaw ?? [])[0]?.createdAt
@@ -212,11 +220,14 @@ export async function GET(req: NextRequest) {
     }
 
     if (!decision || decision.action === 'WAIT' || decision.action === 'CLOSE_EXISTING') {
+      const reason = decision?.waitingFor ?? decision?.reasoning?.slice(0, 300) ?? 'sin setup válido ahora mismo'
+      if (notify) await sendTelegram(`⏳ <b>WAIT</b> — ${reason}`).catch(() => {})
       return { status: 'wait', reason: decision?.waitingFor ?? 'no setup' }
     }
 
     if (!decision.entry || !decision.sl || !decision.tp1) {
       console.warn('[DECIDE] Missing levels in Claude response')
+      if (notify) await sendTelegram('⚠️ Forcecheck: Claude devolvió una señal sin niveles completos (entry/SL/TP1). Descartada — intenta de nuevo.').catch(() => {})
       return { status: 'error', error: 'missing_levels' }
     }
 
@@ -280,8 +291,21 @@ export async function GET(req: NextRequest) {
     )
 
     return { status: 'signal', id: sigId, action: decision.action, type: decision.tradeType }
-  })
+    })
 
-  console.log('[DECIDE] ===== Done =====', result)
-  return NextResponse.json(result ?? { status: 'skipped', reason: 'lock_held' })
+    if (!result && notify) {
+      await sendTelegram('⚠️ Forcecheck: ya hay un análisis corriendo (lock activo). Espera ~1min y reintenta.').catch(() => {})
+    }
+
+    console.log('[DECIDE] ===== Done =====', result)
+    return NextResponse.json(result ?? { status: 'skipped', reason: 'lock_held' })
+
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[DECIDE] Uncaught error:', msg)
+    if (notify) {
+      await sendTelegram(`❌ <b>Error en forcecheck</b>\n<code>${msg.slice(0, 300)}</code>`).catch(() => {})
+    }
+    return NextResponse.json({ status: 'error', error: msg }, { status: 500 })
+  }
 }

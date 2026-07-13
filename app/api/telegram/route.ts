@@ -579,13 +579,14 @@ export async function POST(req: NextRequest) {
     }
 
     else if (text === '/forcecheck' || text === '/scan' || text === '/fc') {
-      // Fire-and-forget /api/agent/decide — signal will arrive in Telegram if found
+      // Fire-and-forget /api/agent/decide?notify=true — decide always replies
+      // itself (signal, WAIT, paused, blocked, or error), so no result is lost.
       void fetch(
-        `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://apex-trader-btc.vercel.app'}/api/agent/decide`,
+        `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://apex-trader-btc.vercel.app'}/api/agent/decide?notify=true`,
         { headers: { Authorization: `Bearer ${process.env.CRON_SECRET ?? ''}` } },
       ).catch(() => {})
       await sendTelegram(
-        '🔍 <b>Forzando análisis de señal...</b>\n\nSi hay un setup válido, la señal llegará en ~30 segundos.\nSi Claude devuelve WAIT, no llegará nada — usa /signalhealth para ver por qué.',
+        '🔍 <b>Forzando análisis de señal...</b>\n\nResultado en ~30 segundos — señal, WAIT con la razón, o error, siempre llega algo.',
         chatId,
       )
     }
