@@ -185,6 +185,8 @@ export async function getMacroSnapshot(): Promise<MacroSnapshot> {
   }
   if (fredNotes.length) merged.source_note = fredNotes.join(' | ')
 
+  console.log(`[MACRO] CPI ${merged.cpi_yoy}% | Core ${merged.core_cpi_yoy}% | Fed ${merged.fed_rate}% | M2 ${merged.m2_growth}% | ETF ${merged.etf_flow_7d}M (asOf ${merged.etf_flow_asof ?? '?'}) | source: ${merged.source_note}`)
+
   macroCache = merged
   cachedAt = Date.now()
   return merged
