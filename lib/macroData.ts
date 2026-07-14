@@ -26,6 +26,7 @@ export interface MacroSnapshot {
   total_crypto_mcap: number
   fear_greed:        number
   etf_flow_7d:       number
+  etf_flow_asof:     string | null
   source_note:       string
   fetchedAt:         string
 }
@@ -45,6 +46,7 @@ const DEFAULTS: MacroSnapshot = {
   total_crypto_mcap: 2000,
   fear_greed:        50,
   etf_flow_7d:       -596,
+  etf_flow_asof:     null,
   source_note:       'CPI: BLS May 2026 | Fed: FOMC Jun 2026',
   fetchedAt:         new Date().toISOString(),
 }
@@ -56,23 +58,44 @@ const CACHE_TTL = 6 * 60 * 60 * 1000  // 6 hours
 type YahooResp = { chart?: { result?: Array<{ meta?: { regularMarketPrice?: number; regularMarketChangePercent?: number } }> } }
 type CGResp    = { data?: { market_cap_percentage?: { btc?: number }; total_market_cap?: { usd?: number } } }
 type FGResp    = { data?: Array<{ value: string }> }
+type FredResp  = { observations?: Array<{ date: string; value: string }> }
+
+async function fetchFred(seriesId: string, pctChangeYoy: boolean): Promise<{ value: number; asOf: string } | null> {
+  const apiKey = process.env.FRED_API_KEY
+  if (!apiKey) return null
+  try {
+    const units = pctChangeYoy ? '&units=pc1' : ''
+    const r = await fetch(
+      `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${apiKey}&file_type=json&sort_order=desc&limit=1${units}`,
+      { signal: AbortSignal.timeout(6000) },
+    )
+    if (!r.ok) return null
+    const d = await r.json() as FredResp
+    const obs = d.observations?.[0]
+    const v = obs?.value ? parseFloat(obs.value) : NaN
+    return !isNaN(v) && obs?.date ? { value: v, asOf: obs.date } : null
+  } catch { return null }
+}
 
 export async function getMacroSnapshot(): Promise<MacroSnapshot> {
   if (macroCache && Date.now() - cachedAt < CACHE_TTL) return macroCache
 
   const merged: MacroSnapshot = { ...DEFAULTS, fetchedAt: new Date().toISOString() }
 
-  // 1. Supabase overrides — highest priority (manually set via Telegram /macro update)
+  // 1. Supabase overrides — manual values for fields with no live source (etf_flow_7d).
+  // CPI/Core CPI/Fed Rate/M2 below are live via FRED and take priority when they succeed.
   try {
     const sb = getSb()
     if (sb) {
       const { data } = await Promise.resolve(
-        sb.from('apex_macro_overrides').select('key, value, source')
-      ).catch(() => ({ data: null })) as { data: Array<{ key: string; value: number; source: string }> | null }
+        sb.from('apex_macro_overrides').select('key, value, source, updated_at')
+      ).catch(() => ({ data: null })) as { data: Array<{ key: string; value: number; source: string; updated_at: string }> | null }
       const validKeys = new Set<string>(Object.keys(merged))
       for (const o of data ?? []) {
         if (validKeys.has(o.key)) (merged as unknown as Record<string, number | string>)[o.key] = o.value
       }
+      const etfOverride = (data ?? []).find(o => o.key === 'etf_flow_7d')
+      if (etfOverride) merged.etf_flow_asof = etfOverride.updated_at
       const srcNote = (data ?? [])
         .filter(o => o.source && o.source !== 'manual')
         .slice(0, 3)
@@ -83,7 +106,7 @@ export async function getMacroSnapshot(): Promise<MacroSnapshot> {
   } catch { /* noop */ }
 
   // 2. Live market APIs — all optional, failures use defaults
-  const [fgRes, cgRes, dxyRes, spxRes, goldRes, t10yRes] = await Promise.allSettled([
+  const [fgRes, cgRes, dxyRes, spxRes, goldRes, t10yRes, cpiRes, coreCpiRes, fedRes, m2Res] = await Promise.allSettled([
     fetch('https://api.alternative.me/fng/?limit=1', { signal: AbortSignal.timeout(5000) })
       .then(r => r.json() as Promise<FGResp>)
       .then(d => ({ fear_greed: parseInt(d.data?.[0]?.value ?? '50') })),
@@ -130,11 +153,37 @@ export async function getMacroSnapshot(): Promise<MacroSnapshot> {
         const c = parseFloat(cols[4] ?? '0')
         return { us10y_yield: c > 0 ? parseFloat(c.toFixed(2)) : 4.5 }
       }),
+
+    // CPI YoY — FRED (BLS series, released monthly)
+    fetchFred('CPIAUCSL', true),
+    // Core CPI YoY — FRED
+    fetchFred('CPILFESL', true),
+    // Fed Funds Rate (effective) — FRED
+    fetchFred('FEDFUNDS', false),
+    // M2 YoY growth — FRED
+    fetchFred('M2SL', true),
   ])
 
   for (const r of [fgRes, cgRes, dxyRes, spxRes, goldRes, t10yRes]) {
     if (r.status === 'fulfilled') Object.assign(merged, r.value)
   }
+
+  const fredNotes: string[] = []
+  if (cpiRes.status === 'fulfilled' && cpiRes.value) {
+    merged.cpi_yoy = parseFloat(cpiRes.value.value.toFixed(2))
+    fredNotes.push(`CPI: FRED ${cpiRes.value.asOf}`)
+  }
+  if (coreCpiRes.status === 'fulfilled' && coreCpiRes.value) {
+    merged.core_cpi_yoy = parseFloat(coreCpiRes.value.value.toFixed(2))
+  }
+  if (fedRes.status === 'fulfilled' && fedRes.value) {
+    merged.fed_rate = parseFloat(fedRes.value.value.toFixed(2))
+    fredNotes.push(`Fed: FRED ${fedRes.value.asOf}`)
+  }
+  if (m2Res.status === 'fulfilled' && m2Res.value) {
+    merged.m2_growth = parseFloat(m2Res.value.value.toFixed(2))
+  }
+  if (fredNotes.length) merged.source_note = fredNotes.join(' | ')
 
   macroCache = merged
   cachedAt = Date.now()
@@ -157,11 +206,20 @@ export function formatMacroForPrompt(m: MacroSnapshot): string {
     : m.cpi_yoy > 2.5 ? `🟡 ELEVADO` : `🟢 CONTROLADO`
   const dxyLabel  = m.dxy > 102 ? 'FUERTE (headwind BTC)' : m.dxy > 99 ? 'NEUTRAL' : 'DÉBIL (tailwind BTC)'
   const yieldNote = m.us10y_yield > 4.5 ? 'ALTO — costo de oportunidad contra BTC' : 'moderado'
-  const etfNote   = m.etf_flow_7d < -200
-    ? `🔴 OUTFLOWS $${Math.abs(m.etf_flow_7d)}M (7D) — institucional reduciendo exposición`
+
+  // No hay API pública gratis de flujo ETF en vivo — este valor se carga a mano
+  // vía /macro update. Si tiene más de 10 días, se lo marcamos a Claude como
+  // dato viejo en vez de dejar que lo cite como si fuera de esta semana.
+  const etfAgeDays = m.etf_flow_asof
+    ? Math.floor((Date.now() - new Date(m.etf_flow_asof).getTime()) / 86_400_000)
+    : null
+  const etfStale   = etfAgeDays !== null && etfAgeDays > 10
+  const etfWindow  = etfStale ? `última cifra conocida, hace ${etfAgeDays}d — NO la trates como dato de esta semana` : '7D'
+  const etfNote    = m.etf_flow_7d < -200
+    ? `🔴 OUTFLOWS $${Math.abs(m.etf_flow_7d)}M (${etfWindow}) — institucional reduciendo exposición`
     : m.etf_flow_7d > 200
-    ? `🟢 INFLOWS $${m.etf_flow_7d}M (7D) — demanda institucional activa`
-    : `⚪ Flujos ETF neutros (7D: ${m.etf_flow_7d >= 0 ? '+' : ''}$${m.etf_flow_7d}M)`
+    ? `🟢 INFLOWS $${m.etf_flow_7d}M (${etfWindow}) — demanda institucional activa`
+    : `⚪ Flujos ETF neutros (${etfWindow}: ${m.etf_flow_7d >= 0 ? '+' : ''}$${m.etf_flow_7d}M)`
 
   return [
     `MACRO REAL (fuente: ${m.source_note}):`,
