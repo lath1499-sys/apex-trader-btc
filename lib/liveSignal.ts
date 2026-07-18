@@ -32,6 +32,8 @@ export interface LiveSignalState {
   tp1DistancePct:  number
   isNearSL:        boolean
   isNearTP1:       boolean
+  slCrossed:       boolean
+  tp1Crossed:      boolean
   direction:       'profit' | 'loss' | 'breakeven'
   openSince:       string
   tp1BankedPnl:    number
@@ -150,10 +152,15 @@ export async function getLiveSignalStates(signals: RawSignalRow[]): Promise<Live
     const isLong       = sig.side === 'LONG'
     const priceDiff    = isLong ? price - sig.entry : sig.entry - price
     const pnlPct       = (priceDiff / sig.entry) * 100
+    // Direction-aware: for a SHORT, SL is hit when price >= sl and TP1 when
+    // price <= tp1. Math.abs() distance alone can't tell "approaching" from
+    // "already crossed" — once crossed, distance can still read as tiny.
+    const slCrossed    = isLong ? price <= sig.sl  : price >= sig.sl
+    const tp1Crossed   = isLong ? price >= sig.tp1 : price <= sig.tp1
     const slDist       = Math.abs(price - sig.sl)  / price * 100
     const tp1Dist      = Math.abs(price - sig.tp1) / price * 100
-    const isNearSL     = slDist  < 1.0
-    const isNearTP1    = tp1Dist < 1.0
+    const isNearSL     = !slCrossed  && slDist  < 1.0
+    const isNearTP1    = !tp1Crossed && tp1Dist < 1.0
     const direction: 'profit' | 'loss' | 'breakeven' =
       Math.abs(pnlPct) < 0.05 ? 'breakeven' : pnlPct > 0 ? 'profit' : 'loss'
 
@@ -180,6 +187,8 @@ export async function getLiveSignalStates(signals: RawSignalRow[]): Promise<Live
       tp1DistancePct: parseFloat(tp1Dist.toFixed(2)),
       isNearSL,
       isNearTP1,
+      slCrossed,
+      tp1Crossed,
       direction,
       openSince,
       tp1BankedPnl:   sig.tp1_banked_pnl  ?? 0,
@@ -192,8 +201,12 @@ export function formatLiveSignal(live: LiveSignalState): string {
   const emoji    = live.side === 'LONG' ? '🟢' : '🔴'
   const pnlEmoji = live.pnlPct > 0 ? '📈' : live.pnlPct < 0 ? '📉' : '➡️'
   const pnlStr   = `${live.pnlPct >= 0 ? '+' : ''}${live.pnlPct.toFixed(2)}%`
-  const slWarn   = live.isNearSL  ? '  ⚠️ CERCA DEL SL'  : ''
-  const tp1Warn  = live.isNearTP1 ? '  🎯 CERCA DE TP1' : ''
+  const slWarn   = live.slCrossed && live.status === 'active'
+    ? '  🔴 SL ALCANZADO (confirmando)'
+    : live.isNearSL ? '  ⚠️ CERCA DEL SL' : ''
+  const tp1Warn  = live.tp1Crossed && live.status === 'active'
+    ? '  ✅ TP1 ALCANZADO (confirmando)'
+    : live.isNearTP1 ? '  🎯 CERCA DE TP1' : ''
   const banked   = live.tp1BankedPnl > 0
     ? `\n💰 Banqueado en TP1: +${live.tp1BankedPnl.toFixed(2)}%`
     : ''
