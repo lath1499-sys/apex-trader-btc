@@ -277,7 +277,9 @@ export async function GET(req: NextRequest) {
         bull:       0,
         bear:       0,
         maxSc:      12,
-        reasons:    (decision.keyFactors ?? []).map(txt => ({ s: 'bull' as const, txt })),
+        reasons:    (decision.keyFactors ?? []).map(txt => ({
+          s: (decision.action === 'SHORT' ? 'bear' : 'bull') as 'bull' | 'bear', txt,
+        })),
         analysis:   decision.reasoning,
         ts:         new Date(),
       },
