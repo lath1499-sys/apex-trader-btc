@@ -236,6 +236,12 @@ export async function GET(req: NextRequest) {
     const maxLev = decision.tradeType === 'Scalp'
       ? 10 : decision.tradeType === 'DayTrade' ? 5 : 3
 
+    const risk   = Math.abs(decision.entry - decision.sl)
+    const tp1RR  = risk > 0 ? parseFloat((Math.abs(decision.entry - decision.tp1) / risk).toFixed(2)) : 0
+    const tp2RR  = risk > 0 && decision.tp2 ? parseFloat((Math.abs(decision.entry - decision.tp2) / risk).toFixed(2)) : 0
+    const tp3RR  = risk > 0 && decision.tp3 ? parseFloat((Math.abs(decision.entry - decision.tp3) / risk).toFixed(2)) : 0
+    console.log(`[DECIDE] R:R — TP1 ${tp1RR}:1 | TP2 ${tp2RR}:1 | TP3 ${tp3RR}:1 (risk $${risk.toFixed(0)})`)
+
     const sig: SignalRecord = {
       id:               sigId,
       createdAt:        new Date().toISOString(),
@@ -261,9 +267,9 @@ export async function GET(req: NextRequest) {
       tp2BankedPnl:     0,
       totalBankedPnl:   0,
       remainingSizePct: 100,
-      tp1RR:            0,
-      tp2RR:            0,
-      tp3RR:            0,
+      tp1RR,
+      tp2RR,
+      tp3RR,
       idea: {
         side:       decision.action as 'LONG' | 'SHORT',
         tradeType:  decision.tradeType,

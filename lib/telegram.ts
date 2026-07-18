@@ -73,7 +73,7 @@ export function tgSignal(sig: SignalRecord): string {
     `<b>PLAN DE SALIDA PARCIAL:</b>`,
     `🎯 TP1: <code>${P(idea.tp1)}</code> → Cerrar ${sig.tp1ClosePct ?? 40}% | R:R ${sig.tp1RR ?? '?'}:1`,
     `🎯 TP2: <code>${P(idea.tp2)}</code> → Cerrar ${sig.tp2ClosePct ?? 35}% | R:R ${sig.tp2RR ?? '?'}:1`,
-    `🎯 TP3: <code>${P(idea.tp3)}</code> → Cerrar ${sig.tp3ClosePct ?? 25}% restante`,
+    `🎯 TP3: <code>${P(idea.tp3)}</code> → Cerrar ${sig.tp3ClosePct ?? 25}% restante | R:R ${sig.tp3RR ?? '?'}:1`,
     ``,
     `Si TP1 tocado → SL a breakeven (trade gratuito)`,
     `Si TP2 tocado → SL a TP1 (profit garantizado)`,

@@ -60,7 +60,7 @@ function buildScalpAnalysis(sig: ScalpSignal): string {
     ``,
     `Setup: ${sig.side} Scalp ${sig.duration}`,
     `Entrada: $${Math.round(sig.entry).toLocaleString()} | SL: $${Math.round(sig.sl).toLocaleString()} (−${slDst}$) | TP1: $${Math.round(sig.tp1).toLocaleString()} (+${tpDst}$)`,
-    `Confianza: ${sig.confidence} | Score: ${sig.score}/9`,
+    `Confianza: ${sig.confidence}${sig.score != null ? ` | Score: ${sig.score}/9` : ''}`,
     `Calidad: ${sig.qualityLabel} | Max leverage: ${sig.maxLeverage}x`,
   ].join('\n')
 }
@@ -135,7 +135,7 @@ function ScalpCard({ sig }: { sig: ScalpSignal }) {
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: confC }}>{sig.confidence}</div>
-          <div style={{ fontSize: 8, color: T.muted }}>Score {sig.score}/9</div>
+          {sig.score != null && <div style={{ fontSize: 8, color: T.muted }}>Score {sig.score}/9</div>}
         </div>
       </div>
 

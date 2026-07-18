@@ -59,7 +59,7 @@ export interface ScalpSignal {
   cvdSignal:    string | null
   vwapRelation: string
   qualityLabel: string
-  score:        number
+  score:        number | null
   ts:           Date
   status:       ScalpStatus
   createdAt:    number        // Date.now()

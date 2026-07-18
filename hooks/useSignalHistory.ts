@@ -33,7 +33,9 @@ function signalRecordToScalp(r: SignalRecord): ScalpSignal {
     cvdSignal:    r.cvdSignal ?? null,
     vwapRelation: r.vwapRelation ?? '',
     qualityLabel: idea.confidence,
-    score:        (idea as { score?: number }).score ?? 0,
+    // Legacy scoring-engine field — Claude-driven signals don't populate it.
+    // null (not 0) so the UI can hide the badge instead of showing a fake score.
+    score:        (idea as { score?: number }).score ?? null,
     ts:           new Date(r.createdAt),
     status:       r.status as ScalpStatus,
     createdAt:    new Date(r.createdAt).getTime(),
