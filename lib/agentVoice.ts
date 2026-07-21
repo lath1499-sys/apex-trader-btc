@@ -6,6 +6,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { getMacroSnapshot, formatMacroForPrompt } from './macroData'
+import { calcAutoSR } from './indicators'
 
 // Fix 5: cached singleton — same pattern as getSupabaseServer() in supabase.ts
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -218,6 +219,29 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
     console.warn('[BRIEF:voice] Price fetch failed:', e instanceof Error ? e.message : String(e))
   }
 
+  // A2: Support/Resistance — real swing-high/low clustering from 4H candles,
+  // not left for Claude to improvise. Kraken OHLC (Binance blocked on Vercel).
+  let srTxt = ''
+  try {
+    const r = await fetch('https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=240', {
+      signal: AbortSignal.timeout(8000),
+    })
+    const d = r.ok ? (await r.json() as { result?: Record<string, unknown[][]> }) : null
+    const key = d?.result ? Object.keys(d.result).find(k => k !== 'last') : null
+    const candles = key ? (d!.result![key] as Array<[number, string, string, string, string]>) : []
+    if (candles.length >= 20) {
+      const h = candles.map(k => parseFloat(k[2]))
+      const l = candles.map(k => parseFloat(k[3]))
+      const c = candles.map(k => parseFloat(k[4]))
+      const { res, sup } = calcAutoSR(h, l, c)
+      srTxt = `Resistencias (4H, swing highs reales): ${res.map(p => `$${Math.round(p).toLocaleString()}`).join(', ') || 'ninguna cercana'}\n` +
+              `Soportes (4H, swing lows reales): ${sup.map(p => `$${Math.round(p).toLocaleString()}`).join(', ') || 'ninguno cercano'}`
+      console.log('[BRIEF:voice] S/R:', srTxt.replace(/\n/g, ' | '))
+    }
+  } catch (e: unknown) {
+    console.warn('[BRIEF:voice] S/R fetch failed:', e instanceof Error ? e.message : String(e))
+  }
+
   // B: Macro snapshot
   let macroTxt = ''
   try {
@@ -277,7 +301,7 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
 
   // E: Call Claude, then run through the coherence/style validator
   console.log('[BRIEF:voice] Calling Claude...')
-  let text = await callClaudeStandalone({ price, change24h, macroTxt, activeSignals, focus })
+  let text = await callClaudeStandalone({ price, change24h, macroTxt, srTxt, activeSignals, focus })
   console.log('[BRIEF:voice] Claude responded:', text.length, 'chars')
   text = await correctBriefIfNeeded(text, activeSignals, price)
 
@@ -289,10 +313,11 @@ async function callClaudeStandalone(ctx: {
   price:         number
   change24h:     number
   macroTxt:      string
+  srTxt:         string
   activeSignals: Array<{ side: string; trade_type: string; entry: number; pnl: number }>
   focus:         BriefFocus
 }): Promise<string> {
-  const { price, change24h, macroTxt, activeSignals, focus } = ctx
+  const { price, change24h, macroTxt, srTxt, activeSignals, focus } = ctx
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set')
 
@@ -318,10 +343,12 @@ PROHIBIDO:
 - Mencionar Max Pain o IV Rank sin datos reales
 - Decir "Fed bajó" (está en HOLD)
 - Contradecir el sesgo de señales activas
+- Inventar niveles de soporte/resistencia — usa EXCLUSIVAMENTE los niveles reales que te doy en NIVELES TÉCNICOS abajo, nunca números que no aparezcan ahí
 ESTRUCTURA: qué hace el mercado → factor principal → sesgo + niveles exactos, todo en párrafos fluidos`
 
   const userPrompt = `HORA: ${hourLocal}
 BTC PERP: ${priceStr} (${changeStr} 24h)
+NIVELES TÉCNICOS (reales, 4H — no inventes otros):\n${srTxt || 'No disponibles esta vez'}
 MACRO:\n${macroTxt || 'No disponible'}
 SEÑALES ACTIVAS:\n${signalTxt}
 Escribe el análisis enfocado en ${focus.replace(/_/g, ' ')}.`

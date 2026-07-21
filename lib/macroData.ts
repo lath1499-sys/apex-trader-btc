@@ -136,12 +136,11 @@ export async function getMacroSnapshot(): Promise<MacroSnapshot> {
         return { sp500_change: c > 0 && o > 0 ? parseFloat(((c - o) / o * 100).toFixed(2)) : NaN }
       }),
 
-    // Gold — Stooq
-    fetch('https://stooq.com/q/l/?s=gc.f&f=sd2t2ohlcv&h&e=csv', { signal: AbortSignal.timeout(6000) })
-      .then(r => r.text())
-      .then(txt => {
-        const cols = txt.trim().split('\n')[1]?.split(',') ?? []
-        const c = parseFloat(cols[4] ?? '0')
+    // Gold — gold-api.com (Stooq's gc.f/xauusd/xau tickers all 404 now — endpoint gone)
+    fetch('https://api.gold-api.com/price/XAU', { signal: AbortSignal.timeout(6000) })
+      .then(r => r.json() as Promise<{ price?: number }>)
+      .then(d => {
+        const c = d.price ?? 0
         return { gold_price: c > 500 ? Math.round(c) : 2350 }
       }),
 
