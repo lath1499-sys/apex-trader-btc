@@ -344,6 +344,7 @@ PROHIBIDO:
 - Decir "Fed bajó" (está en HOLD)
 - Contradecir el sesgo de señales activas
 - Inventar niveles de soporte/resistencia — usa EXCLUSIVAMENTE los niveles reales que te doy en NIVELES TÉCNICOS abajo, nunca números que no aparezcan ahí
+- Citar cifras específicas que no estén en los datos de abajo (volumen de ETF, comparaciones históricas tipo "mínimo desde X fecha", estadísticas puntuales) — si no está en MACRO, NIVELES TÉCNICOS o SEÑALES ACTIVAS, no lo afirmes como dato concreto
 ESTRUCTURA: qué hace el mercado → factor principal → sesgo + niveles exactos, todo en párrafos fluidos`
 
   const userPrompt = `HORA: ${hourLocal}
