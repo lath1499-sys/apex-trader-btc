@@ -264,7 +264,7 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
       lines.push(`Soportes (4H, swing lows reales): ${sup.map(p => `$${Math.round(p).toLocaleString()}`).join(', ') || 'ninguno cercano'}`)
       taTxt = lines.join('\n')
     }
-    console.log('[BRIEF:voice] Price:', price, '| TA lines:', taTxt ? taTxt.split('\n').length : 0)
+    console.log('[BRIEF:voice] Price:', price, '| TA:', taTxt ? taTxt.replace(/\n/g, ' | ') : '(none)')
   } catch (e: unknown) {
     console.warn('[BRIEF:voice] Market data fetch failed:', e instanceof Error ? e.message : String(e))
   }
@@ -328,29 +328,39 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
     pnl:        s.pnl ?? 0,
   }))
 
-  // D: Focus rotation — avoid repeating the same angle as recent briefs
+  // D: Focus rotation — avoid repeating the same angle as recent briefs.
+  // Also grab recent OPENINGS (first ~90 chars of each summary, price prefix
+  // stripped) so the model has concrete recent phrasing to not reuse — focus
+  // rotation alone only varies the topic, not the opening rhetorical device.
   const hourOfDay    = new Date().getUTCHours()
   const defaultFocus = BRIEF_FOCUSES[Math.floor(hourOfDay / 4) % BRIEF_FOCUSES.length]
   let   focus: typeof BRIEF_FOCUSES[number] = defaultFocus
+  let   recentOpenings = ''
   if (sb) {
     const { data: recentRows } = await Promise.resolve(
       sb.from('apex_brief_history')
-        .select('focus')
+        .select('focus, summary')
         .not('focus', 'is', null)
+        .neq('focus', 'DECIDE_LOG')
         .order('created_at', { ascending: false })
         .limit(3),
-    ).catch(() => ({ data: null })) as { data: Array<{ focus: string }> | null }
+    ).catch(() => ({ data: null })) as { data: Array<{ focus: string; summary: string | null }> | null }
     const recentFocuses = (recentRows ?? []).map(r => r.focus)
     if (recentFocuses.includes(defaultFocus)) {
       const available = BRIEF_FOCUSES.filter(f => !recentFocuses.includes(f))
       if (available.length > 0) focus = available[0]
     }
+    recentOpenings = (recentRows ?? [])
+      .map(r => r.summary?.replace(/^\$[\d,]+\s*—\s*/, '').slice(0, 90))
+      .filter(Boolean)
+      .map((s, i) => `${i + 1}. "${s}..."`)
+      .join('\n')
   }
-  console.log('[BRIEF:voice] Focus:', focus)
+  console.log('[BRIEF:voice] Focus:', focus, '| recent openings:', recentOpenings ? recentOpenings.split('\n').length : 0)
 
   // E: Call Claude, then run through the coherence/style validator
   console.log('[BRIEF:voice] Calling Claude...')
-  let text = await callClaudeStandalone({ price, change24h, macroTxt, taTxt, extraTxt, activeSignals, focus })
+  let text = await callClaudeStandalone({ price, change24h, macroTxt, taTxt, extraTxt, recentOpenings, activeSignals, focus })
   console.log('[BRIEF:voice] Claude responded:', text.length, 'chars')
   text = await correctBriefIfNeeded(text, activeSignals, price)
 
@@ -359,15 +369,16 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
 }
 
 async function callClaudeStandalone(ctx: {
-  price:         number
-  change24h:     number
-  macroTxt:      string
-  taTxt:         string
-  extraTxt:      string
-  activeSignals: Array<{ side: string; trade_type: string; entry: number; pnl: number }>
-  focus:         BriefFocus
+  price:          number
+  change24h:      number
+  macroTxt:       string
+  taTxt:          string
+  extraTxt:       string
+  recentOpenings: string
+  activeSignals:  Array<{ side: string; trade_type: string; entry: number; pnl: number }>
+  focus:          BriefFocus
 }): Promise<string> {
-  const { price, change24h, macroTxt, taTxt, extraTxt, activeSignals, focus } = ctx
+  const { price, change24h, macroTxt, taTxt, extraTxt, recentOpenings, activeSignals, focus } = ctx
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set')
 
@@ -395,10 +406,12 @@ PROHIBIDO:
 - Contradecir el sesgo de señales activas
 - Inventar niveles de soporte/resistencia, RSI, MACD, régimen u ondas Elliott — usa EXCLUSIVAMENTE los datos reales en ANÁLISIS TÉCNICO abajo, nunca números que no aparezcan ahí
 - Citar cifras específicas que no estén en los datos de abajo (volumen de ETF, comparaciones históricas tipo "mínimo desde X fecha", estadísticas puntuales) — si no está en ANÁLISIS TÉCNICO, MACRO, CONTEXTO EXTRA o SEÑALES ACTIVAS, no lo afirmes como dato concreto
+- Reutilizar la apertura o estructura retórica de los últimos briefs (abajo en APERTURAS RECIENTES) — variar SIEMPRE la primera frase y el ángulo de entrada, aunque el precio y los datos técnicos sean parecidos a los del último ciclo
 ESTRUCTURA: qué hace el mercado → factor principal → sesgo + niveles exactos, todo en párrafos fluidos`
 
   const userPrompt = `HORA: ${hourLocal}
 BTC PERP: ${priceStr} (${changeStr} 24h)
+APERTURAS RECIENTES (NO repitas esta fórmula ni frases parecidas):\n${recentOpenings || 'Sin briefs recientes'}
 ANÁLISIS TÉCNICO (real, multi-timeframe — no inventes otros datos):\n${taTxt || 'No disponible esta vez'}
 MACRO:\n${macroTxt || 'No disponible'}
 CONTEXTO EXTRA (Fed, mercados globales, social, whale, opciones — solo si hay datos):\n${extraTxt || 'Sin datos adicionales'}
