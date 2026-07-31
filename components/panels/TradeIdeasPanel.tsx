@@ -297,6 +297,30 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
     signalHistory,
   ), [idea, mkt.fg, mkt.funding, signalHistory])
 
+  // Real avg win/loss (in R) from closed history of the same type+side — same
+  // filter criteria calcWinProbability uses internally. Falls back to this
+  // trade's own theoretical TP1 R:R (win) / 1R (loss) below 5 samples, same
+  // minimum-sample bar probabilisticModel.ts uses for its own history blend.
+  const { avgWinR, avgLossR } = React.useMemo(() => {
+    const risk        = Math.abs(idea.price - idea.sl)
+    const reward       = Math.abs(idea.tp1 - idea.price)
+    const fallbackWin  = risk > 0 ? reward / risk : 1.5
+    const similar = signalHistory.filter(h =>
+      h.idea.tradeType === idea.tradeType &&
+      h.idea.side === idea.side &&
+      h.pnlR != null &&
+      h.status !== 'active',
+    )
+    const wins   = similar.filter(h => (h.pnlR ?? 0) > 0)
+    const losses = similar.filter(h => (h.pnlR ?? 0) < 0)
+    const realAvgWin  = wins.length   >= 5 ? wins.reduce((s, h) => s + (h.pnlR ?? 0), 0) / wins.length : null
+    const realAvgLoss = losses.length >= 5 ? Math.abs(losses.reduce((s, h) => s + (h.pnlR ?? 0), 0) / losses.length) : null
+    return {
+      avgWinR:  realAvgWin  ?? fallbackWin,
+      avgLossR: realAvgLoss ?? 1.0,
+    }
+  }, [idea, signalHistory])
+
   const positionSize: PositionSize | null = React.useMemo(() => {
     if (!idea.price || !idea.sl) return null
     try {
@@ -305,11 +329,11 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
         capitalConfig,
         probScore.winProbability,
         probScore.winProbability,   // use prob score as win rate proxy if no history
-        1.5,
-        1.0,
+        avgWinR,
+        avgLossR,
       )
     } catch { return null }
-  }, [idea.price, idea.sl, idea.maxLev, capitalConfig, probScore.winProbability])
+  }, [idea.price, idea.sl, idea.maxLev, capitalConfig, probScore.winProbability, avgWinR, avgLossR])
 
   function handleConfirmClose() {
     const price = parseFloat(closePrice) || mkt.price || idea.price
