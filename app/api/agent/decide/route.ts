@@ -416,8 +416,8 @@ export async function GET(req: NextRequest) {
           tp2:        decision.tp2,
           tp3:        decision.tp3,
           maxLev,
-          bull:       0,
-          bear:       0,
+          bull:       decision.action === 'SHORT' ? 0 : (decision.keyFactors ?? []).length,
+          bear:       decision.action === 'SHORT' ? (decision.keyFactors ?? []).length : 0,
           maxSc:      12,
           reasons:    (decision.keyFactors ?? []).map(txt => ({
             s: (decision.action === 'SHORT' ? 'bear' : 'bull') as 'bull' | 'bear', txt,
