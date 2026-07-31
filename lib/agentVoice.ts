@@ -6,7 +6,23 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { getMacroSnapshot, formatMacroForPrompt } from './macroData'
-import { calcAutoSR } from './indicators'
+import { calcAutoSR, runInds } from './indicators'
+import { fetchMarketData } from './marketFetch'
+import { detectMarketRegime } from './marketRegime'
+import { detectFVGs } from './fvg'
+import { detectLiquidity } from './liquidity'
+import { detectElliottWaves } from './elliottWaves'
+import { analyzeAllABCD } from './harmonicPatterns'
+import { fetchMacroIndicators, fetchFedExpectations } from './macroEconomics'
+import { fetchGlobalMarkets } from './marketCorrelation'
+import { fetchSocialSentiment } from './socialSentiment'
+import { fetchWhaleAlert } from './whaleDetector'
+import { fetchOptionsData } from './deribitFetch'
+import type { Kline } from './types'
+
+function toKlines(arr: Array<{ t: number; o: number; h: number; l: number; c: number; v: number }> | undefined): Kline[] {
+  return (arr ?? []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.v }))
+}
 
 // Fix 5: cached singleton — same pattern as getSupabaseServer() in supabase.ts
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -199,57 +215,90 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
   const startedAt = Date.now()
   console.log('[BRIEF:voice] Starting standalone brief...')
 
-  // A: Price — Kraken (Binance IPs blocked on Vercel)
+  // A: Full market data — price + klines all TFs (Binance→Bybit→Kraken fallback)
   let price = 0, change24h = 0
+  let taTxt = ''
   try {
-    const r = await fetch('https://api.kraken.com/0/public/Ticker?pair=XBTUSD', {
-      signal: AbortSignal.timeout(6000),
-    })
-    const d = r.ok
-      ? (await r.json() as { result?: Record<string, { c: [string]; o: string }> })
-      : null
-    const v = Object.values(d?.result ?? {})[0]
-    if (v?.c?.[0]) {
-      price = parseFloat(v.c[0])
-      const open = v.o ? parseFloat(v.o) : 0
-      change24h = open > 0 ? ((price - open) / open) * 100 : 0
+    const md = await fetchMarketData()
+    price     = md.price ?? md.bybitPrice ?? md.krakenPrice ?? 0
+    change24h = md.change ?? 0
+
+    const klines = {
+      '1d':  toKlines(md.klines['1d']),
+      '4h':  toKlines(md.klines['4h']),
+      '1h':  toKlines(md.klines['1h']),
+      '15m': toKlines(md.klines['15m']),
     }
-    console.log('[BRIEF:voice] Price:', price)
+
+    if (klines['4h'].length >= 20) {
+      const i1d = klines['1d'].length  ? runInds(klines['1d'])  : null
+      const i4h = runInds(klines['4h'])
+      const i1h = klines['1h'].length  ? runInds(klines['1h'])  : null
+      const i15 = klines['15m'].length ? runInds(klines['15m']) : null
+      const regime    = detectMarketRegime(klines['4h'])
+      const fvg4h     = detectFVGs(klines['4h'])
+      const liquidity = detectLiquidity(klines['4h'])
+      const ew4h      = detectElliottWaves(klines['4h'])
+      const ew1d      = klines['1d'].length >= 20 ? detectElliottWaves(klines['1d']) : null
+      const abcd      = analyzeAllABCD(
+        { '15m': klines['15m'], '1h': klines['1h'], '4h': klines['4h'], '1d': klines['1d'] },
+        price,
+      )
+      const { res, sup } = calcAutoSR(
+        klines['4h'].map(k => k.h), klines['4h'].map(k => k.l), klines['4h'].map(k => k.c),
+      )
+
+      const lines: string[] = []
+      lines.push(`Régimen 4H: ${regime.regime.replace(/_/g, ' ')} (ADX ${regime.adx.toFixed(1)})`)
+      if (i1d) lines.push(`1D: ${i1d.bias} RSI${i1d.rsi.toFixed(0)}`)
+      if (i4h) lines.push(`4H: ${i4h.bias} RSI${i4h.rsi.toFixed(0)} MACD${i4h.macd.hist > 0 ? '+' : ''}${i4h.macd.hist.toFixed(0)}`)
+      if (i1h) lines.push(`1H: ${i1h.bias} RSI${i1h.rsi.toFixed(0)}`)
+      if (i15) lines.push(`15M: ${i15.bias} RSI${i15.rsi.toFixed(0)}`)
+      if (ew4h.currentWave !== 'unclear') lines.push(`Elliott 4H: Onda ${ew4h.currentWave} ${ew4h.direction ?? ''} → target $${ew4h.nextTarget ? Math.round(ew4h.nextTarget).toLocaleString() : 'N/A'}`)
+      if (ew1d && ew1d.currentWave !== 'unclear') lines.push(`Elliott 1D: Onda ${ew1d.currentWave} ${ew1d.direction ?? ''}`)
+      if ((fvg4h.all?.length ?? 0) > 0) lines.push(`FVGs 4H activos: ${fvg4h.all.length}`)
+      if (liquidity.nearestBSL) lines.push(`Liquidez compra (BSL): $${Math.round(liquidity.nearestBSL).toLocaleString()}`)
+      if (liquidity.nearestSSL) lines.push(`Liquidez venta (SSL): $${Math.round(liquidity.nearestSSL).toLocaleString()}`)
+      if (abcd.tradingSignal && abcd.tradingSignal !== 'NONE') lines.push(`Patrón ABCD: ${abcd.tradingSignal} (fuerza ${abcd.signalStrength})`)
+      lines.push(`Resistencias (4H, swing highs reales): ${res.map(p => `$${Math.round(p).toLocaleString()}`).join(', ') || 'ninguna cercana'}`)
+      lines.push(`Soportes (4H, swing lows reales): ${sup.map(p => `$${Math.round(p).toLocaleString()}`).join(', ') || 'ninguno cercano'}`)
+      taTxt = lines.join('\n')
+    }
+    console.log('[BRIEF:voice] Price:', price, '| TA lines:', taTxt ? taTxt.split('\n').length : 0)
   } catch (e: unknown) {
-    console.warn('[BRIEF:voice] Price fetch failed:', e instanceof Error ? e.message : String(e))
+    console.warn('[BRIEF:voice] Market data fetch failed:', e instanceof Error ? e.message : String(e))
   }
 
-  // A2: Support/Resistance — real swing-high/low clustering from 4H candles,
-  // not left for Claude to improvise. Kraken OHLC (Binance blocked on Vercel).
-  let srTxt = ''
-  try {
-    const r = await fetch('https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=240', {
-      signal: AbortSignal.timeout(8000),
-    })
-    const d = r.ok ? (await r.json() as { result?: Record<string, unknown[][]> }) : null
-    const key = d?.result ? Object.keys(d.result).find(k => k !== 'last') : null
-    const candles = key ? (d!.result![key] as Array<[number, string, string, string, string]>) : []
-    if (candles.length >= 20) {
-      const h = candles.map(k => parseFloat(k[2]))
-      const l = candles.map(k => parseFloat(k[3]))
-      const c = candles.map(k => parseFloat(k[4]))
-      const { res, sup } = calcAutoSR(h, l, c)
-      srTxt = `Resistencias (4H, swing highs reales): ${res.map(p => `$${Math.round(p).toLocaleString()}`).join(', ') || 'ninguna cercana'}\n` +
-              `Soportes (4H, swing lows reales): ${sup.map(p => `$${Math.round(p).toLocaleString()}`).join(', ') || 'ninguno cercano'}`
-      console.log('[BRIEF:voice] S/R:', srTxt.replace(/\n/g, ' | '))
-    }
-  } catch (e: unknown) {
-    console.warn('[BRIEF:voice] S/R fetch failed:', e instanceof Error ? e.message : String(e))
-  }
-
-  // B: Macro snapshot
+  // B: Macro snapshot + extended context — Fed expectations, global markets,
+  // social sentiment, whale alerts, options/IV. All parallel, all optional.
   let macroTxt = ''
+  let extraTxt = ''
   try {
     const macro = await getMacroSnapshot()
     macroTxt    = formatMacroForPrompt(macro)
     console.log('[BRIEF:voice] Macro loaded')
+
+    const [macroIndicators, globalMarkets, socialSentiment, whaleAlert, optionsData] = await Promise.all([
+      fetchMacroIndicators().catch(() => null),
+      fetchGlobalMarkets().catch(() => null),
+      fetchSocialSentiment().catch(() => null),
+      fetchWhaleAlert().catch(() => null),
+      fetchOptionsData().catch(() => null),
+    ])
+    const fedExpectations = macroIndicators?.fedRate?.current
+      ? await fetchFedExpectations(macroIndicators.fedRate.current).catch(() => null)
+      : null
+
+    const extraLines: string[] = []
+    if (fedExpectations) extraLines.push(`Prob. recorte Fed: ${fedExpectations.cutProbability}% | FOMC: ${fedExpectations.nextMeetingDate ?? 'N/A'}`)
+    if (globalMarkets && globalMarkets.signalImpact !== 'NEUTRAL') extraLines.push(`Mercados globales: ${globalMarkets.btcCorrelation ?? ''}`)
+    if (socialSentiment) extraLines.push(`Social: ${socialSentiment.signal} (Galaxy ${socialSentiment.galaxyScore})`)
+    if (whaleAlert?.detected) extraLines.push(`🐋 Whale: ${whaleAlert.description}`)
+    if (optionsData?.iv) extraLines.push(`IV Rank: ${optionsData.iv.ivRank}/100 (${optionsData.iv.regime})`)
+    extraTxt = extraLines.join('\n')
+    console.log('[BRIEF:voice] Extended context lines:', extraLines.length)
   } catch (e: unknown) {
-    console.warn('[BRIEF:voice] Macro failed:', e instanceof Error ? e.message : String(e))
+    console.warn('[BRIEF:voice] Macro/extended context failed:', e instanceof Error ? e.message : String(e))
   }
 
   // C: Active signals
@@ -301,7 +350,7 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
 
   // E: Call Claude, then run through the coherence/style validator
   console.log('[BRIEF:voice] Calling Claude...')
-  let text = await callClaudeStandalone({ price, change24h, macroTxt, srTxt, activeSignals, focus })
+  let text = await callClaudeStandalone({ price, change24h, macroTxt, taTxt, extraTxt, activeSignals, focus })
   console.log('[BRIEF:voice] Claude responded:', text.length, 'chars')
   text = await correctBriefIfNeeded(text, activeSignals, price)
 
@@ -313,11 +362,12 @@ async function callClaudeStandalone(ctx: {
   price:         number
   change24h:     number
   macroTxt:      string
-  srTxt:         string
+  taTxt:         string
+  extraTxt:      string
   activeSignals: Array<{ side: string; trade_type: string; entry: number; pnl: number }>
   focus:         BriefFocus
 }): Promise<string> {
-  const { price, change24h, macroTxt, srTxt, activeSignals, focus } = ctx
+  const { price, change24h, macroTxt, taTxt, extraTxt, activeSignals, focus } = ctx
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set')
 
@@ -340,17 +390,18 @@ PROHIBIDO:
 - Bullets, viñetas o listas con "-" — todo en prosa, nunca en formato de lista
 - Repetir un header tipo "APEX — ..." — Telegram ya agrega esa línea por fuera, no la dupliques
 - Prometer un "próximo análisis" con hora — no controlas el cron del sistema, esa promesa no es real
-- Mencionar Max Pain o IV Rank sin datos reales
+- Mencionar Max Pain, IV Rank, ondas Elliott o patrones ABCD si NO aparecen en ANÁLISIS TÉCNICO/CONTEXTO EXTRA abajo — si aparecen ahí, son datos reales y puedes citarlos
 - Decir "Fed bajó" (está en HOLD)
 - Contradecir el sesgo de señales activas
-- Inventar niveles de soporte/resistencia — usa EXCLUSIVAMENTE los niveles reales que te doy en NIVELES TÉCNICOS abajo, nunca números que no aparezcan ahí
-- Citar cifras específicas que no estén en los datos de abajo (volumen de ETF, comparaciones históricas tipo "mínimo desde X fecha", estadísticas puntuales) — si no está en MACRO, NIVELES TÉCNICOS o SEÑALES ACTIVAS, no lo afirmes como dato concreto
+- Inventar niveles de soporte/resistencia, RSI, MACD, régimen u ondas Elliott — usa EXCLUSIVAMENTE los datos reales en ANÁLISIS TÉCNICO abajo, nunca números que no aparezcan ahí
+- Citar cifras específicas que no estén en los datos de abajo (volumen de ETF, comparaciones históricas tipo "mínimo desde X fecha", estadísticas puntuales) — si no está en ANÁLISIS TÉCNICO, MACRO, CONTEXTO EXTRA o SEÑALES ACTIVAS, no lo afirmes como dato concreto
 ESTRUCTURA: qué hace el mercado → factor principal → sesgo + niveles exactos, todo en párrafos fluidos`
 
   const userPrompt = `HORA: ${hourLocal}
 BTC PERP: ${priceStr} (${changeStr} 24h)
-NIVELES TÉCNICOS (reales, 4H — no inventes otros):\n${srTxt || 'No disponibles esta vez'}
+ANÁLISIS TÉCNICO (real, multi-timeframe — no inventes otros datos):\n${taTxt || 'No disponible esta vez'}
 MACRO:\n${macroTxt || 'No disponible'}
+CONTEXTO EXTRA (Fed, mercados globales, social, whale, opciones — solo si hay datos):\n${extraTxt || 'Sin datos adicionales'}
 SEÑALES ACTIVAS:\n${signalTxt}
 Escribe el análisis enfocado en ${focus.replace(/_/g, ' ')}.`
 
