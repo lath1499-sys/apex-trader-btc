@@ -81,7 +81,7 @@ export function calcFib(h: number[], l: number[], c: number[]): FibLevel[] {
   return [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.414, 1.618].map(lv => ({
     level: lv,
     price: up ? sh - rng * lv : sl + rng * lv,
-    label: lv === 0 ? 'SwingH' : lv === 1.0 ? 'SwingL' : `${(lv * 100).toFixed(1)}%`,
+    label: lv === 0 ? (up ? 'SwingH' : 'SwingL') : lv === 1.0 ? (up ? 'SwingL' : 'SwingH') : `${(lv * 100).toFixed(1)}%`,
     isExt: lv > 1.0,
     active: Math.abs(price - (up ? sh - rng * lv : sl + rng * lv)) / price < 0.015,
   }))

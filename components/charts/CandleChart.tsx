@@ -5,7 +5,7 @@ import { useTheme } from '@/hooks/useTheme'
 import { ColorType, createChart, CandlestickSeries, LineSeries, HistogramSeries } from 'lightweight-charts'
 import type { IChartApi, LineStyle, SeriesMarker, Time } from 'lightweight-charts'
 import type { Timeframe } from '@/lib/types'
-import { ema, calcAutoSR } from '@/lib/indicators'
+import { ema, calcAutoSR, calcFib } from '@/lib/indicators'
 import { calcVWAPSeries, calcCVD, detectBOSCHoCH, getICTKillzones } from '@/lib/scalpSignals'
 import { detectCandlePatterns } from '@/lib/candlePatterns'
 
@@ -39,6 +39,7 @@ export default function CandleChart() {
   const [showBosChoch,  setShowBosChoch]  = useState(() => loadBool('apex_show_boschoch', true))
   const [showKillzones, setShowKillzones] = useState(() => loadBool('apex_show_kz', true))
   const [showOte,       setShowOte]       = useState(() => loadBool('apex_show_ote', false))
+  const [showFib,       setShowFib]       = useState(() => loadBool('apex_show_fib', true))
 
   function tog(key: string, val: boolean, setter: (v: boolean) => void) {
     setter(val); try { localStorage.setItem(key, String(val)) } catch {}
@@ -143,6 +144,21 @@ export default function CandleChart() {
       const ewC = ew.direction === 'bullish' ? '#22c55ecc' : '#ef4444cc'
       ew.points.forEach(pt => candles.createPriceLine({ price: pt.price, color: ewC, lineWidth: 1, lineStyle: LS.LargeDashed as LineStyle, axisLabelVisible: true, title: pt.label }))
       if (ew.nextTarget) candles.createPriceLine({ price: ew.nextTarget, color: '#fbbf24aa', lineWidth: 1, lineStyle: LS.Dotted as LineStyle, title: `${ew.currentWave}→` })
+    }
+
+    // Fibonacci retracement (last 60 bars, core levels only)
+    if (showFib) {
+      const fibLevels = calcFib(klines.map(k => k.h), klines.map(k => k.l), closes)
+      fibLevels.filter(f => !f.isExt).forEach(f => {
+        candles.createPriceLine({
+          price: f.price,
+          color: f.active ? '#eab308' : '#eab30866',
+          lineWidth: f.active ? 2 : 1,
+          lineStyle: LS.Dotted as LineStyle,
+          axisLabelVisible: true,
+          title: `Fib ${f.label}`,
+        })
+      })
     }
 
     // Active trade idea entry / SL / TPs
@@ -343,7 +359,7 @@ export default function CandleChart() {
 
     chart.timeScale().fitContent()
   }, [rawK, chartTf, T, fvgs, liquidity, elliottWaves, tradeIdea, showSignals, signalHistory,
-      showVwap, showCvd, showBosChoch, showOte, scalpSignal])
+      showVwap, showCvd, showBosChoch, showOte, showFib, scalpSignal])
 
   const kzNow  = getICTKillzones().find(kz => kz.active)
 
@@ -380,6 +396,7 @@ export default function CandleChart() {
           ['apex_show_boschoch', showBosChoch,  setShowBosChoch,  'BOS/CHoCH','#00d084'],
           ['apex_show_kz',       showKillzones, setShowKillzones, 'KZ',       '#7b9fff'],
           ['apex_show_ote',      showOte,       setShowOte,       'OTE',      '#a78bfa'],
+          ['apex_show_fib',      showFib,       setShowFib,       'FIB',      '#eab308'],
         ] as [string, boolean, (v: boolean) => void, string, string][]).map(([k, val, fn, lbl, col]) => (
           <button key={k} onClick={() => tog(k, !val, fn)} style={{
             background: val ? col + '22' : 'transparent',
@@ -415,6 +432,8 @@ export default function CandleChart() {
           { c: '#f97316', dashed: false, lbl: 'SSL'  },
           { c: '#22c55e88', dashed: false, lbl: 'FVG↑' },
           { c: '#ef444488', dashed: false, lbl: 'FVG↓' },
+          { c: '#eab308',   dashed: false, lbl: 'Fib'  },
+          { c: '#22c55ecc', dashed: true,  lbl: 'EW'   },
         ].map(({ c, dashed, lbl }) => (
           <div key={lbl} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <div style={{ width: 16, height: dashed ? 0 : 2, background: dashed ? 'none' : c, borderTop: dashed ? `2px dashed ${c}` : 'none' }} />
