@@ -164,18 +164,18 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
 
   // ── 1. TP3 — ONLY if both TP1 and TP2 were already hit ──────────────────
   if (sig.tp1Hit && sig.tp2Hit) {
-    const v3 = validateTPEvent(sig, 3, price)
-    if (!v3.valid) {
-      console.error(`[MONITOR] TP3 BLOCKED: ${v3.reason} | ${sig.id}`)
-      await sendTelegram(
-        `🚨 <b>TP3 bloqueado — validación secuencial</b>\n` +
-        `Razón: <i>${v3.reason}</i>\n` +
-        `Signal: <code>${sig.id}</code>`,
-      ).catch(() => {})
-      return null
-    }
     const tp3Hit = isLong ? price >= sig.idea.tp3 : price <= sig.idea.tp3
     if (tp3Hit) {
+      const v3 = validateTPEvent(sig, 3, price)
+      if (!v3.valid) {
+        console.error(`[MONITOR] TP3 BLOCKED: ${v3.reason} | ${sig.id}`)
+        await sendTelegram(
+          `🚨 <b>TP3 bloqueado — validación secuencial</b>\n` +
+          `Razón: <i>${v3.reason}</i>\n` +
+          `Signal: <code>${sig.id}</code>`,
+        ).catch(() => {})
+        return null
+      }
       const tp3ClosePct = sig.tp3ClosePct ?? 25
       const tp3Banked   = parseFloat(((tp3ClosePct / 100) * tp3Pnl).toFixed(3))
       const finalPnl    = parseFloat(((sig.totalBankedPnl ?? 0) + tp3Banked).toFixed(3))
@@ -203,13 +203,13 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
 
   // ── 2. TP2 (only if TP1 hit and TP2 not yet hit) ─────────────────────────
   if (sig.tp1Hit && !sig.tp2Hit) {
-    const v2 = validateTPEvent(sig, 2, price)
-    if (!v2.valid) {
-      console.error(`[MONITOR] TP2 BLOCKED: ${v2.reason} | ${sig.id}`)
-      return null
-    }
     const tp2Hit = isLong ? price >= sig.idea.tp2 : price <= sig.idea.tp2
     if (tp2Hit) {
+      const v2 = validateTPEvent(sig, 2, price)
+      if (!v2.valid) {
+        console.error(`[MONITOR] TP2 BLOCKED: ${v2.reason} | ${sig.id}`)
+        return null
+      }
       const tp2ClosePct    = sig.tp2ClosePct ?? 35
       const tp2Banked      = parseFloat(((tp2ClosePct / 100) * tp2Pnl).toFixed(3))
       const newTotalBanked = parseFloat(((sig.tp1BankedPnl ?? 0) + tp2Banked).toFixed(3))
@@ -237,13 +237,13 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
 
   // ── 3. TP1 (only if not yet hit) ─────────────────────────────────────────
   if (!sig.tp1Hit) {
-    const v1 = validateTPEvent(sig, 1, price)
-    if (!v1.valid) {
-      console.error(`[MONITOR] TP1 BLOCKED: ${v1.reason} | ${sig.id}`)
-      return null
-    }
     const tp1Hit = isLong ? price >= sig.idea.tp1 : price <= sig.idea.tp1
     if (tp1Hit) {
+      const v1 = validateTPEvent(sig, 1, price)
+      if (!v1.valid) {
+        console.error(`[MONITOR] TP1 BLOCKED: ${v1.reason} | ${sig.id}`)
+        return null
+      }
       const tp1ClosePct = sig.tp1ClosePct ?? 40
       const tp1Banked   = parseFloat(((tp1ClosePct / 100) * tp1Pnl).toFixed(3))
       const newRemaining = 100 - tp1ClosePct
