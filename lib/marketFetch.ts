@@ -114,8 +114,8 @@ export async function fetchMarketData(): Promise<FetchedMarket> {
   type LSRData    = Array<{ longShortRatio: string; longAccount: string; shortAccount: string }>
   type FGData     = { data: Array<{ value: string; value_classification: string }> }
   type OBData     = { bids: [string, string][]; asks: [string, string][] }
-  type BybitTick  = { result: { list: Array<{ lastPrice: string }> } }
-  type KrakenData = { result: Record<string, { c: [string] }> }
+  type BybitTick  = { result: { list: Array<{ lastPrice: string; price24hPcnt: string }> } }
+  type KrakenData = { result: Record<string, { c: [string]; o: string }> }
 
   const [tick, prem, oi, lsr, fng, ob, byT, kraT] = await Promise.all([
     safeFetch(`${B_SPOT}/api/v3/ticker/24hr?symbol=BTCUSDT`),
@@ -161,15 +161,23 @@ export async function fetchMarketData(): Promise<FetchedMarket> {
     const fg = ((fng as FGData).data ?? [])[0]
     if (fg) { result.fg = +fg.value; result.fgLabel = fg.value_classification }
   }
+  let bybitChange: number | null = null, krakenChange: number | null = null
   if (byT) {
     const row = ((byT as BybitTick).result?.list ?? [])[0]
-    if (row) result.bybitPrice = +row.lastPrice
+    if (row) {
+      result.bybitPrice = +row.lastPrice
+      if (row.price24hPcnt) bybitChange = +row.price24hPcnt * 100
+    }
   }
   if (kraT) {
     const kraResult = (kraT as KrakenData).result
     if (kraResult) {
       const row = Object.values(kraResult)[0]
-      if (row) result.krakenPrice = +row.c[0]
+      if (row) {
+        result.krakenPrice = +row.c[0]
+        const open = +row.o
+        if (open > 0) krakenChange = (result.krakenPrice - open) / open * 100
+      }
     }
   }
   if (ob) result.orderBook = ob as OBData
@@ -178,6 +186,13 @@ export async function fetchMarketData(): Promise<FetchedMarket> {
   // Vercel IPs are often blocked by Binance — Bybit/Kraken serve as reliable fallbacks
   if (result.price === null) {
     result.price = result.bybitPrice ?? result.krakenPrice
+  }
+
+  // Change% fallback: Binance → Bybit → Kraken (mirrors price fallback above).
+  // Binance's ticker being blocked left `change` stuck at null → callers coerced
+  // it to 0 with `?? 0`, showing a fake "0.00%" that biased the brief's narrative.
+  if (result.change === null) {
+    result.change = bybitChange ?? krakenChange
   }
 
   // Klines: Binance → Bybit → Kraken (each fallback only if previous returns null)
