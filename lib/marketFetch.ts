@@ -2,16 +2,25 @@
 //   app/api/binance/route.ts  (HTTP proxy for the browser)
 //   app/api/agent/route.ts    (background agent — direct import, no HTTP hop)
 //
-// Sources, in priority order:
-//   Price/ticker  — Binance Spot → Bybit Spot → Kraken
+// Sources:
+//   Price/ticker  — median of every source that responds: Binance, Bybit,
+//                   Kraken, Coinbase, CoinGecko. Binance AND Bybit both
+//                   routinely fail to respond from Vercel's IPs (geo/rate
+//                   restrictions), which used to leave Kraken as the de
+//                   facto sole source despite being named "last fallback" —
+//                   and Kraken alone can run 0.1%+ off Binance, a real bite
+//                   out of a tight Scalp stop. Median resists any single
+//                   exchange's spread or an outright failure dictating price.
 //   Funding/OI    — Binance Futures (nullable)
 //   Klines        — Binance Spot → Bybit Spot (per TF, if Binance blocked)
 
-const B_SPOT = 'https://api.binance.com'
-const B_FUT  = 'https://fapi.binance.com'
-const FG_API = 'https://api.alternative.me/fng/'
-const BYBIT  = 'https://api.bybit.com'
-const KRAKEN = 'https://api.kraken.com/0/public'
+const B_SPOT    = 'https://api.binance.com'
+const B_FUT     = 'https://fapi.binance.com'
+const FG_API    = 'https://api.alternative.me/fng/'
+const BYBIT     = 'https://api.bybit.com'
+const KRAKEN    = 'https://api.kraken.com/0/public'
+const COINBASE  = 'https://api.coinbase.com'
+const GECKO     = 'https://api.coingecko.com'
 
 export const TF_LIMITS: Record<string, number> = {
   '3d': 100, '1d': 300, '12h': 150, '4h': 300, '1h': 150, '15m': 150, '5m': 100, '3m': 100, '1m': 100,
@@ -43,12 +52,14 @@ export interface FetchedMarket {
   lsr:         number | null
   longPct:     number | null
   shortPct:    number | null
-  fg:          number | null
-  fgLabel:     string | null
-  bybitPrice:  number | null
-  krakenPrice: number | null
-  orderBook:   { bids: [string, string][]; asks: [string, string][] } | null
-  klines:      Record<string, MarketKline[]>
+  fg:           number | null
+  fgLabel:      string | null
+  bybitPrice:   number | null
+  krakenPrice:  number | null
+  coinbasePrice: number | null
+  geckoPrice:   number | null
+  orderBook:    { bids: [string, string][]; asks: [string, string][] } | null
+  klines:       Record<string, MarketKline[]>
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -65,6 +76,13 @@ async function safeFetch(url: string, timeoutMs = 8_000): Promise<unknown> {
   } finally {
     clearTimeout(timer)
   }
+}
+
+function median(nums: number[]): number | null {
+  if (!nums.length) return null
+  const sorted = [...nums].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
 }
 
 function parseKlines(raw: unknown): MarketKline[] | null {
@@ -114,10 +132,12 @@ export async function fetchMarketData(): Promise<FetchedMarket> {
   type LSRData    = Array<{ longShortRatio: string; longAccount: string; shortAccount: string }>
   type FGData     = { data: Array<{ value: string; value_classification: string }> }
   type OBData     = { bids: [string, string][]; asks: [string, string][] }
-  type BybitTick  = { result: { list: Array<{ lastPrice: string; price24hPcnt: string }> } }
-  type KrakenData = { result: Record<string, { c: [string]; o: string }> }
+  type BybitTick    = { result: { list: Array<{ lastPrice: string; price24hPcnt: string }> } }
+  type KrakenData   = { result: Record<string, { c: [string]; o: string }> }
+  type CoinbaseResp = { data?: { amount: string } }
+  type GeckoResp    = { bitcoin?: { usd: number; usd_24h_change?: number } }
 
-  const [tick, prem, oi, lsr, fng, ob, byT, kraT] = await Promise.all([
+  const [tick, prem, oi, lsr, fng, ob, byT, kraT, cbT, ggT] = await Promise.all([
     safeFetch(`${B_SPOT}/api/v3/ticker/24hr?symbol=BTCUSDT`),
     safeFetch(`${B_FUT}/fapi/v1/premiumIndex?symbol=BTCUSDT`),
     safeFetch(`${B_FUT}/fapi/v1/openInterest?symbol=BTCUSDT`),
@@ -126,19 +146,25 @@ export async function fetchMarketData(): Promise<FetchedMarket> {
     safeFetch(`${B_SPOT}/api/v3/depth?symbol=BTCUSDT&limit=20`),
     safeFetch(`${BYBIT}/v5/market/tickers?category=spot&symbol=BTCUSDT`),
     safeFetch(`${KRAKEN}/Ticker?pair=XBTUSD`),
+    safeFetch(`${COINBASE}/v2/prices/BTC-USD/spot`),
+    safeFetch(`${GECKO}/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true`),
   ])
 
   const result: FetchedMarket = {
     price: null, change: null, high: null, low: null, vol: null,
     funding: null, mark: null, oi: null, lsr: null, longPct: null, shortPct: null,
     fg: null, fgLabel: null, bybitPrice: null, krakenPrice: null,
+    coinbasePrice: null, geckoPrice: null,
     orderBook: null, klines: {},
   }
 
+  // Binance still supplies high/low/vol (no cross-exchange equivalent fetched
+  // here) but its price/change now feed the median below, not a direct assign.
+  let binancePrice: number | null = null, binanceChange: number | null = null
   if (tick) {
     const t = tick as TickerData
-    result.price  = +t.lastPrice
-    result.change = +t.priceChangePercent
+    binancePrice  = +t.lastPrice
+    binanceChange = +t.priceChangePercent
     result.high   = +t.highPrice
     result.low    = +t.lowPrice
     result.vol    = +t.quoteVolume
@@ -180,20 +206,33 @@ export async function fetchMarketData(): Promise<FetchedMarket> {
       }
     }
   }
+  if (cbT) {
+    const amt = +((cbT as CoinbaseResp).data?.amount ?? NaN)
+    if (amt > 0) result.coinbasePrice = amt
+  }
+  let geckoChange: number | null = null
+  if (ggT) {
+    const btc = (ggT as GeckoResp).bitcoin
+    if (btc?.usd) {
+      result.geckoPrice = btc.usd
+      if (typeof btc.usd_24h_change === 'number') geckoChange = btc.usd_24h_change
+    }
+  }
   if (ob) result.orderBook = ob as OBData
 
-  // Price fallback: Binance → Bybit → Kraken
-  // Vercel IPs are often blocked by Binance — Bybit/Kraken serve as reliable fallbacks
-  if (result.price === null) {
-    result.price = result.bybitPrice ?? result.krakenPrice
-  }
+  // Price: median of every source that actually responded, not a first-
+  // available cascade. Binance and Bybit both routinely fail to respond from
+  // Vercel's IPs, which used to leave Kraken alone setting the price despite
+  // being the nominal last resort — and a single exchange can run 0.1%+ off
+  // the rest, a real bite out of a tight Scalp stop.
+  const priceSources = [binancePrice, result.bybitPrice, result.krakenPrice, result.coinbasePrice, result.geckoPrice]
+    .filter((p): p is number => p != null && p > 0)
+  result.price = median(priceSources)
 
-  // Change% fallback: Binance → Bybit → Kraken (mirrors price fallback above).
-  // Binance's ticker being blocked left `change` stuck at null → callers coerced
-  // it to 0 with `?? 0`, showing a fake "0.00%" that biased the brief's narrative.
-  if (result.change === null) {
-    result.change = bybitChange ?? krakenChange
-  }
+  // Change%: same median approach, across whichever sources provide it.
+  const changeSources = [binanceChange, bybitChange, krakenChange, geckoChange]
+    .filter((c): c is number => c != null)
+  result.change = median(changeSources)
 
   // Klines: Binance → Bybit → Kraken (each fallback only if previous returns null)
   const klinesEntries = await Promise.all(

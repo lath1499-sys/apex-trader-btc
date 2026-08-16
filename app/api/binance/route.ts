@@ -64,8 +64,10 @@ export async function GET(req: Request) {
       shortPct:    data.shortPct,
       fg:          data.fg,
       fgLabel:     data.fgLabel,
-      bybitPrice:  data.bybitPrice,
-      krakenPrice: data.krakenPrice,
+      bybitPrice:    data.bybitPrice,
+      krakenPrice:   data.krakenPrice,
+      coinbasePrice: data.coinbasePrice,
+      geckoPrice:    data.geckoPrice,
     }
     // Strip nulls so the browser gets the same shape as before
     for (const k of Object.keys(market)) {
