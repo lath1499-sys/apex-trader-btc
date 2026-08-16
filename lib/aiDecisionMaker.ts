@@ -368,6 +368,21 @@ Si el SL no coincide con el tipo → ajusta el tipo, no el SL.`
         throw new Error(`Invalid sl: ${decision.sl}`)
     }
 
+    // Directional sanity check — SL/TPs must sit on the correct side of entry.
+    // A wrong-side TP (e.g. above entry on a SHORT) reads as "instantly hit" to
+    // every downstream consumer (client price-tick handler, stop management),
+    // silently collapsing the real stop to breakeven the moment price ticks.
+    if (decision.action === 'LONG' || decision.action === 'SHORT') {
+      const isLong = decision.action === 'LONG'
+      if (isLong ? decision.sl >= decision.entry : decision.sl <= decision.entry)
+        throw new Error(`Invalid SL direction for ${decision.action}: sl ${decision.sl} vs entry ${decision.entry}`)
+      for (const [label, tp] of [['tp1', decision.tp1], ['tp2', decision.tp2], ['tp3', decision.tp3]] as const) {
+        if (typeof tp !== 'number' || !tp) continue
+        if (isLong ? tp <= decision.entry : tp >= decision.entry)
+          throw new Error(`Invalid ${label} direction for ${decision.action}: ${label} ${tp} vs entry ${decision.entry}`)
+      }
+    }
+
     // Defaults for portfolio coherence fields (backward compat if Claude omits them)
     decision.portfolioAssessment  = decision.portfolioAssessment  ?? ''
     decision.positionsToClose     = Array.isArray(decision.positionsToClose) ? decision.positionsToClose : []
