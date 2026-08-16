@@ -210,7 +210,12 @@ export function useSignalHistory() {
     const current = useApexStore.getState().signalHistory
     if (!current.some(r => r.status === 'active' || r.status === 'pending_confirmation' || r.status === 'tp1_hit' || r.status === 'tp2_hit')) return
 
-    // ── 1. TP/SL hit detection ────────────────────────────────────────────────
+    // ── 1. TP/SL hit detection — LOCAL DISPLAY ONLY ─────────────────────────────
+    // The server (monitor.ts) is the sole authority for TP/SL/breakeven state —
+    // it validates each TP event (validateTPEvent) before acting on it; this
+    // client-side pass doesn't. A wrong-side TP price previously slipped through
+    // here and silently collapsed a live stop-loss to entry. Never sync this
+    // computation's mutations back to Supabase.
     let updated = updateSignalStatusesByPrice(current, price)
 
     // Note: NTFY is sent server-side only (app/api/agent/route.ts).
@@ -238,7 +243,10 @@ export function useSignalHistory() {
       return rec
     })
 
-    // ── 3. Trailing stop / breakeven management ────────────────────────────────
+    // ── 3. Trailing stop / breakeven management — LOCAL DISPLAY ONLY ───────────
+    // Same reasoning as step 1: evaluate.ts already runs this exact function
+    // server-side and is what actually moves the authoritative SL. Computing
+    // it here too is just for a responsive dashboard; never sync the result.
     const k4h = rawK['4h'] ?? []
     updated = updated.map(rec => {
       if (rec.status !== 'active') return rec
@@ -272,12 +280,16 @@ export function useSignalHistory() {
       })
       return merged
     })
-    // Sync ONLY non-terminal changes to Supabase (SL moves, warning flags).
-    // Server agent is sole authority for closing signals — client must NOT write
-    // sl_hit / tp*_hit / breakeven back to Supabase or it races with the server.
-    updated
-      .filter((r, i) => r !== current[i] && (r.status === 'active' || r.status === 'pending_confirmation' || r.status === 'tp1_hit' || r.status === 'tp2_hit'))
-      .forEach(r => saveSignalToCloud(r).catch(() => {}))
+    // Sync to Supabase: ONLY the slWarningFired flag, built from the untouched
+    // `current` record — never the `updated` one, which may carry this pass's
+    // own sl/tp1Hit/tp2Hit mutations from steps 1 and 3 above. Server agent
+    // (monitor.ts + evaluate.ts) is sole authority for all TP/SL/breakeven
+    // state; writing those fields from the client is what caused a wrong-side
+    // TP to silently overwrite a live stop-loss with entry price.
+    current.forEach((rec, i) => {
+      if (rec.status !== 'active' || rec.slWarningFired || !updated[i]?.slWarningFired) return
+      saveSignalToCloud({ ...rec, slWarningFired: true }).catch(() => {})
+    })
   }, [mkt.price, mkt, inds, rawK, setSignalHistory])
 
   // Candle-based update for accurate OHLC TP/SL fills (runs on kline refresh)
