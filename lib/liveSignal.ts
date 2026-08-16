@@ -52,7 +52,7 @@ export interface PriceSourceResult {
   ms:     number
 }
 
-async function fetchBtcSpotPrice(): Promise<number | null> {
+export async function fetchBtcSpotPrice(): Promise<number | null> {
   const safe = async <T>(url: string): Promise<T | null> => {
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(6000) })

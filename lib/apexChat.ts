@@ -6,7 +6,7 @@ import { createClient }                           from '@supabase/supabase-js'
 import { getCapitalState, DEFAULT_CAPITAL_CONFIG } from '@/lib/capitalManager'
 import { getMacroSnapshot }                        from '@/lib/macroData'
 import { fetchBTCNews, formatNewsForPrompt }       from '@/lib/newsFetcher'
-import { getLiveSignalStates }                     from '@/lib/liveSignal'
+import { getLiveSignalStates, fetchBtcSpotPrice }  from '@/lib/liveSignal'
 import type { RawSignalRow }                       from '@/lib/liveSignal'
 
 function getSb() {
@@ -36,6 +36,7 @@ interface ClosedRow {
   side:         string
   trade_type:   string
   pnl:          number | null
+  pnl_r:        number | null
   status:       string
   close_reason: string | null
 }
@@ -62,7 +63,10 @@ export async function chatWithAPEX(
   const sb = getSb()
 
   // ── 1. Gather full market context in parallel ────────────────────────────────
-  const [capRes, macroRes, newsRes, activeRes, closedRes, memRes, priceRes] =
+  // Pulls the SAME technical snapshot + performance history the decide pipeline
+  // uses, so this chat isn't a differently-informed persona from the one that
+  // actually opens trades.
+  const [capRes, macroRes, newsRes, activeRes, closedRes, memRes, priceRes, stateRes] =
     await Promise.allSettled([
       getCapitalState(DEFAULT_CAPITAL_CONFIG),
       getMacroSnapshot(),
@@ -78,10 +82,10 @@ export async function chatWithAPEX(
       sb
         ? Promise.resolve(
             sb.from('apex_signals')
-              .select('side, trade_type, pnl, status, close_reason')
+              .select('side, trade_type, pnl, pnl_r, status, close_reason')
               .in('status', ['sl_hit', 'tp3_hit', 'closed_manual', 'breakeven'])
               .order('created_at', { ascending: false })
-              .limit(5),
+              .limit(50),
           ).catch(() => ({ data: null }))
         : Promise.resolve({ data: null }),
       sb
@@ -92,18 +96,26 @@ export async function chatWithAPEX(
               .single(),
           ).catch(() => ({ data: null }))
         : Promise.resolve({ data: null }),
-      fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT', {
-        signal: AbortSignal.timeout(4000),
-      })
-        .then(r => r.json() as Promise<{ price?: string }>)
-        .catch(() => ({ price: undefined as string | undefined })),
+      fetchBtcSpotPrice(),
+      sb
+        ? Promise.resolve(
+            sb.from('apex_agent_state')
+              .select('last_bias, last_trade_type, last_confidence, updated_at')
+              .eq('id', 'current')
+              .maybeSingle(),
+          ).catch(() => ({ data: null }))
+        : Promise.resolve({ data: null }),
     ])
 
   const capital    = capRes.status    === 'fulfilled' ? capRes.value    : null
   const macro      = macroRes.status  === 'fulfilled' ? macroRes.value  : null
   const news       = newsRes.status   === 'fulfilled' ? newsRes.value   : null
-  const priceData  = priceRes.status  === 'fulfilled' ? priceRes.value  : { price: undefined as string | undefined }
-  const btcPrice   = parseFloat(priceData?.price ?? '') || 0
+  const btcPrice   = (priceRes.status === 'fulfilled' ? priceRes.value : null) ?? 0
+  const stateData  = (
+    stateRes.status === 'fulfilled'
+      ? (stateRes.value as { data: unknown }).data
+      : null
+  ) as { last_bias: string | null; last_trade_type: string | null; last_confidence: string | null; updated_at: string | null } | null
 
   const rawActive = (
     activeRes.status === 'fulfilled'
@@ -151,10 +163,28 @@ export async function chatWithAPEX(
 
   const closedSummary = closedData.length === 0
     ? 'Ninguna reciente'
-    : closedData.map(s => {
+    : closedData.slice(0, 5).map(s => {
         const pnl = s.pnl ?? 0
         return `${s.side} ${s.trade_type}: ${s.status} | P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% | ${s.close_reason ?? '—'}`
       }).join('\n')
+
+  // Real performance summary — same source data decide's perfStats uses, so
+  // "how are you performing" gets a truthful, consistent answer here too.
+  const perfSummary = closedData.length >= 5
+    ? (() => {
+        const wins   = closedData.filter(s => (s.pnl ?? 0) > 0).length
+        const wr     = Math.round(wins / closedData.length * 100)
+        const totalR = closedData.reduce((s, c) => s + (c.pnl_r ?? 0), 0)
+        return `${closedData.length} trades | WR ${wr}% | Total R: ${totalR >= 0 ? '+' : ''}${totalR.toFixed(1)}R`
+      })()
+    : 'Historial insuficiente aún (mínimo 5 trades cerrados)'
+
+  const techSnapshot = stateData?.updated_at
+    ? (() => {
+        const minsAgo = Math.round((Date.now() - new Date(stateData.updated_at!).getTime()) / 60_000)
+        return `ÚLTIMA DECISIÓN DEL AGENTE (hace ${minsAgo}min): ${stateData.last_bias ?? '?'} ${stateData.last_trade_type ?? ''} | Confianza: ${stateData.last_confidence ?? '?'}`
+      })()
+    : null
 
   const stageLabels = { 1: 'NORMAL (5%)', 2: 'SURVIVAL (2%)', 3: 'HARD STOP' } as const
   const stageLabel  = capital ? stageLabels[capital.drawdownStage] : 'desconocido'
@@ -167,12 +197,14 @@ export async function chatWithAPEX(
     macro
       ? `CPI: ${macro.cpi_yoy}% | Fed: ${macro.fed_rate}% | DXY: ${macro.dxy} | F&G: ${macro.fear_greed}/100`
       : '',
+    techSnapshot ?? '',
     ``,
     `SEÑALES ACTIVAS:`,
     signalsSummary,
     ``,
     `ÚLTIMAS CERRADAS:`,
     closedSummary,
+    `RENDIMIENTO REAL: ${perfSummary}`,
     ``,
     capital
       ? `CAPITAL: Balance ${P(capital.availableBalance)} | Desplegado ${P(capital.deployedCapital)} | Stage: ${stageLabel} | P&L mes: ${capital.monthlyPnlPct >= 0 ? '+' : ''}${capital.monthlyPnlPct.toFixed(2)}%`
