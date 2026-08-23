@@ -269,8 +269,8 @@ async function processSignal(sig: SignalRecord, price: number, ntfyTopic: string
   }
 
   // ── 4. Expiry — force-close signals past their max trade duration ────────────
-  const maxHours = sig.idea.tradeType === 'Scalp'    ? 3
-                 : sig.idea.tradeType === 'DayTrade'  ? 26
+  const maxHours = sig.idea.tradeType === 'Scalp'    ? 4
+                 : sig.idea.tradeType === 'DayTrade'  ? 27
                  : 0  // Swing: no auto-expiry
   if (maxHours > 0) {
     const openedHrs = (Date.now() - new Date(sig.createdAt).getTime()) / 3_600_000
