@@ -4,7 +4,6 @@ import { useApexStore } from '@/store/apexStore'
 import { useTheme } from '@/hooks/useTheme'
 import { fmt } from '@/lib/buildContext'
 import { calcSignalStats, closeManualSignal, loadSignalHistory, saveSignalHistory } from '@/lib/signalHistory'
-import { getSupabase } from '@/lib/supabase'
 import { getLearnedWeights } from '@/lib/scoreWeights'
 import type { TradeIdea, SignalRecord, IndicatorMap, MarketData } from '@/lib/types'
 import type { FVGResult } from '@/lib/fvg'
@@ -16,7 +15,7 @@ import type { ScalpSignal }      from '@/lib/scalpSignals'
 import { usePerformanceStats }  from '@/hooks/useSignalHistory'
 import { analyzeMacroSentiment } from '@/lib/macroSentiment'
 import type { MacroSentiment }   from '@/lib/macroSentiment'
-import { calcPositionSize, loadCapitalConfig, DEFAULT_CONFIG } from '@/lib/capitalManagement'
+import { calcPositionSize, DEFAULT_CONFIG } from '@/lib/capitalManagement'
 import type { CapitalConfig, PositionSize } from '@/lib/capitalManagement'
 import PerformanceCalendar from './PerformanceCalendar'
 
@@ -228,9 +227,21 @@ function IdeaCard({ idea, rec, defaultOpen, onClose }: {
   const [alertEmail] = useState(() => { try { return localStorage.getItem('apex_alert_email') ?? '' } catch { return '' } })
   const [capitalConfig, setCapitalConfig] = useState<CapitalConfig>(DEFAULT_CONFIG)
   useEffect(() => {
-    const sb = getSupabase()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    loadCapitalConfig(sb as any).then(setCapitalConfig)
+    // loadCapitalConfig() read columns (total_capital, max_risk_per_trade...)
+    // that don't exist in the real apex_capital_config schema -- it always
+    // silently fell back to DEFAULT_CONFIG's hardcoded $1000, regardless of
+    // real P&L. /api/capital exposes the actual, evolving balance instead.
+    fetch('/api/capital')
+      .then(r => r.json() as Promise<{ state?: { availableBalance: number; effectiveRiskPct: number } }>)
+      .then(d => {
+        if (!d.state) return
+        setCapitalConfig(prev => ({
+          ...prev,
+          totalCapital:    d.state!.availableBalance,
+          maxRiskPerTrade: d.state!.effectiveRiskPct * 100,
+        }))
+      })
+      .catch(() => {})
   }, [])
   const sideCol = idea.side === 'LONG' ? T.bull : T.danger
   const confCol = idea.confidence === 'ALTA' ? T.bull : idea.confidence === 'MEDIA' ? T.warn : T.danger
