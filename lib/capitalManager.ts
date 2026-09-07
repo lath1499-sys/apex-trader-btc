@@ -52,25 +52,37 @@ export async function getCapitalState(
   let monthlyStartBalance = 0
   let maxCapitalDeployedPct = config.maxCapitalDeployedPct
   let maxPerTradePct        = config.maxPerTradePct
+  let resetAnchor: Date | null = null
+  let needsReset = false
 
   if (sb) {
     const { data: cfg } = await Promise.resolve(
       sb.from('apex_capital_config')
-        .select('monthly_start_balance, max_capital_deployed_pct, max_per_trade_pct')
+        .select('monthly_start_balance, max_capital_deployed_pct, max_per_trade_pct, month_reset_at')
         .eq('id', 'default')
         .single()
-    ).catch(() => ({ data: null })) as { data: Record<string, number> | null }
+    ).catch(() => ({ data: null })) as { data: Record<string, string | number> | null }
     if (cfg) {
-      monthlyStartBalance   = cfg.monthly_start_balance   ?? 0
-      maxCapitalDeployedPct = cfg.max_capital_deployed_pct ?? config.maxCapitalDeployedPct
-      maxPerTradePct        = cfg.max_per_trade_pct        ?? config.maxPerTradePct
+      monthlyStartBalance   = Number(cfg.monthly_start_balance)   || 0
+      maxCapitalDeployedPct = Number(cfg.max_capital_deployed_pct) || config.maxCapitalDeployedPct
+      maxPerTradePct        = Number(cfg.max_per_trade_pct)        || config.maxPerTradePct
+      resetAnchor           = cfg.month_reset_at ? new Date(String(cfg.month_reset_at)) : null
+
+      // resetMonthlyTracking() existed but nothing ever called it — month_reset_at
+      // sat frozen since July. Anchoring the P&L query to it (below) rather than
+      // to the current calendar month means no month's P&L is ever silently lost
+      // just because a reset was missed; we self-heal the reset once we know the
+      // resulting balance (step 4).
+      const now = new Date()
+      needsReset = !resetAnchor
+        || resetAnchor.getUTCFullYear() !== now.getUTCFullYear()
+        || resetAnchor.getUTCMonth()    !== now.getUTCMonth()
     }
   }
 
-  // 2. Monthly realized P&L from closed signals this month
-  const monthStart = new Date()
-  monthStart.setDate(1)
-  monthStart.setHours(0, 0, 0, 0)
+  // 2. Realized P&L since the last reset anchor (NOT just the current calendar
+  //    month — see note above on why that would drop whole months of P&L).
+  const pnlSince = resetAnchor ?? (() => { const d = new Date(); d.setUTCDate(1); d.setUTCHours(0, 0, 0, 0); return d })()
 
   let monthlyPnl = 0
   if (sb) {
@@ -78,7 +90,7 @@ export async function getCapitalState(
       sb.from('apex_signals')
         .select('pnl, notional_usdt, leverage')
         .in('status', ['sl_hit', 'tp3_hit', 'closed_manual', 'breakeven'])
-        .gte('closed_at', monthStart.toISOString())
+        .gte('closed_at', pnlSince.toISOString())
     ).catch(() => ({ data: null })) as { data: Array<{ pnl: number | null; notional_usdt: number | null; leverage: number | null }> | null }
 
     monthlyPnl = (monthlyClosed ?? []).reduce((sum: number, s) => {
@@ -111,6 +123,20 @@ export async function getCapitalState(
   const freeCapital         = Math.max(0, availableBalance - deployedCapital)
   const drawdownPct         = monthlyStartBalance > 0 ? (monthlyPnl / monthlyStartBalance) * 100 : 0
   const monthlyProfitTarget = monthlyStartBalance * 0.15
+
+  // Perform the self-heal now that we know the real balance: this month/these
+  // missed months' P&L is already folded into availableBalance via pnlSince
+  // above, so the new anchor is simply "now", starting from today's balance.
+  if (sb && needsReset && monthlyStartBalance > 0) {
+    await Promise.resolve(
+      sb.from('apex_capital_config').update({
+        monthly_start_balance: availableBalance,
+        month_reset_at:        new Date().toISOString(),
+        updated_at:            new Date().toISOString(),
+      }).eq('id', 'default'),
+    ).catch(() => {})
+    console.log(`[CAPITAL] Monthly auto-reset — new anchor balance: $${availableBalance.toFixed(2)}`)
+  }
 
   // 5. Capital limits
   const maxDeployable   = availableBalance * maxCapitalDeployedPct
