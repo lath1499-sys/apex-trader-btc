@@ -16,7 +16,8 @@ import { askClaudeForDecision }                                          from '@
 import { saveSignalToCloud, loadSignalsFromCloud, getSupabaseServer }    from '@/lib/supabase'
 import { fetchBTCNews }                                                   from '@/lib/newsFetcher'
 import { fetchMarketData }                                                from '@/lib/marketFetch'
-import { runInds }                                                        from '@/lib/indicators'
+import { runInds, calcATR }                                               from '@/lib/indicators'
+import { calcLearnedWeights }                                             from '@/lib/selfLearning'
 import { detectMarketRegime }                                             from '@/lib/marketRegime'
 import { detectFVGs }                                                     from '@/lib/fvg'
 import { detectLiquidity }                                                from '@/lib/liquidity'
@@ -121,7 +122,14 @@ export async function GET(req: NextRequest) {
         { '15m': klines['15m'], '1h': klines['1h'], '4h': klines['4h'], '1d': klines['1d'] },
         price,
       )
-      console.log(`[DECIDE] TA — regime:${regime?.regime ?? '?'} FVG4h:${fvg4h.all?.length ?? 0} EW4h:${ew4h?.currentWave ?? '?'} ABCD:${abcdAnalysis.tradingSignal}`)
+      // ATR(14) on 4H — volatility reference for SL sizing. Was computed
+      // nowhere in the codebase before; SL distance had no floor tied to
+      // actual recent volatility, just whatever structure level Claude cited.
+      const atr4h    = klines['4h'].length >= 20 ? calcATR(
+        klines['4h'].map(k => k.h), klines['4h'].map(k => k.l), klines['4h'].map(k => k.c),
+      ).at(-1) ?? null : null
+      const atr4hPct = atr4h && price > 0 ? parseFloat((atr4h / price * 100).toFixed(3)) : null
+      console.log(`[DECIDE] TA — regime:${regime?.regime ?? '?'} FVG4h:${fvg4h.all?.length ?? 0} EW4h:${ew4h?.currentWave ?? '?'} ABCD:${abcdAnalysis.tradingSignal} ATR4h%:${atr4hPct ?? '?'}`)
 
       const macroSentiment = analyzeMacroSentiment(
         [], mkt.fg ?? 50, mkt.funding ?? 0, mkt.lsr ?? 1, mkt.change ?? 0, {},
@@ -229,6 +237,11 @@ export async function GET(req: NextRequest) {
       } : null
       if (perfStats) console.log(`[DECIDE] perfStats: ${perfStats.total} trades, WR ${perfStats.winRate}%, R ${perfStats.totalR}`)
 
+      // ── Learned weights — streak + indicator-reliability system that existed
+      // fully built but was never called from anywhere in the live pipeline. ──
+      const learnedWeights = await calcLearnedWeights(sb).catch(() => null)
+      if (learnedWeights) console.log(`[DECIDE] learnedWeights: streak ${learnedWeights.currentStreak} (${learnedWeights.streakType}) | RSI×${learnedWeights.rsiWeight} MACD×${learnedWeights.macdWeight} | minScoreAdj ${learnedWeights.minScoreAdjustment}`)
+
       // ── Format active signals for Claude context ─────────────────────────────
       const activeSigData = active.map(s => ({
         id:        s.id,
@@ -276,6 +289,8 @@ export async function GET(req: NextRequest) {
         activeScalps,
         news:               newsItems,
         perfStats,
+        atr4hPct,
+        learnedWeights,
       }
 
       // ── Claude decision ──────────────────────────────────────────────────────

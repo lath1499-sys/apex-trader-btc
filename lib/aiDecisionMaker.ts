@@ -52,7 +52,7 @@ function buildPortfolioSummary(allActivePositions: any[], currentPrice: number):
   return summary
 }
 
-function buildPerfFeedback(p: any): string {
+function buildPerfFeedback(p: any, lw: any = null): string {
   const lines: string[] = []
   lines.push(`Global: ${p.total} trades | WR ${p.winRate}% | Total R: ${p.totalR >= 0 ? '+' : ''}${p.totalR}R`)
 
@@ -91,6 +91,16 @@ function buildPerfFeedback(p: any): string {
     lines.push('AJUSTE ADAPTATIVO: ' + parts.join('; ') + '. No te paralices — la acción correcta imperfecta supera la inacción perfecta.')
   }
 
+  // Streak + indicator-reliability system — built but never wired in before now
+  if (lw) {
+    if (lw.hotStreak) lines.push(`🔥 RACHA CALIENTE: ${lw.currentStreak} wins seguidos.`)
+    if (lw.coldStreak) lines.push(`🧊 RACHA FRÍA: ${Math.abs(lw.currentStreak)} pérdidas seguidas — sé más exigente con las confluencias antes de entrar, no bajes el estándar para "recuperar".`)
+    if (lw.minScoreAdjustment > 0) lines.push('Los últimos 20 trades piden MÁS confluencias que lo normal antes de entrar.')
+    if (lw.minScoreAdjustment < 0) lines.push('Los últimos 20 trades permiten relajar ligeramente el umbral de entrada.')
+    if (lw.totalDecisions >= 10 && lw.rsiWeight <= 0.7) lines.push(`Señales que citan RSI han fallado más de lo normal (confiabilidad ${lw.rsiWeight}x) — no lo uses como única confluencia.`)
+    if (lw.totalDecisions >= 10 && lw.macdWeight <= 0.7) lines.push(`Señales que citan MACD han fallado más de lo normal (confiabilidad ${lw.macdWeight}x) — no lo uses como única confluencia.`)
+  }
+
   return lines.join('\n')
 }
 
@@ -113,6 +123,8 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
     forceScalpEvaluation = false,
     recentSignalTypes = [],
     activeScalps = 0,
+    atr4hPct = null,
+    learnedWeights = null,
   } = ctx
   const recentTypes  = recentSignalTypes as string[]
   const scalpsOpen   = activeScalps as number
@@ -247,7 +259,7 @@ ${(news ?? []).slice(0, 4).map((n: any) => `• ${String(n.title ?? '').slice(0,
 ${activeSigLines}
 
 ═══ RENDIMIENTO HISTÓRICO — APRENDE DE ESTO ═══
-${perfStats ? buildPerfFeedback(perfStats) : 'Sin historial suficiente aún (mínimo 5 trades cerrados).'}
+${perfStats ? buildPerfFeedback(perfStats, learnedWeights) : 'Sin historial suficiente aún (mínimo 5 trades cerrados).'}
 ═══ TU TAREA ═══
 Analiza TODO y responde SOLO con este JSON (sin texto adicional, sin markdown):
 
@@ -319,7 +331,7 @@ ${recentTypes.length >= 3 && recentTypes.slice(0, 3).every(t => t === 'Scalp')
 3. Solo si AMBAS son NO con justificación → evalúa Scalp en 15M/1H.
 Si no puedes justificar por qué NO es DayTrade/Swing → usa DayTrade o Swing.`
   : ''}
-REGLA FINAL DE TIPO: El tipo de trade DEBE coincidir con el SL en % del precio:
+${atr4hPct != null ? `VOLATILIDAD REAL (ATR 14 en 4H): ${atr4hPct}% del precio. Un SL bastante menor a esto se puede activar por ruido normal, no por invalidación real de la tesis — úsalo como piso de referencia, no como el número exacto.\n` : ''}REGLA FINAL DE TIPO: El tipo de trade DEBE coincidir con el SL en % del precio:
 - SL < 1%   → Scalp (max 10x leverage)
 - SL 1-3%   → DayTrade (max 5x leverage)
 - SL > 3%   → Swing (max 3x leverage)
