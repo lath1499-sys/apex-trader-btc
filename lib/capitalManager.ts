@@ -222,6 +222,30 @@ export async function getCapitalState(
     }
   }
 
+  // Capital evolution snapshot — only when the balance actually moved since
+  // the last recorded point, so this naturally tracks real trade closes
+  // (this function is the one place every caller already funnels through)
+  // instead of needing a snapshot call added at every individual close site.
+  // Silently a no-op until apex_capital_history exists.
+  if (sb) {
+    const { data: lastSnap } = await Promise.resolve(
+      sb.from('apex_capital_history')
+        .select('balance')
+        .order('recorded_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ).catch(() => ({ data: null })) as { data: { balance: number } | null }
+    if (!lastSnap || Math.abs(lastSnap.balance - availableBalance) > 0.01) {
+      await Promise.resolve(
+        sb.from('apex_capital_history').insert({
+          balance:         availableBalance,
+          monthly_pnl_pct: drawdownPct,
+          drawdown_stage:  drawdownStage,
+        }),
+      ).catch(() => {})
+    }
+  }
+
   return {
     availableBalance,
     deployedCapital,

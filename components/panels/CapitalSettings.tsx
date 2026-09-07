@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import CapitalEvolutionChart from './CapitalEvolutionChart'
 
 interface CapitalConfig {
   maxCapitalDeployedPct: number
@@ -124,6 +125,11 @@ export default function CapitalSettings({ T }: { T: Record<string, string> }) {
           {state.canOpenNewTrade ? '✅ Sistema activo — puede abrir nuevos trades' : `⛔ ${state.reason}`}
         </div>
       )}
+
+      {/* Capital evolution chart — balance + P&L% over time */}
+      <div style={{ background: T.card ?? T.bgCard, border: `1px solid ${T.border}`, borderRadius: 10, marginBottom: 14 }}>
+        <CapitalEvolutionChart />
+      </div>
 
       {/* Monthly progress */}
       <div style={{ background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 10, padding: '13px 15px', marginBottom: 10 }}>
