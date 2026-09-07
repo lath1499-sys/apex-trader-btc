@@ -32,6 +32,7 @@ import { fetchWhaleAlert }                                                from '
 import { fetchOptionsData }                                               from '@/lib/deribitFetch'
 import { getBTCCycle }                                                    from '@/lib/cycle'
 import { fetchOnChainData }                                               from '@/lib/onchainFetch'
+import { getLeverageConfig, calculateLeverage, formatLeverageTableForPrompt, DEFAULT_LEVERAGE_CONFIG } from '@/lib/leverageCalculator'
 import type { SignalRecord, Kline, IndicatorMap, MarketData }             from '@/lib/types'
 
 export const runtime     = 'nodejs'
@@ -104,6 +105,11 @@ export async function GET(req: NextRequest) {
           return { status: 'paused', reason: state.pause_reason }
         }
       }
+
+      // Real leverage config from the dashboard's Configuración de Leverage panel —
+      // was previously read from nowhere; Claude was shown a hardcoded table that
+      // didn't match the dashboard OR the separately-hardcoded cap applied later.
+      const leverageCfg = sb ? await getLeverageConfig(sb) : DEFAULT_LEVERAGE_CONFIG
 
       // ── 2. Technical analysis — indicators, regime, FVG, liquidity, Elliott,
       //      session, ABCD harmonics. All deterministic, computed from real klines. ──
@@ -297,6 +303,7 @@ export async function GET(req: NextRequest) {
         learnedWeights,
         cycle,
         onChain,
+        leverageTable: formatLeverageTableForPrompt(leverageCfg),
       }
 
       // ── Claude decision ──────────────────────────────────────────────────────
@@ -390,8 +397,13 @@ export async function GET(req: NextRequest) {
 
       // ── Build and save SignalRecord ──────────────────────────────────────────
       const sigId = `apex_${Date.now()}`
-      const maxLev = decision.tradeType === 'Scalp'
-        ? 10 : decision.tradeType === 'DayTrade' ? 5 : 3
+      // Real leverage from the same config Claude was shown (leverageCfg, above) --
+      // this used to be a second, separate hardcoded cap (10/5/3) that disagreed
+      // with what the prompt told Claude it could use (was 15-25/10-20/7-10x).
+      const maxLev = calculateLeverage(
+        { tradeType: decision.tradeType, entryPrice: decision.entry, slPrice: decision.sl, availableCapital: 1000, riskPct: 0.05 },
+        leverageCfg[decision.tradeType],
+      ).leverage
 
       const risk   = Math.abs(decision.entry - decision.sl)
       const tp1RR  = risk > 0 ? parseFloat((Math.abs(decision.entry - decision.tp1) / risk).toFixed(2)) : 0

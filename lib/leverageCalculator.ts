@@ -24,17 +24,17 @@ export const DEFAULT_LEVERAGE_CONFIG: Record<TradeType, TradeTypeRow> = {
     label:         'Scalp',
   },
   DayTrade: {
-    leverageMin:   10,
-    leverageMax:   20,
-    leverageIdeal: 15,
+    leverageMin:   3,
+    leverageMax:   8,
+    leverageIdeal: 5,
     slMinPct:      0.010,   // 1.0%
     slMaxPct:      0.035,   // 3.5%
     label:         'DayTrade',
   },
   Swing: {
-    leverageMin:   7,
-    leverageMax:   10,
-    leverageIdeal: 8,
+    leverageMin:   1,
+    leverageMax:   3,
+    leverageIdeal: 2,
     slMinPct:      0.025,   // 2.5%
     slMaxPct:      0.080,   // 8.0%
     label:         'Swing',
@@ -144,8 +144,8 @@ export function formatLeverageForNotification(result: LeverageResult, tradeType:
   ].join('\n')
 }
 
-export function formatLeverageTableForPrompt(): string {
-  const d = DEFAULT_LEVERAGE_CONFIG
+export function formatLeverageTableForPrompt(cfg: TradeTypeConfig = DEFAULT_LEVERAGE_CONFIG): string {
+  const d = cfg
   return [
     'TABLA DE APALANCAMIENTO (APEX Professional Sizing):',
     `  Scalp:    ${d.Scalp.leverageMin}x–${d.Scalp.leverageMax}x (ideal ${d.Scalp.leverageIdeal}x) | SL ${(d.Scalp.slMinPct*100).toFixed(1)}%–${(d.Scalp.slMaxPct*100).toFixed(1)}%`,

@@ -5,7 +5,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { getMacroSnapshot, formatMacroForPrompt } from './macroData'
-import { formatLeverageTableForPrompt } from './leverageCalculator'
 
 export interface TradeDecision {
   action:        'LONG' | 'SHORT' | 'WAIT' | 'CLOSE_EXISTING'
@@ -127,6 +126,7 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
     learnedWeights = null,
     cycle = null,
     onChain = null,
+    leverageTable = '',
   } = ctx
   const recentTypes  = recentSignalTypes as string[]
   const scalpsOpen   = activeScalps as number
@@ -173,7 +173,6 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
   // Real macro data — 6h cached, always has sane defaults even without API keys
   const macroSnapshot = await getMacroSnapshot().catch(() => null)
   const macroBlock    = macroSnapshot ? formatMacroForPrompt(macroSnapshot) : 'Macro: datos no disponibles'
-  const leverageTable = formatLeverageTableForPrompt()
 
   const prompt = `Eres APEX, un trader experto de Bitcoin con 15 años de experiencia en futuros Binance.
 Analiza el mercado y decide: ¿operar ahora, esperar, o cerrar una posición existente?
