@@ -30,6 +30,8 @@ import { fetchGlobalMarkets }                                             from '
 import { fetchSocialSentiment }                                           from '@/lib/socialSentiment'
 import { fetchWhaleAlert }                                                from '@/lib/whaleDetector'
 import { fetchOptionsData }                                               from '@/lib/deribitFetch'
+import { getBTCCycle }                                                    from '@/lib/cycle'
+import { fetchOnChainData }                                               from '@/lib/onchainFetch'
 import type { SignalRecord, Kline, IndicatorMap, MarketData }             from '@/lib/types'
 
 export const runtime     = 'nodejs'
@@ -137,14 +139,16 @@ export async function GET(req: NextRequest) {
 
       // ── 3. External context — macro (FRED), Fed expectations, global markets,
       //      social sentiment, whale alerts, options/IV, news. All parallel. ──
-      const [macroIndicators, globalMarkets, socialSentiment, whaleAlert, optionsData, newsSnap] = await Promise.all([
+      const [macroIndicators, globalMarkets, socialSentiment, whaleAlert, optionsData, newsSnap, onChain] = await Promise.all([
         fetchMacroIndicators().catch(() => null),
         fetchGlobalMarkets().catch(() => null),
         fetchSocialSentiment().catch(() => null),
         fetchWhaleAlert().catch(() => null),
         fetchOptionsData().catch(() => null),
         fetchBTCNews().catch(() => null),
+        fetchOnChainData().catch(() => null),
       ])
+      const cycle = getBTCCycle(price, klines['1d'])
       const fedExpectations = macroIndicators?.fedRate?.current
         ? await fetchFedExpectations(macroIndicators.fedRate.current).catch(() => null)
         : null
@@ -291,6 +295,8 @@ export async function GET(req: NextRequest) {
         perfStats,
         atr4hPct,
         learnedWeights,
+        cycle,
+        onChain,
       }
 
       // ── Claude decision ──────────────────────────────────────────────────────

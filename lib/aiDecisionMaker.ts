@@ -125,6 +125,8 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
     activeScalps = 0,
     atr4hPct = null,
     learnedWeights = null,
+    cycle = null,
+    onChain = null,
   } = ctx
   const recentTypes  = recentSignalTypes as string[]
   const scalpsOpen   = activeScalps as number
@@ -244,6 +246,12 @@ ${whaleAlert?.detected ? `🐋 WHALE: ${whaleAlert.description}` : ''}
 ═══ VOLATILIDAD (IV) ═══
 ${optionsData?.iv ? `IV Rank: ${optionsData.iv.ivRank}/100 | DVOL: ${optionsData.iv.currentIV.toFixed(1)}% (${optionsData.iv.regime}) | Señal: ${optionsData.iv.signal}` : 'IV: N/A'}
 ${optionsData?.maxPain ? `Max Pain: $${Math.round(optionsData.maxPain).toLocaleString()} | PCR: ${optionsData.putCallRatio?.toFixed(2)}` : ''}
+
+═══ CICLO BTC ═══
+${cycle ? `Fase: ${cycle.phaseLabel} | MVRV: ${cycle.mvrv.toFixed(2)} (est. ${cycle.mvrvEstimate}) | ${cycle.aboveMA200 ? 'Sobre' : 'Bajo'} MA200 ($${cycle.ma200.toLocaleString()}) | Drawdown desde ATH: ${cycle.drawdownFromATH}% | Sesgo de ciclo: ${cycle.tradingBias}` : ''}
+
+═══ ON-CHAIN ═══
+${onChain ? `Hash rate: ${onChain.hr ? onChain.hr.toFixed(0) + ' EH/s' : 'N/A'} (ajuste dificultad: ${onChain.diffAdj != null ? onChain.diffAdj.toFixed(1) + '%' : 'N/A'}) | Mempool: ${onChain.mempool ?? 'N/A'} tx pendientes | Fee prioritaria: ${onChain.fee ?? 'N/A'} sat/vB` : ''}
 
 ═══ CONTEXTO MACRO ═══
 ${macroBlock}
