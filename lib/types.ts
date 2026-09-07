@@ -28,6 +28,7 @@ export interface IndicatorResult {
   macd: { line: number; signal: number; hist: number; prev: number }
   bb: { upper: number | null; mid: number | null; lower: number | null; width: number | null; pct: number | null }
   atr: number
+  supertrend: { value: number; direction: 'bullish' | 'bearish' }
   stoch: { k: number | null; d: number | null }
   ema: { e9: number; e21: number; e50: number; e100: number; e200: number }
   fib: FibLevel[]

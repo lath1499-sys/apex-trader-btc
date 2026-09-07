@@ -53,6 +53,46 @@ export function calcATR(h: number[], l: number[], c: number[], p = 14): number[]
   return ema(tr, p)
 }
 
+export interface SupertrendPoint { value: number; direction: 'bullish' | 'bearish' }
+
+// Standard ATR-based trend-following indicator. The line trails price as a
+// dynamic stop: below price in an uptrend, above it in a downtrend, flipping
+// only when price actually closes through it — used here as a confirmation
+// indicator alongside EMA/regime/BOS-CHoCH, not a standalone signal.
+export function calcSupertrend(h: number[], l: number[], c: number[], period = 10, multiplier = 3): SupertrendPoint[] {
+  const atr = calcATR(h, l, c, period)
+  const n = c.length
+  const finalUpper: number[] = new Array(n).fill(0)
+  const finalLower: number[] = new Array(n).fill(0)
+  const direction: Array<'bullish' | 'bearish'> = new Array(n).fill('bullish')
+  const value: number[] = new Array(n).fill(0)
+
+  for (let i = 0; i < n; i++) {
+    const mid = (h[i] + l[i]) / 2
+    const a = atr[i] || 0
+    const basicUpper = mid + multiplier * a
+    const basicLower = mid - multiplier * a
+
+    if (i === 0) {
+      finalUpper[i] = basicUpper
+      finalLower[i] = basicLower
+      direction[i]  = c[i] <= basicUpper ? 'bearish' : 'bullish'
+      value[i]      = direction[i] === 'bullish' ? finalLower[i] : finalUpper[i]
+      continue
+    }
+
+    finalUpper[i] = (basicUpper < finalUpper[i - 1] || c[i - 1] > finalUpper[i - 1]) ? basicUpper : finalUpper[i - 1]
+    finalLower[i] = (basicLower > finalLower[i - 1] || c[i - 1] < finalLower[i - 1]) ? basicLower : finalLower[i - 1]
+
+    direction[i] = direction[i - 1] === 'bullish'
+      ? (c[i] < finalLower[i] ? 'bearish' : 'bullish')
+      : (c[i] > finalUpper[i] ? 'bullish' : 'bearish')
+    value[i] = direction[i] === 'bullish' ? finalLower[i] : finalUpper[i]
+  }
+
+  return value.map((v, i) => ({ value: v, direction: direction[i] }))
+}
+
 export function calcStoch(c: number[], rp = 14, sp = 14, kp = 3, dp = 3) {
   const rv = calcRSI(c, rp)
   const st = rv.map((_, i) => {
@@ -96,6 +136,7 @@ export function runInds(klines: Kline[]): IndicatorResult | null {
   const e100 = ema(c, 100), e200 = ema(c, 200)
   const rA = calcRSI(c), mR = calcMACD(c), bA = calcBB(c)
   const aA = calcATR(h, l, c), sR = calcStoch(c)
+  const stA = calcSupertrend(h, l, c)
   const bb = bA[bA.length - 1], mh = mR.hist[mR.hist.length - 1]
   const mp = mR.hist[mR.hist.length - 2], rV = rA[rA.length - 1] ?? 50
   const sk = sR.k[sR.k.length - 1]
@@ -116,6 +157,7 @@ export function runInds(klines: Kline[]): IndicatorResult | null {
     macd: { line: mR.macd[mR.macd.length - 1], signal: mR.signal[mR.signal.length - 1], hist: mh, prev: mp },
     bb: { ...bb, pct: bbp },
     atr: aA[aA.length - 1],
+    supertrend: stA[stA.length - 1],
     stoch: { k: sk, d: sR.d[sR.d.length - 1] },
     ema: { e9: e9[e9.length - 1], e21: e21[e21.length - 1], e50: e50[e50.length - 1], e100: e100[e100.length - 1], e200: e200[e200.length - 1] },
     fib: calcFib(h, l, c),

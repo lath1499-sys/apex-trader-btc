@@ -212,10 +212,11 @@ Sesión: ${session?.name ?? 'N/A'} — INFORMACIÓN SOLO. Trading permitido las 
 Régimen: ${regime?.regime?.replace(/_/g, ' ') ?? 'N/A'} | ADX ${regime?.adx?.toFixed(1) ?? '?'} | BB ${regime?.bbSqueezing ? 'SQUEEZE ⚡' : 'Normal'}
 
 ═══ ESTRUCTURA MULTI-TIMEFRAME ═══
-1D: ${i1d?.bias ?? '?'} | RSI ${i1d?.rsi?.toFixed(0) ?? '?'} | MACD ${i1d?.macd?.hist > 0 ? '+' : ''}${i1d?.macd?.hist?.toFixed(0) ?? '?'} | Score ${i1d?.score ?? '?'}/9
-4H: ${i4?.bias ?? '?'} | RSI ${i4?.rsi?.toFixed(0) ?? '?'} | MACD ${i4?.macd?.hist > 0 ? '+' : ''}${i4?.macd?.hist?.toFixed(0) ?? '?'} | Stoch K${i4?.stoch?.k?.toFixed(0) ?? '?'}
-1H: ${i1?.bias ?? '?'} | RSI ${i1?.rsi?.toFixed(0) ?? '?'} | MACD ${i1?.macd?.hist > 0 ? '+' : ''}${i1?.macd?.hist?.toFixed(0) ?? '?'}
-15M: ${i15?.bias ?? '?'} | RSI ${i15?.rsi?.toFixed(0) ?? '?'} | MACD ${i15?.macd?.hist > 0 ? '+' : ''}${i15?.macd?.hist?.toFixed(0) ?? '?'}
+(Supertrend es un indicador de REFUERZO — confirma o contradice el bias, no decide solo)
+1D: ${i1d?.bias ?? '?'} | RSI ${i1d?.rsi?.toFixed(0) ?? '?'} | MACD ${i1d?.macd?.hist > 0 ? '+' : ''}${i1d?.macd?.hist?.toFixed(0) ?? '?'} | Score ${i1d?.score ?? '?'}/9 | ST ${i1d?.supertrend?.direction === 'bullish' ? '↑ alcista' : i1d?.supertrend?.direction === 'bearish' ? '↓ bajista' : '?'}
+4H: ${i4?.bias ?? '?'} | RSI ${i4?.rsi?.toFixed(0) ?? '?'} | MACD ${i4?.macd?.hist > 0 ? '+' : ''}${i4?.macd?.hist?.toFixed(0) ?? '?'} | Stoch K${i4?.stoch?.k?.toFixed(0) ?? '?'} | ST ${i4?.supertrend?.direction === 'bullish' ? '↑ alcista' : i4?.supertrend?.direction === 'bearish' ? '↓ bajista' : '?'}
+1H: ${i1?.bias ?? '?'} | RSI ${i1?.rsi?.toFixed(0) ?? '?'} | MACD ${i1?.macd?.hist > 0 ? '+' : ''}${i1?.macd?.hist?.toFixed(0) ?? '?'} | ST ${i1?.supertrend?.direction === 'bullish' ? '↑ alcista' : i1?.supertrend?.direction === 'bearish' ? '↓ bajista' : '?'}
+15M: ${i15?.bias ?? '?'} | RSI ${i15?.rsi?.toFixed(0) ?? '?'} | MACD ${i15?.macd?.hist > 0 ? '+' : ''}${i15?.macd?.hist?.toFixed(0) ?? '?'} | ST ${i15?.supertrend?.direction === 'bullish' ? '↑ alcista' : i15?.supertrend?.direction === 'bearish' ? '↓ bajista' : '?'}
 
 ═══ VELAS 4H RECIENTES (las 8 más recientes) ═══
 ${recentCandles4h.join('\n') || 'Sin datos'}
