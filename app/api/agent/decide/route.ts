@@ -33,6 +33,7 @@ import { fetchOptionsData }                                               from '
 import { getBTCCycle }                                                    from '@/lib/cycle'
 import { fetchOnChainData }                                               from '@/lib/onchainFetch'
 import { getLeverageConfig, calculateLeverage, formatLeverageTableForPrompt, DEFAULT_LEVERAGE_CONFIG } from '@/lib/leverageCalculator'
+import { getCapitalState, DEFAULT_CAPITAL_CONFIG }                        from '@/lib/capitalManager'
 import type { SignalRecord, Kline, IndicatorMap, MarketData }             from '@/lib/types'
 
 export const runtime     = 'nodejs'
@@ -224,6 +225,18 @@ export async function GET(req: NextRequest) {
         console.log(`[DECIDE] Daily check OK — SL hoy: ${slHitsToday}, P&L: ${dailyPnl.toFixed(2)}%`)
       }
 
+      // ── Capital state — was computed (drawdown stage, hard-stop, monthly
+      // target) but canOpenNewTrade was never actually enforced anywhere;
+      // the 3-stage system existed purely for display. Now a real gate,
+      // same pattern as the daily guard above, plus fed into the prompt so
+      // Claude's own reasoning reflects the real P&L it's carrying. ──────────
+      const capitalState = await getCapitalState(DEFAULT_CAPITAL_CONFIG).catch(() => null)
+      if (capitalState && !capitalState.canOpenNewTrade) {
+        console.log('[DECIDE] Capital gate blocked new trade:', capitalState.reason)
+        if (notify) await sendTelegram(`🚫 Forcecheck: ${capitalState.reason}`).catch(() => {})
+        return { status: 'blocked', reason: capitalState.reason }
+      }
+
       console.log('[DECIDE] Active:', active.length, '| Days since last signal:', daysSinceLastSignal)
 
       // ── A: perfStats — feedback from closed trades for Claude context ────────
@@ -304,6 +317,7 @@ export async function GET(req: NextRequest) {
         cycle,
         onChain,
         leverageTable: formatLeverageTableForPrompt(leverageCfg),
+        capitalState,
       }
 
       // ── Claude decision ──────────────────────────────────────────────────────

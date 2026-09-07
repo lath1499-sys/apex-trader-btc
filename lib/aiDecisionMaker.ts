@@ -127,6 +127,7 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
     cycle = null,
     onChain = null,
     leverageTable = '',
+    capitalState = null,
   } = ctx
   const recentTypes  = recentSignalTypes as string[]
   const scalpsOpen   = activeScalps as number
@@ -267,6 +268,9 @@ ${activeSigLines}
 
 ═══ RENDIMIENTO HISTÓRICO — APRENDE DE ESTO ═══
 ${perfStats ? buildPerfFeedback(perfStats, learnedWeights) : 'Sin historial suficiente aún (mínimo 5 trades cerrados).'}
+
+═══ CAPITAL EN JUEGO ═══
+${capitalState ? `Balance: $${capitalState.availableBalance.toFixed(0)} | P&L del mes: ${capitalState.monthlyPnlPct >= 0 ? '+' : ''}${capitalState.monthlyPnlPct.toFixed(1)}% | Stage: ${capitalState.drawdownStage === 1 ? 'NORMAL' : capitalState.drawdownStage === 2 ? 'SURVIVAL (riesgo reducido)' : 'HARD STOP'} | Riesgo efectivo por trade: ${(capitalState.effectiveRiskPct * 100).toFixed(1)}%${capitalState.drawdownStage === 2 ? '\n⚠️ En modo survival — prioriza calidad sobre cantidad, no fuerces un setup para "recuperar" pérdidas.' : ''}` : 'Capital: datos no disponibles'}
 ═══ TU TAREA ═══
 Analiza TODO y responde SOLO con este JSON (sin texto adicional, sin markdown):
 
