@@ -4,11 +4,9 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? ''
 const CHAT_ID   = process.env.TELEGRAM_CHAT_ID   ?? ''
 const BASE      = `https://api.telegram.org/bot${BOT_TOKEN}`
 
-export async function sendTelegram(text: string, chatId?: string): Promise<void> {
-  if (!BOT_TOKEN || !CHAT_ID) {
-    console.warn('[TG] SKIPPED — BOT_TOKEN or CHAT_ID not set')
-    return
-  }
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+async function trySendTelegram(text: string, chatId?: string): Promise<{ ok: boolean; status?: number; body?: string }> {
   try {
     const res = await fetch(`${BASE}/sendMessage`, {
       method: 'POST',
@@ -22,12 +20,34 @@ export async function sendTelegram(text: string, chatId?: string): Promise<void>
     })
     if (!res.ok) {
       const errBody = await res.text().catch(() => '')
-      console.error('[TG] Send failed:', res.status, errBody.slice(0, 200))
-    } else {
-      console.log('[TG] Sent:', text.slice(0, 80).replace(/\n/g, ' '))
+      return { ok: false, status: res.status, body: errBody.slice(0, 200) }
     }
+    return { ok: true }
   } catch (err: unknown) {
-    console.error('[TG] Exception:', err instanceof Error ? err.message : String(err))
+    return { ok: false, body: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+// One retry after a short backoff — Telegram's API has been observed
+// returning transient 502s (confirmed directly, mid-session). A single
+// retry is enough to ride out a blip without risking the caller (every
+// call site is already fire-and-forget / .catch-wrapped, so this just
+// improves delivery odds, never blocks anything on failure).
+export async function sendTelegram(text: string, chatId?: string): Promise<void> {
+  if (!BOT_TOKEN || !CHAT_ID) {
+    console.warn('[TG] SKIPPED — BOT_TOKEN or CHAT_ID not set')
+    return
+  }
+  let result = await trySendTelegram(text, chatId)
+  if (!result.ok) {
+    console.warn('[TG] Send failed, retrying once:', result.status ?? '', result.body ?? '')
+    await sleep(1500)
+    result = await trySendTelegram(text, chatId)
+  }
+  if (result.ok) {
+    console.log('[TG] Sent:', text.slice(0, 80).replace(/\n/g, ' '))
+  } else {
+    console.error('[TG] Send failed after retry:', result.status ?? '', result.body ?? '')
   }
 }
 
