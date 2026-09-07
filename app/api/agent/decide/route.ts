@@ -34,6 +34,7 @@ import { getBTCCycle }                                                    from '
 import { fetchOnChainData }                                               from '@/lib/onchainFetch'
 import { getLeverageConfig, calculateLeverage, formatLeverageTableForPrompt, DEFAULT_LEVERAGE_CONFIG } from '@/lib/leverageCalculator'
 import { getCapitalState, DEFAULT_CAPITAL_CONFIG }                        from '@/lib/capitalManager'
+import { estimateLiquidationBias }                                        from '@/lib/liquidationEstimate'
 import type { SignalRecord, Kline, IndicatorMap, MarketData }             from '@/lib/types'
 
 export const runtime     = 'nodejs'
@@ -318,6 +319,7 @@ export async function GET(req: NextRequest) {
         onChain,
         leverageTable: formatLeverageTableForPrompt(leverageCfg),
         capitalState,
+        liquidationBias: estimateLiquidationBias(mkt.funding, mkt.lsr),
       }
 
       // ── Claude decision ──────────────────────────────────────────────────────

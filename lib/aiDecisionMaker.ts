@@ -128,6 +128,7 @@ export async function askClaudeForDecision(ctx: any): Promise<TradeDecision | nu
     onChain = null,
     leverageTable = '',
     capitalState = null,
+    liquidationBias = null,
   } = ctx
   const recentTypes  = recentSignalTypes as string[]
   const scalpsOpen   = activeScalps as number
@@ -241,6 +242,7 @@ Si el patrón tiene Fib confirmado y estás en PRZ, ese setup ES una confluencia
 ═══ FLUJO DE MERCADO ═══
 Funding: ${mkt?.funding != null ? (mkt.funding >= 0 ? '+' : '') + mkt.funding.toFixed(4) + '%' : 'N/A'}
 L/S Ratio: ${mkt?.lsr?.toFixed(2) ?? 'N/A'} | Fear&Greed: ${mkt?.fg ?? 'N/A'}/100
+Liquidaciones (estimado, no data real de clusters): ${liquidationBias ? liquidationBias.label : 'N/A'}
 ATR 4H: $${i4?.atr?.toFixed(0) ?? 'N/A'}
 ${whaleAlert?.detected ? `🐋 WHALE: ${whaleAlert.description}` : ''}
 

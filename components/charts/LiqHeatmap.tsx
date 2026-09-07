@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useApexStore } from '@/store/apexStore'
 import { useTheme } from '@/hooks/useTheme'
 import { fmt } from '@/lib/buildContext'
+import { estimateLiquidationBias } from '@/lib/liquidationEstimate'
 
 const LEVS = [2, 3, 5, 10, 15, 20, 25, 50, 100]
 
@@ -14,6 +15,17 @@ export default function LiqHeatmap() {
 
   if (!price) return null
 
+  // Still a model, not real cluster data (that requires either a paid feed
+  // like CoinGlass or an always-on WebSocket listener, neither of which fits
+  // this serverless architecture) -- but now grounded in real derivatives
+  // data instead of assuming every position opened at today's price.
+  // Positive funding + LSR>1 means longs are paying shorts and outnumber
+  // them -- crowded-long conditions carry more downside liquidation risk,
+  // and vice versa for negative funding / LSR<1.
+  const funding = mkt.funding ?? 0
+  const lsr     = mkt.lsr ?? 1
+  const { longBias, shortBias, label: biasLabel } = estimateLiquidationBias(funding, lsr)
+
   const range = price * 0.30
   const mn = price - range, mx = price + range
   const steps = 30, step = (mx - mn) / steps
@@ -23,8 +35,8 @@ export default function LiqHeatmap() {
     let longLiq = 0, shortLiq = 0
     LEVS.forEach(lv => {
       const w = 1 / lv
-      if (price * (1 - 1 / lv) >= lo && price * (1 - 1 / lv) < hi) longLiq  += w * 100
-      if (price * (1 + 1 / lv) >= lo && price * (1 + 1 / lv) < hi) shortLiq += w * 100
+      if (price * (1 - 1 / lv) >= lo && price * (1 - 1 / lv) < hi) longLiq  += w * 100 * longBias
+      if (price * (1 + 1 / lv) >= lo && price * (1 + 1 / lv) < hi) shortLiq += w * 100 * shortBias
     })
     return { lo, hi, mid, longLiq, shortLiq, total: longLiq + shortLiq }
   })
@@ -64,6 +76,10 @@ export default function LiqHeatmap() {
         <div style={{ position: 'absolute', bottom: 2, left: 0, right: 0, display: 'flex', justifyContent: 'space-between', padding: '0 4px', fontSize: 7, color: T.muted, fontFamily: 'monospace' }}>
           <span>← LONGS LIQ</span><span>SHORTS LIQ →</span>
         </div>
+      </div>
+      <div style={{ fontSize: 8, color: T.muted, marginBottom: 8, lineHeight: 1.5 }}>
+        Modelo estimado (no data real de clusters) — ponderado por funding {funding >= 0 ? '+' : ''}{funding.toFixed(4)}% y L/S {lsr.toFixed(2)} → {biasLabel}
+        {mkt.oi ? ` | OI real: ${Math.round(mkt.oi).toLocaleString()} BTC` : ''}
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         {[5, 10, 20, 50].map(lv => (
