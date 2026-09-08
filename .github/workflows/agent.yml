@@ -73,18 +73,16 @@ jobs:
           body=$(echo "$response" | head -1)
           echo "Evaluate HTTP $http_code: $body"
 
-  # ── Brief: at :00 and :30 every hour — dedicated, independent of decide ─────
+  # ── Brief: every tick — the route itself enforces the ~30min cadence via a
+  # 26min cooldown on apex_agent_state.last_analysis_at, so this doesn't need
+  # (and must not have) its own minute gate. GitHub's schedule trigger rarely
+  # lands on the exact minute a "MINUTE -eq 0 || MINUTE -eq 30" check needs --
+  # confirmed by direct API inspection of recent run timestamps, none of which
+  # hit :00/:30 -- so that gate silently starved brief of ever being called.
   brief:
     runs-on: ubuntu-latest
     steps:
-      - name: Check if brief minute
-        id: check
-        run: |
-          MINUTE=$(date +%-M)
-          if [ "$MINUTE" -eq 0 ] || [ "$MINUTE" -eq 30 ]; then echo "run=true" >> $GITHUB_OUTPUT
-          else echo "run=false" >> $GITHUB_OUTPUT; fi
       - name: Generate brief
-        if: steps.check.outputs.run == 'true'
         run: |
           response=$(curl -s -w "\n%{http_code}" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
