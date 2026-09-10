@@ -52,18 +52,16 @@ jobs:
           echo "Decide HTTP $http_code: $body"
           if [ "$http_code" != "200" ]; then echo "Decide call failed: $http_code"; exit 1; fi
 
-  # ── Evaluate: every 10th minute — expiry + trailing SL, no new signals ──────
+  # ── Evaluate: every tick — trailing/breakeven stop management. Unlike decide,
+  # this has no cost concern (no Claude call) and evaluateStopManagement() is a
+  # no-op unless an actual threshold is crossed, so running it unconditionally
+  # (like monitor) is safe -- same fix as brief: the old "every 10th minute"
+  # gate was starving it, confirmed by last_run_at not moving for 63+ hours
+  # straight while GitHub's schedule trigger kept missing that exact minute.
   evaluate:
     runs-on: ubuntu-latest
     steps:
-      - name: Check if 10th minute
-        id: check
-        run: |
-          MINUTE=$(date +%-M)
-          if [ $((MINUTE % 10)) -eq 0 ]; then echo "run=true" >> $GITHUB_OUTPUT
-          else echo "run=false" >> $GITHUB_OUTPUT; fi
       - name: Evaluate trades
-        if: steps.check.outputs.run == 'true'
         run: |
           response=$(curl -s -w "\n%{http_code}" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
