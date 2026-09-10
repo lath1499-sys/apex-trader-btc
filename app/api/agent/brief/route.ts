@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
       console.log('[BRIEF] Sending to Telegram...')
       await sendTelegram(tgBrief(
         text, price, change24h,
-        activeSignals.map(s => ({ side: s.side, trade_type: s.trade_type, entry: s.entry })),
+        activeSignals.map(s => ({ side: s.side, trade_type: s.trade_type, entry: s.entry, tp1Hit: s.tp1Hit, tp2Hit: s.tp2Hit })),
       ))
       console.log('[BRIEF] Telegram sent ✅')
 

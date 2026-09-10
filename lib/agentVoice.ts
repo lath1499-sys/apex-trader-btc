@@ -46,7 +46,7 @@ const BRIEF_FOCUSES = [
 ] as const
 type BriefFocus = typeof BRIEF_FOCUSES[number]
 
-type BriefSignal = { side: string; trade_type: string; entry: number; pnl: number }
+type BriefSignal = { side: string; trade_type: string; entry: number; pnl: number; sl: number; tp1Hit: boolean; tp2Hit: boolean }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Brief coherence + style validator — catches "no trade" when signals exist,
@@ -116,8 +116,9 @@ async function correctBriefIfNeeded(
 
   const signalContext = activeSignals.length > 0
     ? activeSignals.map(s => {
-        const pnl = s.side === 'LONG' ? (price - s.entry) / s.entry * 100 : (s.entry - price) / s.entry * 100
-        return `• ${s.side} ${s.trade_type} @$${Math.round(s.entry).toLocaleString()} | P&L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
+        const pnl    = s.side === 'LONG' ? (price - s.entry) / s.entry * 100 : (s.entry - price) / s.entry * 100
+        const status = s.tp2Hit ? ' [TP2 alcanzado]' : s.tp1Hit ? ' [TP1 alcanzado, SL en breakeven]' : ''
+        return `• ${s.side} ${s.trade_type} @$${Math.round(s.entry).toLocaleString()} | P&L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%${status}`
       }).join('\n')
     : 'NINGUNA — capital libre'
 
@@ -208,7 +209,7 @@ export interface StandaloneBriefResult {
   text:          string
   price:         number
   change24h:     number
-  activeSignals: Array<{ side: string; trade_type: string; entry: number }>
+  activeSignals: BriefSignal[]
 }
 
 export async function generateBriefStandalone(): Promise<StandaloneBriefResult> {
@@ -301,15 +302,21 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
     console.warn('[BRIEF:voice] Macro/extended context failed:', e instanceof Error ? e.message : String(e))
   }
 
-  // C: Active signals
+  // C: Active signals — status fields (tp1_hit/tp2_hit/sl) matter here because
+  // a signal can sit in 'tp1_hit' for hours with an unchanged entry; without
+  // them the brief describes it as if freshly opened, which reads as stale or
+  // possibly-already-closed to anyone watching the position evolve in the app.
   const sb = getVoiceSb()
-  type SigRow = { side: string | null; trade_type: string | null; entry: number | null; pnl: number | null }
+  type SigRow = {
+    side: string | null; trade_type: string | null; entry: number | null
+    sl: number | null; tp1_hit: boolean | null; tp2_hit: boolean | null
+  }
   let rawSignals: SigRow[] = []
   if (sb) {
     try {
       const { data, error } = await Promise.resolve(
         sb.from('apex_signals')
-          .select('side, trade_type, entry, pnl')
+          .select('side, trade_type, entry, sl, tp1_hit, tp2_hit')
           .in('status', ['active', 'tp1_hit', 'tp2_hit'])
           .order('created_at', { ascending: false })
       ) as { data: SigRow[] | null; error: { message: string } | null }
@@ -321,12 +328,22 @@ export async function generateBriefStandalone(): Promise<StandaloneBriefResult> 
     }
   }
 
-  const activeSignals = rawSignals.map(s => ({
-    side:       s.side       ?? 'LONG',
-    trade_type: s.trade_type ?? 'Scalp',
-    entry:      s.entry      ?? 0,
-    pnl:        s.pnl ?? 0,
-  }))
+  const activeSignals: BriefSignal[] = rawSignals.map(s => {
+    const side  = s.side ?? 'LONG'
+    const entry = s.entry ?? 0
+    const pnl   = entry > 0 && price > 0
+      ? (side === 'LONG' ? (price - entry) / entry * 100 : (entry - price) / entry * 100)
+      : 0
+    return {
+      side,
+      trade_type: s.trade_type ?? 'Scalp',
+      entry,
+      sl:         s.sl ?? 0,
+      tp1Hit:     s.tp1_hit ?? false,
+      tp2Hit:     s.tp2_hit ?? false,
+      pnl,
+    }
+  })
 
   // D: Focus rotation — avoid repeating the same angle as recent briefs.
   // Also grab recent OPENINGS (first ~90 chars of each summary, price prefix
@@ -375,7 +392,7 @@ async function callClaudeStandalone(ctx: {
   taTxt:          string
   extraTxt:       string
   recentOpenings: string
-  activeSignals:  Array<{ side: string; trade_type: string; entry: number; pnl: number }>
+  activeSignals:  BriefSignal[]
   focus:          BriefFocus
 }): Promise<string> {
   const { price, change24h, macroTxt, taTxt, extraTxt, recentOpenings, activeSignals, focus } = ctx
@@ -389,9 +406,12 @@ async function callClaudeStandalone(ctx: {
   })
   const signalTxt = activeSignals.length === 0
     ? 'NINGUNA — capital libre'
-    : activeSignals.map(s =>
-        `${s.side} ${s.trade_type} @ $${Math.round(s.entry).toLocaleString()} | P&L: ${s.pnl >= 0 ? '+' : ''}${s.pnl.toFixed(2)}%`
-      ).join('\n')
+    : activeSignals.map(s => {
+        const status = s.tp2Hit ? ' | TP2 ya alcanzado, SL en trailing'
+                     : s.tp1Hit ? ' | TP1 ya alcanzado, SL movido a breakeven — mantienes el remanente'
+                     : ''
+        return `${s.side} ${s.trade_type} @ $${Math.round(s.entry).toLocaleString()} | SL actual: $${Math.round(s.sl).toLocaleString()} | P&L: ${s.pnl >= 0 ? '+' : ''}${s.pnl.toFixed(2)}%${status}`
+      }).join('\n')
 
   const systemPrompt = `Eres APEX, agente de trading BTC con 15 años de experiencia en futuros Binance.
 Mandas análisis de mercado cada 30 minutos en español. Estilo: directo, primera persona, trader profesional.
@@ -407,6 +427,7 @@ PROHIBIDO:
 - Inventar niveles de soporte/resistencia, RSI, MACD, régimen u ondas Elliott — usa EXCLUSIVAMENTE los datos reales en ANÁLISIS TÉCNICO abajo, nunca números que no aparezcan ahí
 - Citar cifras específicas que no estén en los datos de abajo (volumen de ETF, comparaciones históricas tipo "mínimo desde X fecha", estadísticas puntuales) — si no está en ANÁLISIS TÉCNICO, MACRO, CONTEXTO EXTRA o SEÑALES ACTIVAS, no lo afirmes como dato concreto
 - Reutilizar la apertura o estructura retórica de los últimos briefs (abajo en APERTURAS RECIENTES) — variar SIEMPRE la primera frase y el ángulo de entrada, aunque el precio y los datos técnicos sean parecidos a los del último ciclo
+- Describir una señal activa como recién abierta si SEÑALES ACTIVAS indica que ya alcanzó TP1/TP2 o que el SL ya no es el original — menciona ese avance (ej. "ya en breakeven tras TP1") en vez de repetir solo el entry, para que no parezca una posición congelada
 ESTRUCTURA: qué hace el mercado → factor principal → sesgo + niveles exactos, todo en párrafos fluidos`
 
   const userPrompt = `HORA: ${hourLocal}

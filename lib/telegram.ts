@@ -163,7 +163,7 @@ export function tgBrief(
   analysis:      string,
   price:         number,
   change:        number,
-  activeSignals?: Array<{ side: string; trade_type?: string; entry: number }>,
+  activeSignals?: Array<{ side: string; trade_type?: string; entry: number; tp1Hit?: boolean; tp2Hit?: boolean }>,
 ): string {
   const time = new Date().toLocaleTimeString('es-DO', {
     timeZone: 'America/Santo_Domingo', hour: '2-digit', minute: '2-digit',
@@ -171,8 +171,9 @@ export function tgBrief(
   const sigHeader = activeSignals && activeSignals.length > 0
     ? '\n📋 <b>Posición activa:</b> ' +
       activeSignals.map(s => {
-        const emoji = s.side === 'LONG' ? '🟢' : '🔴'
-        return `${emoji} ${s.side} ${s.trade_type ?? ''} @${P(s.entry)}`
+        const emoji  = s.side === 'LONG' ? '🟢' : '🔴'
+        const status = s.tp2Hit ? ' (TP2 ✅)' : s.tp1Hit ? ' (TP1 ✅ · BE)' : ''
+        return `${emoji} ${s.side} ${s.trade_type ?? ''} @${P(s.entry)}${status}`
       }).join(' | ')
     : ''
   return `📊 <b>APEX — ${time}</b>\nBTC: <code>${P(price)}</code> ${change >= 0 ? '▲' : '▼'} ${Math.abs(change).toFixed(2)}%${sigHeader}\n\n${analysis}`
