@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import CapitalEvolutionChart from './CapitalEvolutionChart'
+import BinanceAccountPanel from './BinanceAccountPanel'
 
 interface CapitalConfig {
   maxCapitalDeployedPct: number
@@ -96,6 +97,9 @@ export default function CapitalSettings({ T }: { T: Record<string, string> }) {
 
   return (
     <div style={{ padding: '12px 4px 40px', color: T.text }}>
+
+      {/* Balance real de Binance — al lado del balance simulado de abajo */}
+      <BinanceAccountPanel />
 
       {/* Status cards */}
       {state && (
