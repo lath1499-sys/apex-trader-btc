@@ -30,18 +30,16 @@ jobs:
           body=$(echo "$response" | head -1)
           echo "Monitor HTTP $http_code: $body"
 
-  # ── Decide: every 5th minute — new signal generation with Claude ────────────
+  # ── Decide: every tick — new signal generation with Claude. Same fix as
+  # brief/evaluate: the old "every 5th minute" gate was starving it (GitHub's
+  # schedule trigger almost never lands on that exact minute). The route
+  # itself now enforces a 4min cooldown before it calls Claude, so this can
+  # run unconditionally without multiplying API cost if GitHub's trigger
+  # ever becomes more frequent.
   decide:
     runs-on: ubuntu-latest
     steps:
-      - name: Check if 5th minute
-        id: check
-        run: |
-          MINUTE=$(date +%-M)
-          if [ $((MINUTE % 5)) -eq 0 ]; then echo "run=true" >> $GITHUB_OUTPUT
-          else echo "run=false" >> $GITHUB_OUTPUT; fi
       - name: Generate signal
-        if: steps.check.outputs.run == 'true'
         run: |
           response=$(curl -s -w "\n%{http_code}" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \

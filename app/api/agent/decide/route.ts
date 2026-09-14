@@ -56,6 +56,29 @@ export async function GET(req: NextRequest) {
 
   console.log('[DECIDE] ===== Triggered', new Date().toISOString(), '=====')
 
+  // ── 4-min cooldown — same fix as brief/evaluate: GitHub's schedule trigger
+  // almost never lands on the old "MINUTE % 5 == 0" gate, so decide went
+  // hours without running while monitor/evaluate/brief (no gate) kept
+  // ticking. This lets the workflow call decide unconditionally on every
+  // tick while still capping real Claude calls to roughly the original
+  // 5-min cadence. Skipped for /forcecheck, which should always get a
+  // fresh call regardless of how recently the cron last ran.
+  if (!notify) {
+    const sbCooldown = getSupabaseServer()
+    if (sbCooldown) {
+      const { data: lock } = await Promise.resolve(
+        sbCooldown.from('apex_run_locks').select('last_run_at').eq('job_type', 'decide').maybeSingle()
+      ).catch(() => ({ data: null })) as { data: { last_run_at: string | null } | null }
+      if (lock?.last_run_at) {
+        const minsSinceLast = (Date.now() - new Date(lock.last_run_at).getTime()) / 60_000
+        if (minsSinceLast < 4) {
+          console.log(`[DECIDE] Cooldown active (${minsSinceLast.toFixed(1)}min) — skipping`)
+          return NextResponse.json({ status: 'skipped', reason: `cooldown: ${minsSinceLast.toFixed(1)}min` })
+        }
+      }
+    }
+  }
+
   const startedAt = Date.now()
   try {
     const result = await withLock('decide', async () => {
