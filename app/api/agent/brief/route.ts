@@ -86,9 +86,14 @@ export async function GET(req: NextRequest) {
       const msg      = err instanceof Error ? err.message : String(err)
       const duration = Date.now() - startedAt
       console.error('[BRIEF] FAILED:', msg)
-      await sendTelegram(
-        `🚨 <b>APEX Brief Error</b>\n\n<code>${msg.slice(0, 300)}</code>\n\n<i>Revisar Vercel logs.</i>`
-      ).catch(() => {})
+      // Out-of-credit is a standing condition, not an incident: this route runs on
+      // every cron tick and the cooldown only advances on success, so alerting here
+      // re-sent the same error to Telegram on every tick for days. Log-only for it.
+      if (!/credit balance is too low/i.test(msg)) {
+        await sendTelegram(
+          `🚨 <b>APEX Brief Error</b>\n\n<code>${msg.slice(0, 300)}</code>\n\n<i>Revisar Vercel logs.</i>`
+        ).catch(() => {})
+      }
       return { success: false, error: msg, duration }
     }
   })
